@@ -27,3 +27,5 @@ node_modules/
 .DS_Store
 .codex/
 .creator/
+__pycache__/
+*.py[cod]
