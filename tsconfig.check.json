@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2015",
+    "lib": ["ES2020", "DOM"],
+    "module": "ES2015",
+    "strict": true,
+    "types": [
+      "./temp/declarations/jsb",
+      "./temp/declarations/cc.custom-macro",
+      "./temp/declarations/cc",
+      "./temp/declarations/cc.env"
+    ],
+    "experimentalDecorators": true,
+    "isolatedModules": true,
+    "moduleResolution": "node",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "temp/declarations/*.d.ts",
+    "assets/**/*.ts"
+  ]
+}

@@ -1,0 +1,936 @@
+import {
+  Button,
+  Color,
+  Graphics,
+  Label,
+  Node,
+  Sprite,
+  tween,
+  UIOpacity,
+  UITransform,
+  Vec2,
+  Vec3,
+  view,
+} from 'cc';
+import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
+import { AudioEffect } from './AudioManager';
+import { getCatDefinition } from './GameContent';
+import { BuildingView } from './TownContent';
+import { Toast } from './Toast';
+
+export interface TownScreenOptions {
+  onPlaySound: (effect: AudioEffect) => void;
+  getStars: () => number;
+  getCoins: () => number;
+  getBuildings: () => BuildingView[];
+  onBuild: (id: BuildingView['id']) => { ok: boolean; message: string };
+  onReturnHome: () => void;
+}
+
+type StageView = {
+  card: Node;
+  cardGraphics: Graphics;
+  activeIcon: Node;
+  lockedIcon: Node;
+  checkMark: Node;
+  lockMark: Node;
+  title: Label;
+};
+
+type SlotView = {
+  node: Node;
+  slotGraphics: Graphics;
+  thumb: Node;
+  nameColor: Label;
+  checkMark: Node;
+  lockMark: Node;
+};
+
+const STAGE_ICONS_ACTIVE = ['town/broom', 'town/hammer_active', 'town/flower_active', 'town/sparkle'];
+const STAGE_ICONS_LOCKED = ['town/broom', 'town/hammer_locked', 'town/flower_locked', 'town/flower_locked'];
+
+export class TownScreen {
+  private townUI: Node | null = null;
+  private townPanel: Node | null = null;
+  private displayLayer: Node | null = null;
+  private displayImage: Node | null = null;
+  private displayKey = '';
+  private displayLockVeil: Node | null = null;
+  private statusNode: Node | null = null;
+  private statusLabel: Label | null = null;
+  private titleLabel: Label | null = null;
+  private subtitleLabel: Label | null = null;
+  private conditionLabel: Label | null = null;
+  private requirementBox: Node | null = null;
+  private requirementIcon: Node | null = null;
+  private requirementLabel: Label | null = null;
+  private actionNode: Node | null = null;
+  private actionButton: Button | null = null;
+  private actionLabel: Label | null = null;
+  private rewardLabel: Label | null = null;
+  private starLabel: Label | null = null;
+  private coinLabel: Label | null = null;
+  private stageRow: Node | null = null;
+  private readonly stageViews: StageView[] = [];
+  private readonly slotViews: SlotView[] = [];
+  private selectedBuilding = 0;
+  private selectedStage = 0;
+  private stagedBuilding = -1;
+  private constructionFx: Node | null = null;
+  private constructionTimer: ReturnType<typeof setTimeout> | null = null;
+  private isConstructing = false;
+  private active = false;
+
+  constructor(
+    private readonly root: Node,
+    private readonly assets: AssetStore,
+    private readonly options: TownScreenOptions,
+  ) {}
+
+  loadAndCreate(onReady?: () => void) {
+    const paths = [
+      'town/town_bg',
+      COMMON_UI_ASSETS.backButton,
+      COMMON_UI_ASSETS.coinIcon,
+      'town/town_title',
+      'town/panel',
+      'town/button_action',
+      COMMON_UI_ASSETS.starIcon,
+      'town/broom',
+      'town/hammer_active',
+      'town/hammer_locked',
+      'town/flower_active',
+      'town/flower_locked',
+      'town/sparkle',
+      'town/dust',
+      'town/house_stage_0',
+      'town/house_stage_1',
+      'town/house_stage_2',
+      'town/house_stage_3',
+      'town/cafe_stage_0',
+      'town/cafe_stage_1',
+      'town/cafe_stage_2',
+      'town/cafe_stage_3',
+      'town/workshop_stage_0',
+      'town/workshop_stage_1',
+      'town/workshop_stage_2',
+      'town/workshop_stage_3',
+      'town/society_stage_0',
+      'town/society_stage_1',
+      'town/society_stage_2',
+      'town/society_stage_3',
+      'town/fountain_stage_0',
+      'town/fountain_stage_1',
+      'town/fountain_stage_2',
+      'town/fountain_stage_3',
+    ];
+    this.assets.loadImages(paths, () => {
+      this.create();
+      onReady?.();
+    });
+  }
+
+  setActive(active: boolean) {
+    this.active = active;
+    if (!this.townUI) return;
+    this.townUI.active = active;
+    if (active) this.refresh();
+  }
+
+  destroy() {
+    if (this.constructionTimer) clearTimeout(this.constructionTimer);
+    this.constructionTimer = null;
+    this.townUI?.destroy();
+    this.townUI = null;
+  }
+
+  private get buildings(): BuildingView[] {
+    return this.options.getBuildings();
+  }
+
+  private get selected(): BuildingView {
+    const buildings = this.buildings;
+    return buildings[Math.min(this.selectedBuilding, buildings.length - 1)];
+  }
+
+  private create() {
+    const visibleSize = view.getVisibleSize();
+    const top = visibleSize.height / 2;
+    const bottom = -visibleSize.height / 2;
+
+    this.townUI = new Node('TownUI');
+    this.root.addChild(this.townUI);
+    this.townUI.active = this.active;
+
+    this.image(this.townUI, 'town/town_bg', 0, 0, visibleSize.width, visibleSize.height);
+    this.addWarmVeil(visibleSize.width, visibleSize.height);
+    this.buildDisplay();
+    this.buildSelector(bottom);
+    this.buildConstructionPanel(bottom);
+    this.buildHeader(top);
+    this.refresh();
+  }
+
+  private addWarmVeil(width: number, height: number) {
+    const veil = new Node('TownWarmVeil');
+    this.townUI!.addChild(veil);
+    veil.addComponent(UITransform).setContentSize(width, height);
+    const graphics = veil.addComponent(Graphics);
+    graphics.fillColor = new Color(255, 238, 194, 28);
+    graphics.rect(-width / 2, -height / 2, width, height);
+    graphics.fill();
+  }
+
+  private buildHeader(top: number) {
+    const y = top - 150;
+    this.buildBackButton(this.townUI!, -315, y);
+    this.image(this.townUI!, 'town/town_title', -110, y, 300, 104);
+
+    this.buildResourceChip(
+      this.townUI!,
+      122,
+      y,
+      164,
+      COMMON_UI_ASSETS.starIcon,
+      () => '' + this.options.getStars(),
+      () => this.toast('星星来自三消通关'),
+    );
+    this.buildResourceChip(
+      this.townUI!,
+      286,
+      y,
+      174,
+      COMMON_UI_ASSETS.coinIcon,
+      () => '' + this.options.getCoins(),
+      () => this.toast('金币可在商店购买道具'),
+    );
+  }
+
+  private buildBackButton(parent: Node, x: number, y: number) {
+    const buttonNode = new Node('TownBackButton');
+    parent.addChild(buttonNode);
+    buttonNode.setPosition(x, y);
+    buttonNode.addComponent(UITransform).setContentSize(BACK_BUTTON_SIZE.hitWidth, BACK_BUTTON_SIZE.hitHeight);
+    this.image(buttonNode, COMMON_UI_ASSETS.backButton, 0, 0, BACK_BUTTON_SIZE.visualWidth, BACK_BUTTON_SIZE.visualHeight);
+
+    const button = buttonNode.addComponent(Button);
+    button.transition = Button.Transition.SCALE;
+    button.zoomScale = 0.93;
+    button.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      this.options.onReturnHome();
+    });
+  }
+
+  private buildResourceChip(
+    parent: Node,
+    x: number,
+    y: number,
+    width: number,
+    iconPath: string,
+    formatValue: () => string,
+    onTap: () => void,
+  ) {
+    const hitArea = new Node('ResourceChip');
+    parent.addChild(hitArea);
+    hitArea.setPosition(x, y);
+    hitArea.addComponent(UITransform).setContentSize(width, 62);
+
+    const chip = this.roundPanel(
+      hitArea,
+      0,
+      0,
+      width,
+      62,
+      28,
+      new Color(255, 248, 226, 250),
+      new Color(238, 174, 51),
+    );
+    const chipScale = 0.85;
+    const iconScale = 0.75 / chipScale;
+    chip.setScale(new Vec3(chipScale, chipScale, 1));
+    const iconSize = (iconPath === COMMON_UI_ASSETS.starIcon ? 48 : 46) * iconScale;
+    this.image(chip, iconPath, -width / 2 + 32, 0, iconSize, iconSize);
+    const label = this.label(chip, formatValue(), 10, -2, 25, new Color(112, 69, 40));
+    label.isBold = true;
+    this.drawPlus(chip, width / 2 - 25, 0, iconScale);
+
+    const button = hitArea.addComponent(Button);
+    button.transition = Button.Transition.SCALE;
+    button.zoomScale = 0.95;
+    button.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      onTap();
+    });
+    if (iconPath === COMMON_UI_ASSETS.starIcon) this.starLabel = label;
+    else this.coinLabel = label;
+  }
+
+  private drawPlus(parent: Node, x: number, y: number, scale = 1) {
+    const node = new Node('ResourceAdd');
+    parent.addChild(node);
+    node.setPosition(x, y);
+    node.addComponent(UITransform).setContentSize(44 * scale, 44 * scale);
+    const graphics = node.addComponent(Graphics);
+    graphics.fillColor = new Color(255, 187, 47);
+    graphics.strokeColor = new Color(221, 140, 30);
+    graphics.lineWidth = 3 * scale;
+    graphics.circle(0, 0, 18 * scale);
+    graphics.fill();
+    graphics.stroke();
+    graphics.strokeColor = Color.WHITE;
+    graphics.lineWidth = 4 * scale;
+    graphics.moveTo(-9 * scale, 0);
+    graphics.lineTo(9 * scale, 0);
+    graphics.moveTo(0, -9 * scale);
+    graphics.lineTo(0, 9 * scale);
+    graphics.stroke();
+  }
+
+  private buildDisplay() {
+    this.displayLayer = new Node('TownBuildingDisplay');
+    this.townUI!.addChild(this.displayLayer);
+    this.displayLayer.setPosition(0, 235);
+    this.displayLayer.addComponent(UITransform).setContentSize(480, 400);
+    const button = this.displayLayer.addComponent(Button);
+    button.transition = Button.Transition.SCALE;
+    button.zoomScale = 0.98;
+    button.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      const building = this.selected;
+      this.toast(building.completed ? building.reward : building.name);
+    });
+  }
+
+  private buildSelector(bottom: number) {
+    const strip = new Node('TownBuildingStrip');
+    this.townUI!.addChild(strip);
+    // 紧贴面板上缘：面板顶 = bottom + 576，槽位高 106，留 8px 间隙
+    strip.setPosition(0, bottom + 637);
+
+    const slotWidth = 128;
+    const gap = 10;
+    const total = this.buildings.length;
+    this.buildings.forEach((building, index) => {
+      const x = (index - (total - 1) / 2) * (slotWidth + gap);
+      const slotNode = new Node('BuildingSlot_' + building.id);
+      strip.addChild(slotNode);
+      slotNode.setPosition(x, 0);
+      slotNode.addComponent(UITransform).setContentSize(slotWidth, 106);
+      const slotGraphics = slotNode.addComponent(Graphics);
+
+      const thumb = this.image(
+        slotNode,
+        'town/' + building.artPrefix + '_stage_' + building.maxStage,
+        0,
+        18,
+        92,
+        68,
+      );
+      const nameColor = this.label(slotNode, building.name, 0, -40, 17, new Color(112, 69, 40));
+      nameColor.isBold = true;
+      const checkMark = this.makeCheckMark(slotNode, 47, 44);
+      const lockMark = this.makeLockMark(slotNode, 47, 44);
+
+      this.slotViews.push({
+        node: slotNode,
+        slotGraphics,
+        thumb,
+        nameColor,
+        checkMark,
+        lockMark,
+      });
+
+      const button = slotNode.addComponent(Button);
+      button.transition = Button.Transition.SCALE;
+      button.zoomScale = 0.95;
+      button.node.on(Button.EventType.CLICK, () => {
+        this.options.onPlaySound('click');
+        this.selectBuilding(index);
+      });
+    });
+  }
+
+  private buildConstructionPanel(bottom: number) {
+    this.townPanel = this.image(
+      this.townUI!,
+      'town/panel',
+      0,
+      bottom + 330,
+      700,
+      492,
+      { left: 58, right: 58, top: 62, bottom: 46 },
+    );
+
+    this.titleLabel = this.label(this.townPanel, '', -42, 208, 32, new Color(111, 62, 28));
+    this.titleLabel.isBold = true;
+    this.titleLabel.outlineWidth = 2;
+    this.titleLabel.outlineColor = new Color(255, 248, 226);
+
+    this.subtitleLabel = this.label(this.townPanel, '', 0, 163, 20, new Color(136, 94, 63));
+    this.subtitleLabel.isBold = true;
+
+    // 状态角标用动态文字胶囊，避免美术图上"施工中"常驻误导
+    this.statusNode = this.roundPanel(
+      this.townPanel,
+      248,
+      208,
+      140,
+      50,
+      25,
+      new Color(255, 246, 222, 245),
+      new Color(238, 174, 51),
+    );
+    this.statusLabel = this.label(this.statusNode, '', 0, -1, 20, new Color(112, 69, 40));
+    this.statusLabel.isBold = true;
+    const statusButton = this.statusNode.addComponent(Button);
+    statusButton.transition = Button.Transition.SCALE;
+    statusButton.zoomScale = 0.95;
+    statusButton.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      const building = this.selected;
+      this.toast(
+        building.completed
+          ? building.name + '已建成'
+          : '建设进度 ' + (building.stage + 1) + ' / ' + building.maxStage,
+      );
+    });
+
+    this.stageRow = new Node('StageRow');
+    this.townPanel.addChild(this.stageRow);
+    this.stageRow.setPosition(0, 76);
+
+    this.conditionLabel = this.label(this.townPanel, '', 0, -24, 24, new Color(112, 69, 40));
+    this.conditionLabel.isBold = true;
+
+    this.requirementBox = this.roundPanel(
+      this.townPanel,
+      0,
+      -80,
+      500,
+      58,
+      22,
+      new Color(255, 246, 222, 155),
+      new Color(247, 210, 148),
+    );
+    this.requirementIcon = this.image(this.requirementBox, COMMON_UI_ASSETS.starIcon, -40, 0, 44, 44);
+    this.requirementLabel = this.label(this.requirementBox, '', 44, -1, 27, new Color(112, 69, 40));
+    this.requirementLabel.isBold = true;
+
+    this.actionNode = this.image(this.townPanel, 'town/button_action', 0, -160, 470, 80);
+    this.actionLabel = this.label(this.actionNode, '', -14, 0, 36, new Color(255, 251, 238));
+    this.actionLabel.isBold = true;
+    this.actionLabel.outlineWidth = 4;
+    this.actionLabel.outlineColor = new Color(184, 74, 10);
+    this.actionLabel.enableShadow = true;
+    this.actionLabel.shadowColor = new Color(150, 66, 14, 150);
+    this.actionLabel.shadowOffset = new Vec2(0, -3);
+    this.actionButton = this.actionNode.addComponent(Button);
+    this.actionButton.transition = Button.Transition.SCALE;
+    this.actionButton.zoomScale = 0.93;
+    this.actionButton.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      this.onActionTap();
+    });
+
+    this.rewardLabel = this.label(this.townPanel, '', 0, -224, 20, new Color(136, 94, 63));
+    this.rewardLabel.isBold = true;
+  }
+
+  private refresh() {
+    if (!this.townUI) return;
+    const building = this.selected;
+    if (this.selectedStage > Math.min(building.stage, building.maxStage - 1)) {
+      this.selectedStage = Math.min(building.stage, building.maxStage - 1);
+    }
+
+    if (this.starLabel) this.starLabel.string = '' + this.options.getStars();
+    if (this.coinLabel) this.coinLabel.string = '' + this.options.getCoins();
+
+    this.renderDisplay(building);
+    this.renderSelector();
+    this.renderPanel(building);
+  }  private stageArtPath(building: BuildingView, stage: number) {
+    return 'town/' + building.artPrefix + '_stage_' + stage;
+  }
+
+  private renderDisplay(building: BuildingView) {
+    if (!this.displayLayer) return;
+    const key = building.id + ':' + building.stage;
+    if (this.displayImage && this.displayKey !== key) {
+      this.displayImage.destroy();
+      this.displayImage = null;
+      this.displayKey = '';
+    }
+    if (!this.displayImage) {
+      this.displayImage = this.image(
+        this.displayLayer,
+        this.stageArtPath(building, building.stage),
+        0,
+        0,
+        440,
+        380,
+      );
+      this.displayImage.name = 'BuildingArtwork';
+      this.displayKey = key;
+      if (this.active && !this.isConstructing) {
+        this.displayImage.setScale(new Vec3(0.96, 0.96, 1));
+        tween(this.displayImage)
+          .to(0.32, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+          .start();
+      }
+    }
+
+    if (!this.displayLockVeil) {
+      this.displayLockVeil = new Node('DisplayLockVeil');
+      this.displayLayer.addChild(this.displayLockVeil);
+      this.displayLockVeil.addComponent(UITransform).setContentSize(440, 380);
+      const graphics = this.displayLockVeil.addComponent(Graphics);
+      graphics.fillColor = new Color(64, 52, 40, 150);
+      graphics.roundRect(-220, -190, 440, 380, 28);
+      graphics.fill();
+      this.makeLockMark(this.displayLockVeil, 0, 24).setScale(new Vec3(1.6, 1.6, 1));
+      const hint = this.label(
+        this.displayLockVeil,
+        '',
+        0,
+        -62,
+        22,
+        new Color(255, 246, 222),
+      );
+      hint.isBold = true;
+      hint.name = 'LockHint';
+    }
+    const locked = !building.unlocked;
+    this.displayLockVeil.active = locked;
+    if (locked) {
+      const hint = this.displayLockVeil.getChildByName('LockHint');
+      if (hint) {
+        const label = hint.getComponent(Label);
+        if (label) {
+          label.string = building.unlockHint;
+          // 文案最长的一条约为 16 个字，超出时缩小字号避免溢出遮罩
+          label.fontSize = building.unlockHint.length > 12 ? 19 : 22;
+          label.lineHeight = label.fontSize + 8;
+        }
+      }
+    }
+  }
+
+  private renderSelector() {
+    this.buildings.forEach((building, index) => {
+      const slotView = this.slotViews[index];
+      if (!slotView) return;
+      const selected = index === this.selectedBuilding;
+      const locked = !building.unlocked;
+      slotView.lockMark.active = locked;
+      slotView.checkMark.active = building.completed;
+      const thumbSprite = slotView.thumb.getComponent(Sprite);
+      if (thumbSprite) {
+        thumbSprite.color = building.unlocked
+          ? new Color(255, 255, 255)
+          : new Color(188, 181, 171);
+      }
+      slotView.nameColor.color = building.unlocked
+        ? new Color(112, 69, 40)
+        : new Color(158, 145, 130);
+
+      slotView.node.setScale(new Vec3(selected ? 1.05 : 1, selected ? 1.05 : 1, 1));
+      slotView.slotGraphics.clear();
+      slotView.slotGraphics.lineWidth = selected ? 5 : 3;
+      slotView.slotGraphics.fillColor = building.unlocked
+        ? new Color(255, 249, 230, 235)
+        : new Color(243, 236, 222, 225);
+      slotView.slotGraphics.strokeColor = selected
+        ? new Color(247, 181, 38)
+        : new Color(233, 210, 170);
+      slotView.slotGraphics.roundRect(-64, -53, 128, 106, 20);
+      slotView.slotGraphics.fill();
+      slotView.slotGraphics.stroke();
+    });
+  }
+
+  private renderPanel(building: BuildingView) {
+    if (this.titleLabel) this.titleLabel.string = building.name;
+    if (this.subtitleLabel) this.subtitleLabel.string = building.flavor;
+    this.renderStatus(building);
+    this.renderStageRow(building);
+
+    const completed = building.completed;
+    if (this.conditionLabel) {
+      this.conditionLabel.string = !building.unlocked
+        ? '解锁条件'
+        : completed
+          ? this.completedConditionText(building)
+          : this.isStageDone(building, this.selectedStage)
+            ? '本阶段建设完成'
+            : '本阶段建设条件';
+    }
+    const showCost = building.unlocked && !completed && !this.isStageDone(building, this.selectedStage);
+    if (this.requirementBox) this.requirementBox.active = showCost || completed;
+    if (this.requirementIcon) this.requirementIcon.active = showCost;
+    if (this.requirementLabel) {
+      this.requirementLabel.string = showCost
+        ? '× ' + building.stageCosts[this.selectedStage]
+        : completed
+          ? this.completedRequirementText(building)
+          : '已完成';
+    }
+    if (this.rewardLabel) this.rewardLabel.string = building.reward;
+    this.renderAction(building);
+  }
+
+  private renderStatus(building: BuildingView) {
+    if (this.statusLabel) {
+      this.statusLabel.string = building.completed
+        ? '已建成'
+        : `阶段 ${building.stage + 1}/${building.maxStage}`;
+    }
+    if (this.statusNode) {
+      const graphics = this.statusNode.getComponent(Graphics);
+      if (graphics) {
+        graphics.clear();
+        graphics.lineWidth = 3;
+        graphics.fillColor = building.completed
+          ? new Color(233, 244, 210, 245)
+          : new Color(255, 246, 222, 245);
+        graphics.strokeColor = building.completed
+          ? new Color(151, 190, 94)
+          : new Color(238, 174, 51);
+        graphics.roundRect(-70, -25, 140, 50, 25);
+        graphics.fill();
+        graphics.stroke();
+      }
+    }
+  }
+
+  private renderStageRow(building: BuildingView) {
+    if (!this.stageRow) return;
+    if (this.stagedBuilding !== this.selectedBuilding) {
+      this.rebuildStageRow(building);
+    }
+    const selectedIsDone = this.isStageDone(building, this.selectedStage);
+    this.stageViews.forEach((stageView, index) => {
+      const locked = index > building.stage;
+      const completed = index < building.stage;
+      const selected = !locked && this.selectedStage === index;
+      stageView.activeIcon.active = !locked;
+      stageView.lockedIcon.active = locked;
+      stageView.checkMark.active = completed || (selected && selectedIsDone);
+      stageView.lockMark.active = locked;
+      stageView.title.string = building.stageNames[index] ?? '';
+      stageView.title.color = locked
+        ? new Color(150, 137, 121)
+        : selected
+          ? new Color(112, 69, 40)
+          : new Color(135, 104, 76);
+      stageView.card.setScale(new Vec3(selected ? 1.04 : 1, selected ? 1.04 : 1, 1));
+
+      stageView.cardGraphics.clear();
+      stageView.cardGraphics.lineWidth = selected ? 5 : 3;
+      stageView.cardGraphics.fillColor = locked
+        ? new Color(245, 238, 222, 215)
+        : completed
+          ? new Color(255, 248, 226, 225)
+          : new Color(255, 249, 230, 255);
+      stageView.cardGraphics.strokeColor = selected
+        ? new Color(247, 181, 38)
+        : completed
+          ? new Color(225, 206, 168)
+          : new Color(228, 215, 193);
+      const halfWidth = this.stageCardWidth(building) / 2;
+      stageView.cardGraphics.roundRect(-halfWidth, -56, halfWidth * 2, 112, 20);
+      stageView.cardGraphics.fill();
+      stageView.cardGraphics.stroke();
+    });
+  }
+
+  private stageCardWidth(building: BuildingView) {
+    return building.maxStage > 3 ? 126 : 148;
+  }
+
+  private rebuildStageRow(building: BuildingView) {
+    if (!this.stageRow) return;
+    this.stageViews.forEach(stageView => stageView.card.destroy());
+    this.stageViews.length = 0;
+    this.stagedBuilding = this.selectedBuilding;
+
+    const cardWidth = this.stageCardWidth(building);
+    const gap = building.maxStage > 3 ? 18 : 56;
+    const step = cardWidth + gap;
+    building.stageNames.forEach((stageName, index) => {
+      const x = (index - (building.maxStage - 1) / 2) * step;
+      const card = new Node('StageCard_' + (index + 1));
+      this.stageRow!.addChild(card);
+      card.setPosition(x, 0);
+      card.addComponent(UITransform).setContentSize(cardWidth, 132);
+      const cardGraphics = card.addComponent(Graphics);
+
+      const iconPath = STAGE_ICONS_ACTIVE[index] ?? 'town/sparkle';
+      const lockedPath = STAGE_ICONS_LOCKED[index] ?? 'town/flower_locked';
+      const activeIcon = this.image(card, iconPath, 0, 12, 46, 56);
+      const lockedIcon = this.image(card, lockedPath, 0, 12, 46, 56);
+      const checkMark = this.makeCheckMark(card, cardWidth / 2 - 22, 40);
+      const lockMark = this.makeLockMark(card, cardWidth / 2 - 22, 40);
+      const title = this.label(card, stageName, 0, -40, 21, new Color(112, 69, 40));
+      title.isBold = true;
+
+      this.stageViews.push({
+        card,
+        cardGraphics,
+        activeIcon,
+        lockedIcon,
+        checkMark,
+        lockMark,
+        title,
+      });
+
+      const button = card.addComponent(Button);
+      button.transition = Button.Transition.SCALE;
+      button.zoomScale = 0.95;
+      button.node.on(Button.EventType.CLICK, () => {
+        this.options.onPlaySound('click');
+        this.selectStage(index);
+      });
+    });
+  }
+
+  private isStageDone(building: BuildingView, stage: number) {
+    return stage < building.stage || building.completed;
+  }
+
+  private completedConditionText(building: BuildingView) {
+    return `${getCatDefinition(building.catId).name}已入住`;
+  }
+
+  private completedRequirementText(building: BuildingView) {
+    return getCatDefinition(building.catId).name + '已加入你的猫咪团队';
+  }
+
+  private renderAction(building: BuildingView) {
+    if (!this.actionLabel || !this.actionButton) return;
+    this.actionLabel.string = this.actionText(building);
+    this.actionButton.interactable = !this.isConstructing && building.unlocked;
+    this.actionLabel.color = building.unlocked
+      ? new Color(255, 251, 238)
+      : new Color(235, 225, 208);
+  }
+
+  private actionText(building: BuildingView) {
+    if (this.isConstructing) return '施工中...';
+    if (!building.unlocked) return '未解锁';
+    if (!building.completed) {
+      const stageName = building.stageNames[building.stage] ?? '';
+      return this.isStageDone(building, building.stage)
+        ? '已完成'
+        : '开始' + stageName;
+    }
+    return '已建成';
+  }
+
+  private selectBuilding(index: number) {
+    if (index === this.selectedBuilding) return;
+    const building = this.buildings[index];
+    if (!building) return;
+    this.selectedBuilding = index;
+    this.selectedStage = Math.min(building.stage, building.maxStage - 1);
+    if (!building.unlocked) {
+      this.toast(building.unlockHint);
+    }
+    this.refresh();
+  }
+
+  private selectStage(index: number) {
+    const building = this.selected;
+    if (index > building.stage) {
+      const previousName = building.stageNames[index - 1] ?? '前一阶段';
+      this.toast('完成' + previousName + '后解锁');
+      return;
+    }
+    this.selectedStage = index;
+    this.refresh();
+  }
+
+  private onActionTap() {
+    if (this.isConstructing) return;
+    const building = this.selected;
+    if (!building.unlocked) {
+      this.toast(building.unlockHint);
+      return;
+    }
+    if (building.completed) {
+      const catName = getCatDefinition(building.catId).name;
+      this.toast(`${building.name}建设完成，「${catName}」已入住小镇`);
+      return;
+    }
+
+    const currentStage = building.stage;
+    if (this.selectedStage !== currentStage) {
+      this.selectedStage = currentStage;
+      this.refresh();
+      this.toast('请先完成' + (building.stageNames[currentStage] ?? '') + '阶段');
+      return;
+    }
+    const result = this.options.onBuild(building.id);
+    if (!result.ok) {
+      this.toast(result.message);
+      return;
+    }
+    this.isConstructing = true;
+    this.selectedStage = Math.min(currentStage + 1, building.maxStage - 1);
+    this.refresh();
+    this.playConstructionFx();
+
+    this.constructionTimer = setTimeout(() => {
+      this.constructionTimer = null;
+      this.isConstructing = false;
+      this.refresh();
+      const fresh = this.buildings[this.selectedBuilding];
+      this.toast(fresh.completed ? building.name + '建设完成！' + fresh.reward : result.message);
+    }, 900);
+  }
+
+  private playConstructionFx() {
+    this.constructionFx?.destroy();
+    const fx = new Node('ConstructionFx');
+    this.displayLayer!.addChild(fx);
+    fx.setPosition(0, 0);
+    this.constructionFx = fx;
+
+    const dust = this.image(fx, 'town/dust', -146, -116, 43, 69);
+    const sparkleLeft = this.image(fx, 'town/sparkle', -190, 70, 32, 32);
+    const sparkleRight = this.image(fx, 'town/sparkle', 182, 96, 32, 32);
+    [dust, sparkleLeft, sparkleRight].forEach((node, index) => {
+      const opacity = node.addComponent(UIOpacity);
+      opacity.opacity = 0;
+      const finalY = node.position.y;
+      node.setPosition(node.position.x, finalY - 20);
+      tween(opacity).delay(index * 0.08).to(0.18, { opacity: 255 }).start();
+      tween(node)
+        .delay(index * 0.08)
+        .to(0.3, { position: new Vec3(node.position.x, finalY, 0) }, { easing: 'backOut' })
+        .to(0.42, { position: new Vec3(node.position.x, finalY + 22, 0) }, { easing: 'sineInOut' })
+        .start();
+    });
+    tween(fx).delay(0.78).to(0.12, { scale: new Vec3(0.7, 0.7, 1) }).call(() => {
+      if (fx.isValid) fx.destroy();
+      if (this.constructionFx === fx) this.constructionFx = null;
+    }).start();
+  }
+
+  private makeCheckMark(parent: Node, x: number, y: number) {
+    const node = new Node('StageCheck');
+    parent.addChild(node);
+    node.setPosition(x, y);
+    node.addComponent(UITransform).setContentSize(38, 38);
+    const graphics = node.addComponent(Graphics);
+    graphics.fillColor = new Color(112, 178, 71);
+    graphics.strokeColor = Color.WHITE;
+    graphics.lineWidth = 3;
+    graphics.circle(0, 0, 16);
+    graphics.fill();
+    graphics.stroke();
+    graphics.strokeColor = Color.WHITE;
+    graphics.lineWidth = 4;
+    graphics.moveTo(-8, 0);
+    graphics.lineTo(-2, -6);
+    graphics.lineTo(9, 7);
+    graphics.stroke();
+    return node;
+  }
+
+  private makeLockMark(parent: Node, x: number, y: number) {
+    const node = new Node('StageLock');
+    parent.addChild(node);
+    node.setPosition(x, y);
+    node.addComponent(UITransform).setContentSize(40, 44);
+    const graphics = node.addComponent(Graphics);
+    graphics.fillColor = new Color(133, 133, 133);
+    graphics.strokeColor = new Color(244, 239, 225);
+    graphics.lineWidth = 3;
+    graphics.roundRect(-13, -12, 26, 23, 5);
+    graphics.fill();
+    graphics.stroke();
+    graphics.strokeColor = new Color(133, 133, 133);
+    graphics.lineWidth = 5;
+    graphics.arc(0, 5, 10, Math.PI, 0, false);
+    graphics.stroke();
+    graphics.fillColor = new Color(255, 229, 145);
+    graphics.circle(0, -3, 3);
+    graphics.fill();
+    return node;
+  }
+
+  private roundPanel(
+    parent: Node,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    radius: number,
+    fill: Color,
+    stroke: Color,
+  ) {
+    const node = new Node('RoundPanel');
+    parent.addChild(node);
+    node.setPosition(x, y);
+    node.addComponent(UITransform).setContentSize(width, height);
+    const graphics = node.addComponent(Graphics);
+    graphics.lineWidth = 3;
+    graphics.fillColor = fill;
+    graphics.strokeColor = stroke;
+    graphics.roundRect(-width / 2, -height / 2, width, height, radius);
+    graphics.fill();
+    graphics.stroke();
+    return node;
+  }
+
+  private image(
+    parent: Node,
+    path: string,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    insets?: { left: number; right: number; top: number; bottom: number },
+  ) {
+    const node = new Node(path.replace(/\//g, '_'));
+    parent.addChild(node);
+    node.setPosition(x, y);
+    node.addComponent(UITransform).setContentSize(width, height);
+    const frame = this.assets.getFrame(path);
+    if (frame) {
+      const sprite = node.addComponent(Sprite);
+      sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+      sprite.spriteFrame = frame;
+      if (insets) {
+        const slicedFrame = frame as any;
+        slicedFrame.insetLeft = insets.left;
+        slicedFrame.insetRight = insets.right;
+        slicedFrame.insetTop = insets.top;
+        slicedFrame.insetBottom = insets.bottom;
+        sprite.type = Sprite.Type.SLICED;
+      }
+    }
+    return node;
+  }
+
+  private label(parent: Node, text: string, x: number, y: number, size: number, color: Color) {
+    const node = new Node('Label');
+    parent.addChild(node);
+    node.setPosition(x, y);
+    const label = node.addComponent(Label);
+    label.string = text;
+    label.fontSize = size;
+    label.lineHeight = size + 8;
+    label.color = color;
+    label.horizontalAlign = Label.HorizontalAlign.CENTER;
+    label.verticalAlign = Label.VerticalAlign.CENTER;
+    return label;
+  }
+
+  private toast(text: string) {
+    if (!this.townUI) return;
+    Toast.show(this.townUI, text, { y: -520 });
+  }
+}
