@@ -37,7 +37,7 @@ export interface DailyTaskState {
   dateKey: string;
   tasks: Record<DailyTaskId, DailyTaskProgress>;
   chestClaimed: boolean;
-  /** 超级挑战的大额金币奖励每日限领一次，跨天随 DailyState 一起重置 */
+  /** 超萌挑战的大额金币奖励每日限领一次，跨天随 DailyState 一起重置 */
   challengeRewardClaimed: boolean;
 }
 
@@ -88,6 +88,11 @@ export interface EndlessProgress {
   dailyRewardDateKey: string;
 }
 
+export interface GamePetPosition {
+  side: 'left' | 'right';
+  y: number;
+}
+
 export interface PlayerState {
   version: 2;
   /** 后端生成的展示昵称，加载页拿到后写入本地 */
@@ -105,6 +110,8 @@ export interface PlayerState {
   buildStage: number;
   cats: Record<CatId, CatProgress>;
   equippedCat: CatId | null;
+  /** 关卡宠物浮窗的本地位置偏好，不参与任何玩法计算 */
+  gamePetPosition: GamePetPosition;
   inventory: Record<ItemId, number>;
   buildings: Record<BuildingId, BuildingProgress>;
   daily: DailyState;

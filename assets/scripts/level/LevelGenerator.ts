@@ -31,7 +31,7 @@ export interface LevelGenerationOptions {
   /** 收集槽容量，可解性验证与压力指标都用它；缺省 6 */
   slotCapacity?: number;
   /**
-   * 贴满压力档（超级挑战专用）：序列规划永远走高压节奏、槽位 3/5 时优先凑对
+   * 贴满压力档（超萌挑战专用）：序列规划永远走高压节奏、槽位 3/5 时优先凑对
    * 把最优路径顶在满槽边缘；候选按"残酷度"（槽位峰值/失败风险/诱错数）挑选，
    * 不做提前验收，全部尝试跑完取最残酷者。
    */
@@ -853,7 +853,7 @@ export class LevelGenerator {
     while (result.length < total) {
       // 普通关/难关用高压节奏（relief 仅 24%），爽关/救援用标准节奏（relief 52%，
       // 连击链依赖放松段）；这是普通关槽位压力的主旋钮。
-      // 贴满压力档（超级挑战）永远走高压节奏：序列里不安排任何放松段，
+      // 贴满压力档（超萌挑战）永远走高压节奏：序列里不安排任何放松段，
       // 槽位长期骑在 capacity-1 上，三消只在 mustClear 逼到墙角时发生。
       const phase = fullPressure
         ? 'pressure'
@@ -885,7 +885,7 @@ export class LevelGenerator {
         // 否则"挑新元素"的策略会把槽位堆满互不相同的单张，序列模拟进入死局，
         // 只能退化到兜底序列，产出的关卡会因脆弱状态过多被 forgiveness 门槛拒绝。
         // 贴满压力档反过来：3/5 时优先"凑对"把槽位顶到 4/5 再消——
-        // 最优路径也要长期骑在满槽边缘，这是超级挑战残酷度的核心。
+        // 最优路径也要长期骑在满槽边缘，这是超萌挑战残酷度的核心。
         if (fullPressure && trayLength < capacity - 1 && pairing.length > 0) {
           choice = pickDispersed(pairing);
         } else if (completing.length > 0) {

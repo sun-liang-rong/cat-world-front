@@ -33,7 +33,7 @@ export interface EndlessSettlementInfo {
 
 export interface SettlementPopupOptions {
   win: boolean;
-  /** 超级挑战胜利：不展示星星，标题用「超级挑战!」 */
+  /** 超萌挑战胜利：不展示星星，标题用「超萌挑战!」 */
   challenge?: boolean;
   /** 无尽模式结算：不展示星星和通关评价，主数字是消除数 */
   endless?: EndlessSettlementInfo;
@@ -117,7 +117,7 @@ interface PopupSection {
 
 const TITLE_TEXTS: Record<PopupMode, string> = {
   win: '关卡完成!',
-  challenge: '超级挑战!',
+  challenge: '超萌挑战!',
   endless: '无尽挑战',
   fail: '差一点!',
 };
@@ -318,6 +318,19 @@ export class SettlementPopup extends Component {
     const isFail = mode === 'fail';
     const y = panelHeight / 2 - RIBBON_OFFSET;
     const ribbonFrame = this.frames[isFail ? 'ribbonFail' : 'ribbonWin'];
+
+    // 绶带和标题文字必须共用同一个动画节点。之前只缩放绶带，
+    // 入场动画尚未完成时文字会跑到绶带外，视觉上像绶带被横向压扁。
+    const titleGroup = new Node('TitleGroup');
+    parent.addChild(titleGroup);
+    titleGroup.setPosition(0, y);
+    titleGroup.setScale(new Vec3(0.7, 0.7, 1));
+    this.tweenTargets.add(titleGroup);
+    tween(titleGroup)
+      .delay(0.05)
+      .to(0.22, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .start();
+
     if (ribbonFrame) {
       // 先建绶带再建文字，保证文字在绶带上层
       const size = this.fitSize(
@@ -325,19 +338,13 @@ export class SettlementPopup extends Component {
         RIBBON_WIDTH,
         isFail ? FAIL_RIBBON_HEIGHT : RIBBON_HEIGHT,
       );
-      const ribbon = this.image(parent, 'TitleRibbon', ribbonFrame, 0, y, size.width, size.height);
-      ribbon.setScale(new Vec3(0.7, 0.7, 1));
-      this.tweenTargets.add(ribbon);
-      tween(ribbon)
-        .delay(0.05)
-        .to(0.22, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
-        .start();
+      this.image(titleGroup, 'TitleRibbon', ribbonFrame, 0, 0, size.width, size.height);
     }
     const text = this.label(
-      parent,
+      titleGroup,
       TITLE_TEXTS[mode],
       0,
-      y + (isFail ? -2 : 4),
+      isFail ? -2 : 4,
       40,
       isFail ? Color.WHITE : new Color(255, 187, 61),
     );
@@ -352,13 +359,6 @@ export class SettlementPopup extends Component {
       // 无绶带底图时的兜底：橙色字直接排
       text.color = new Color(234, 111, 20);
       text.outlineColor = Color.WHITE;
-      const node = text.node;
-      node.setScale(new Vec3(0.7, 0.7, 1));
-      this.tweenTargets.add(node);
-      tween(node)
-        .delay(0.05)
-        .to(0.22, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
-        .start();
     }
   }
 

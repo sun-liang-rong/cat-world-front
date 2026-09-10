@@ -158,7 +158,7 @@ export class ApiClient {
       const message = (payload as { message?: unknown }).message;
       if (typeof message === 'string' && message) {
         return new ApiError(message, status, typeof (payload as { code?: unknown }).code === 'number'
-          ? (payload as { code: number }).code
+          ? (payload as { code?: unknown }).code as number
           : status);
       }
     }

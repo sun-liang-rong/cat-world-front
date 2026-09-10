@@ -49,6 +49,8 @@ const THEME_PITCH = 200;
 const THEME_VIEW_W = 660;
 const THEME_CONTENT_W = THEME_PITCH * (THEME_COUNT - 1) + THEME_CHIP_W;
 const THEME_MAX_SCROLL = THEME_CONTENT_W - THEME_VIEW_W;
+// 真机手指通常只需要轻轻一划就应切换主题，不能要求拖过半个芯片间距。
+const THEME_SWIPE_THRESHOLD = 44;
 const THEME_TAP_JITTER = 20;
 // 沿背景石板路自上而下取的 6 个节点位（750×1334 设计稿坐标，屏幕中心为原点）
 const MAP_SLOTS: Array<[number, number]> = [
@@ -103,6 +105,7 @@ export class AdventureScreen {
   private themeDragBaseX = 0;
   private themeDragging = false;
   private themeTouchActive = false;
+  private themeTapBlocked = false;
 
   constructor(
     private readonly root: Node,
@@ -460,7 +463,9 @@ export class AdventureScreen {
   }
 
   private buildLevelCard(bottom: number) {
-    const y = bottom + 248;
+    // Leave a small gap above the theme selector while keeping both controls
+    // clear of the bottom safe area.
+    const y = bottom + 280;
     const card = this.roundedShape(
       this.adventureUI!, 'AdventureLevelCard', 0, y, 668, 178, 30,
       COLORS.cream, COLORS.border, 4,
@@ -516,7 +521,7 @@ export class AdventureScreen {
   }
 
   private buildThemeBar(bottom: number) {
-    const y = bottom + 94;
+    const y = bottom + 107;
     const panel = this.roundedShape(
       this.adventureUI!, 'AdventureThemeBar', 0, y, 700, 122, 32,
       COLORS.cream, COLORS.border, 4,
@@ -564,16 +569,16 @@ export class AdventureScreen {
     area.on(Node.EventType.TOUCH_START, (event: EventTouch) => {
       this.themeTouchActive = true;
       this.onThemeDragStart(event.getUILocation().x);
-    }, this);
+    }, this, true);
     area.on(Node.EventType.TOUCH_MOVE, (event: EventTouch) => {
       this.onThemeDragMove(event.getUILocation().x);
-    }, this);
+    }, this, true);
     const touchFinish = (event: EventTouch) => {
       this.themeTouchActive = false;
       this.onThemeDragEnd(event.getUILocation().x);
     };
-    area.on(Node.EventType.TOUCH_END, touchFinish, this);
-    area.on(Node.EventType.TOUCH_CANCEL, touchFinish, this);
+    area.on(Node.EventType.TOUCH_END, touchFinish, this, true);
+    area.on(Node.EventType.TOUCH_CANCEL, touchFinish, this, true);
 
     area.on(Node.EventType.MOUSE_DOWN, (event: EventMouse) => {
       if (!this.themeTouchActive) this.onThemeDragStart(event.getUILocation().x);
@@ -584,13 +589,14 @@ export class AdventureScreen {
     // 鼠标可能拖出主题栏后松开，鼠标 up 挂在全屏 UI 上保证拖拽一定收尾
     this.adventureUI!.on(Node.EventType.MOUSE_UP, (event: EventMouse) => {
       if (!this.themeTouchActive) this.onThemeDragEnd(event.getUILocation().x);
-    }, this);
+    }, this, true);
   }
 
   private onThemeDragStart(uiX: number) {
     this.themeDragging = true;
     this.dragStartX = uiX;
     this.dragDeltaX = 0;
+    this.themeTapBlocked = false;
     if (this.themeContent) {
       this.themeDragBaseX = this.themeContent.position.x;
       Tween.stopAllByTarget(this.themeContent);
@@ -609,10 +615,41 @@ export class AdventureScreen {
     this.themeDragging = false;
     const delta = uiX - this.dragStartX;
     this.dragDeltaX = 0;
+    this.themeTapBlocked = Math.abs(delta) > THEME_TAP_JITTER;
     if (!this.themeContent) return;
-    const x = Math.max(-THEME_VIEW_W / 2 - THEME_MAX_SCROLL, Math.min(-THEME_VIEW_W / 2, this.themeDragBaseX + delta));
+
+    // 获取当前实际位置
+    const currentX = this.themeContent.position.x;
+
+    // 找到当前位置最接近的主题索引
+    let currentNearestIndex = 0;
+    let currentNearestDist = Infinity;
+    for (let index = 0; index < THEME_COUNT; index += 1) {
+      const anchor = this.themeAnchor(index);
+      const dist = Math.abs(anchor - currentX);
+      if (dist < currentNearestDist) {
+        currentNearestDist = dist;
+        currentNearestIndex = index;
+      }
+    }
+
+    let targetIndex = currentNearestIndex;
+
+    // 如果滑动距离超过阈值，尝试切换到相邻主题
+    if (Math.abs(delta) >= THEME_SWIPE_THRESHOLD) {
+      if (delta < 0) {
+        // 手指向左滑，切换到下一个主题（索引+1，向右滚动）
+        targetIndex = Math.min(THEME_COUNT - 1, currentNearestIndex + 1);
+      } else {
+        // 手指向右滑，切换到上一个主题（索引-1，向左滚动）
+        targetIndex = Math.max(0, currentNearestIndex - 1);
+      }
+    }
+    // 如果滑动距离不够，targetIndex 已经是 currentNearestIndex，会吸附到最近的主题
+
+    const targetX = this.themeAnchor(targetIndex);
     tween(this.themeContent)
-      .to(0.18, { position: new Vec3(this.nearestThemeAnchor(x), 0, 0) }, { easing: 'cubicOut' })
+      .to(0.18, { position: new Vec3(targetX, 0, 0) }, { easing: 'cubicOut' })
       .start();
   }
 
@@ -656,7 +693,7 @@ export class AdventureScreen {
       name.node.getComponent(UITransform)!.setContentSize(124, 28);
 
       const subText = !unlocked ? '未解锁' : clearedAll ? '已通关' : `${cleared} / ${LEVELS_PER_THEME}`;
-      const sub = this.label(chip, subText, 26, -17, 15, !unlocked ? new Color(170, 158, 136) : clearedAll ? COLORS.goldDark : COLORS.muted);
+      const sub = this.label(chip, subText, 26, -17, 18, !unlocked ? new Color(170, 158, 136) : clearedAll ? COLORS.goldDark : COLORS.muted);
       sub.node.getComponent(UITransform)!.setContentSize(124, 22);
 
       this.addButton(chip, () => this.onThemeChipTap(index, chip, unlocked));
@@ -664,8 +701,12 @@ export class AdventureScreen {
   }
 
   private onThemeChipTap(index: number, chip: Node, unlocked: boolean) {
-    // Button 的 CLICK 在手势区 TOUCH_END 之前触发，此时 dragDeltaX 还未清零，可用来区分拖拽和点击
-    if (Math.abs(this.dragDeltaX) > THEME_TAP_JITTER) return;
+    // 主题栏在捕获阶段先收到 TOUCH_END，因此用一次性标记阻止拖拽结束时误触发 Button CLICK。
+    if (this.themeTapBlocked || Math.abs(this.dragDeltaX) > THEME_TAP_JITTER) {
+      // 捕获阶段会先收到 TOUCH_END，单独保留一次阻断标记，避免拖拽结束后误触发主题按钮。
+      this.themeTapBlocked = false;
+      return;
+    }
     if (!unlocked) {
       this.toast(`通关「${THEME_INFO[index - 1].name}」后解锁`);
       tween(chip)

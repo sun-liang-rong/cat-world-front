@@ -221,9 +221,9 @@ export class ShopScreen {
   }
 
   private buildHintRibbon(bottom: number) {
-    const ribbon = this.image(this.shopUI!, 'shop/hint_ribbon', 0, bottom + 68, 380, 84);
-    const hint = this.label(ribbon, '每种道具每天最多获取 5 次\n首次金币购买，之后观看广告', 0, 2, 16, new Color(136, 94, 63));
-    hint.lineHeight = 22;
+    const ribbon = this.image(this.shopUI!, 'shop/hint_ribbon', 0, bottom + 112, 380, 84);
+    const hint = this.label(ribbon, '每种道具每天最多获取 5 次\n首次金币购买，之后观看广告', 0, 2, 18, new Color(136, 94, 63));
+    hint.lineHeight = 24;
     hint.isBold = true;
   }
 

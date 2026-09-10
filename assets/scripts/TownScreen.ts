@@ -182,24 +182,24 @@ export class TownScreen {
   }
 
   private buildHeader(top: number) {
-    const y = top - 150;
-    this.buildBackButton(this.townUI!, -315, y);
-    this.image(this.townUI!, 'town/town_title', -110, y, 300, 104);
+    const y = top - 120;
+    this.buildBackButton(this.townUI!, -322, y);
+    this.image(this.townUI!, 'town/town_title', -90, y, 280, 96);
 
     this.buildResourceChip(
       this.townUI!,
-      122,
+      148,
       y,
-      164,
+      156,
       COMMON_UI_ASSETS.starIcon,
       () => '' + this.options.getStars(),
       () => this.toast('星星来自三消通关'),
     );
     this.buildResourceChip(
       this.townUI!,
-      286,
+      304,
       y,
-      174,
+      166,
       COMMON_UI_ASSETS.coinIcon,
       () => '' + this.options.getCoins(),
       () => this.toast('金币可在商店购买道具'),
@@ -290,7 +290,7 @@ export class TownScreen {
   private buildDisplay() {
     this.displayLayer = new Node('TownBuildingDisplay');
     this.townUI!.addChild(this.displayLayer);
-    this.displayLayer.setPosition(0, 235);
+    this.displayLayer.setPosition(0, 180);
     this.displayLayer.addComponent(UITransform).setContentSize(480, 400);
     const button = this.displayLayer.addComponent(Button);
     button.transition = Button.Transition.SCALE;
@@ -305,32 +305,32 @@ export class TownScreen {
   private buildSelector(bottom: number) {
     const strip = new Node('TownBuildingStrip');
     this.townUI!.addChild(strip);
-    // 紧贴面板上缘：面板顶 = bottom + 576，槽位高 106，留 8px 间隙
-    strip.setPosition(0, bottom + 637);
+    // 槽位条位置：在面板顶部上方，留出更大的间距
+    strip.setPosition(0, bottom + 570);
 
-    const slotWidth = 128;
-    const gap = 10;
+    const slotWidth = 116;
+    const gap = 20;
     const total = this.buildings.length;
     this.buildings.forEach((building, index) => {
       const x = (index - (total - 1) / 2) * (slotWidth + gap);
       const slotNode = new Node('BuildingSlot_' + building.id);
       strip.addChild(slotNode);
       slotNode.setPosition(x, 0);
-      slotNode.addComponent(UITransform).setContentSize(slotWidth, 106);
+      slotNode.addComponent(UITransform).setContentSize(116, 100);
       const slotGraphics = slotNode.addComponent(Graphics);
 
       const thumb = this.image(
         slotNode,
         'town/' + building.artPrefix + '_stage_' + building.maxStage,
         0,
-        18,
-        92,
-        68,
+        16,
+        84,
+        62,
       );
-      const nameColor = this.label(slotNode, building.name, 0, -40, 17, new Color(112, 69, 40));
+      const nameColor = this.label(slotNode, building.name, 0, -38, 16, new Color(112, 69, 40));
       nameColor.isBold = true;
-      const checkMark = this.makeCheckMark(slotNode, 47, 44);
-      const lockMark = this.makeLockMark(slotNode, 47, 44);
+      const checkMark = this.makeCheckMark(slotNode, 43, 40);
+      const lockMark = this.makeLockMark(slotNode, 43, 40);
 
       this.slotViews.push({
         node: slotNode,
@@ -356,32 +356,32 @@ export class TownScreen {
       this.townUI!,
       'town/panel',
       0,
-      bottom + 330,
-      700,
-      492,
+      bottom + 270,
+      660,
+      440,
       { left: 58, right: 58, top: 62, bottom: 46 },
     );
 
-    this.titleLabel = this.label(this.townPanel, '', -42, 208, 32, new Color(111, 62, 28));
+    this.titleLabel = this.label(this.townPanel, '', -38, 180, 29, new Color(111, 62, 28));
     this.titleLabel.isBold = true;
     this.titleLabel.outlineWidth = 2;
     this.titleLabel.outlineColor = new Color(255, 248, 226);
 
-    this.subtitleLabel = this.label(this.townPanel, '', 0, 163, 20, new Color(136, 94, 63));
+    this.subtitleLabel = this.label(this.townPanel, '', 0, 142, 18, new Color(136, 94, 63));
     this.subtitleLabel.isBold = true;
 
     // 状态角标用动态文字胶囊，避免美术图上"施工中"常驻误导
     this.statusNode = this.roundPanel(
       this.townPanel,
-      248,
-      208,
-      140,
-      50,
-      25,
+      232,
+      180,
+      132,
+      46,
+      23,
       new Color(255, 246, 222, 245),
       new Color(238, 174, 51),
     );
-    this.statusLabel = this.label(this.statusNode, '', 0, -1, 20, new Color(112, 69, 40));
+    this.statusLabel = this.label(this.statusNode, '', 0, -1, 18, new Color(112, 69, 40));
     this.statusLabel.isBold = true;
     const statusButton = this.statusNode.addComponent(Button);
     statusButton.transition = Button.Transition.SCALE;
@@ -398,27 +398,27 @@ export class TownScreen {
 
     this.stageRow = new Node('StageRow');
     this.townPanel.addChild(this.stageRow);
-    this.stageRow.setPosition(0, 76);
+    this.stageRow.setPosition(0, 58);
 
-    this.conditionLabel = this.label(this.townPanel, '', 0, -24, 24, new Color(112, 69, 40));
+    this.conditionLabel = this.label(this.townPanel, '', 0, -20, 21, new Color(112, 69, 40));
     this.conditionLabel.isBold = true;
 
     this.requirementBox = this.roundPanel(
       this.townPanel,
       0,
-      -80,
-      500,
-      58,
-      22,
+      -68,
+      460,
+      52,
+      21,
       new Color(255, 246, 222, 155),
       new Color(247, 210, 148),
     );
-    this.requirementIcon = this.image(this.requirementBox, COMMON_UI_ASSETS.starIcon, -40, 0, 44, 44);
-    this.requirementLabel = this.label(this.requirementBox, '', 44, -1, 27, new Color(112, 69, 40));
+    this.requirementIcon = this.image(this.requirementBox, COMMON_UI_ASSETS.starIcon, -36, 0, 40, 40);
+    this.requirementLabel = this.label(this.requirementBox, '', 40, -1, 25, new Color(112, 69, 40));
     this.requirementLabel.isBold = true;
 
-    this.actionNode = this.image(this.townPanel, 'town/button_action', 0, -160, 470, 80);
-    this.actionLabel = this.label(this.actionNode, '', -14, 0, 36, new Color(255, 251, 238));
+    this.actionNode = this.image(this.townPanel, 'town/button_action', 0, -140, 450, 74);
+    this.actionLabel = this.label(this.actionNode, '', -10, 0, 33, new Color(255, 251, 238));
     this.actionLabel.isBold = true;
     this.actionLabel.outlineWidth = 4;
     this.actionLabel.outlineColor = new Color(184, 74, 10);
@@ -433,7 +433,7 @@ export class TownScreen {
       this.onActionTap();
     });
 
-    this.rewardLabel = this.label(this.townPanel, '', 0, -224, 20, new Color(136, 94, 63));
+    this.rewardLabel = this.label(this.townPanel, '', 0, -192, 18, new Color(136, 94, 63));
     this.rewardLabel.isBold = true;
   }
 
@@ -544,7 +544,7 @@ export class TownScreen {
       slotView.slotGraphics.strokeColor = selected
         ? new Color(247, 181, 38)
         : new Color(233, 210, 170);
-      slotView.slotGraphics.roundRect(-64, -53, 128, 106, 20);
+      slotView.slotGraphics.roundRect(-58, -50, 116, 100, 18);
       slotView.slotGraphics.fill();
       slotView.slotGraphics.stroke();
     });
@@ -639,14 +639,14 @@ export class TownScreen {
           ? new Color(225, 206, 168)
           : new Color(228, 215, 193);
       const halfWidth = this.stageCardWidth(building) / 2;
-      stageView.cardGraphics.roundRect(-halfWidth, -56, halfWidth * 2, 112, 20);
+      stageView.cardGraphics.roundRect(-halfWidth, -52, halfWidth * 2, 104, 18);
       stageView.cardGraphics.fill();
       stageView.cardGraphics.stroke();
     });
   }
 
   private stageCardWidth(building: BuildingView) {
-    return building.maxStage > 3 ? 126 : 148;
+    return building.maxStage > 3 ? 120 : 142;
   }
 
   private rebuildStageRow(building: BuildingView) {
@@ -656,23 +656,23 @@ export class TownScreen {
     this.stagedBuilding = this.selectedBuilding;
 
     const cardWidth = this.stageCardWidth(building);
-    const gap = building.maxStage > 3 ? 18 : 56;
+    const gap = building.maxStage > 3 ? 16 : 48;
     const step = cardWidth + gap;
     building.stageNames.forEach((stageName, index) => {
       const x = (index - (building.maxStage - 1) / 2) * step;
       const card = new Node('StageCard_' + (index + 1));
       this.stageRow!.addChild(card);
       card.setPosition(x, 0);
-      card.addComponent(UITransform).setContentSize(cardWidth, 132);
+      card.addComponent(UITransform).setContentSize(cardWidth, 124);
       const cardGraphics = card.addComponent(Graphics);
 
       const iconPath = STAGE_ICONS_ACTIVE[index] ?? 'town/sparkle';
       const lockedPath = STAGE_ICONS_LOCKED[index] ?? 'town/flower_locked';
-      const activeIcon = this.image(card, iconPath, 0, 12, 46, 56);
-      const lockedIcon = this.image(card, lockedPath, 0, 12, 46, 56);
-      const checkMark = this.makeCheckMark(card, cardWidth / 2 - 22, 40);
-      const lockMark = this.makeLockMark(card, cardWidth / 2 - 22, 40);
-      const title = this.label(card, stageName, 0, -40, 21, new Color(112, 69, 40));
+      const activeIcon = this.image(card, iconPath, 0, 10, 44, 52);
+      const lockedIcon = this.image(card, lockedPath, 0, 10, 44, 52);
+      const checkMark = this.makeCheckMark(card, cardWidth / 2 - 20, 36);
+      const lockMark = this.makeLockMark(card, cardWidth / 2 - 20, 36);
+      const title = this.label(card, stageName, 0, -38, 20, new Color(112, 69, 40));
       title.isBold = true;
 
       this.stageViews.push({

@@ -26,6 +26,7 @@ import {
   DailyState,
   DailyTaskId,
   EndlessProgress,
+  GamePetPosition,
   PlayerExperienceInfo,
   PlayerState,
   RewardBundle,
@@ -274,6 +275,21 @@ export class PlayerStore {
     return this.state.equippedCat;
   }
 
+  getGamePetPosition(): GamePetPosition {
+    return { ...this.state.gamePetPosition };
+  }
+
+  setGamePetPosition(position: GamePetPosition) {
+    const side = position.side === 'left' ? 'left' : 'right';
+    const y = Math.max(
+      -600,
+      Math.min(600, Math.floor(Number.isFinite(position.y) ? position.y : 220)),
+    );
+    if (this.state.gamePetPosition.side === side && this.state.gamePetPosition.y === y) return;
+    this.state.gamePetPosition = { side, y };
+    this.save();
+  }
+
   // —— 猫咪技能：充能 + 冷却 ——
   // 充能（收集元素/完成三消）在关卡内累计并持久化；充能完成后由玩家手动触发。
   // 升级猫咪缩短冷却时间（getCatSkillCooldownMs：40 分钟 → 30 分钟）。
@@ -360,7 +376,7 @@ export class PlayerStore {
     return this.state.daily.chestClaimed;
   }
 
-  // —— 超级挑战大奖：每日首次通关发放，同日重复通关只发普通过关金币 ——
+  // —— 超萌挑战大奖：每日首次通关发放，同日重复通关只发普通过关金币 ——
   isChallengeRewardClaimed() {
     this.resetDailyState();
     return this.state.daily.challengeRewardClaimed;
@@ -729,7 +745,7 @@ export class PlayerStore {
       userName: '',
       userId: '',
       coins: 100,
-      stars: 25,
+      stars: 0,
       totalStarsEarned: 0,
       level: 1,
       exp: 0,
@@ -737,6 +753,7 @@ export class PlayerStore {
       buildStage: 0,
       cats,
       equippedCat: null,
+      gamePetPosition: { side: 'right', y: 220 },
       inventory: { hammer: 0, glove: 0, dice: 0, extra_slot: 0 },
       buildings: this.createBuildingStates(),
       daily: this.createDailyState(this.todayKey()),
@@ -856,6 +873,16 @@ export class PlayerStore {
       && state.cats[value.equippedCat as CatId].unlocked
     ) {
       state.equippedCat = value.equippedCat as CatId;
+    }
+    const savedPetPosition = value.gamePetPosition;
+    if (savedPetPosition && typeof savedPetPosition === 'object') {
+      state.gamePetPosition = {
+        side: savedPetPosition.side === 'left' ? 'left' : 'right',
+        y: Math.max(
+          -600,
+          Math.min(600, Math.floor(this.safeNumber(savedPetPosition.y, state.gamePetPosition.y))),
+        ),
+      };
     }
     (Object.keys(state.inventory) as ItemId[]).forEach(id => {
       state.inventory[id] = Math.max(0, Math.floor(this.safeNumber(value.inventory?.[id], 0)));

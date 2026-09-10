@@ -2,6 +2,7 @@ import {
   BlockInputEvents,
   Button,
   Color,
+  EventTouch,
   Graphics,
   Label,
   Node,
@@ -23,8 +24,10 @@ import type { RewardedAdResult } from './RewardedAdService';
 import { EndlessDirector } from './level/EndlessDirector';
 import { LevelRules } from './level/LevelSolver';
 import { LevelDefinition, PlayerRun, TileDefinition, TileGeometry } from './level/LevelTypes';
-import { CatId, ItemId } from './PlayerTypes';
+import { CatId, GamePetPosition, ItemId } from './PlayerTypes';
 import { LEVELS_PER_THEME } from './TownContent';
+import { PerformanceManager } from './PerformanceManager';
+import { managedTween } from './TweenManager';
 
 type Tile = {
   node: Node;
@@ -43,6 +46,7 @@ type Tile = {
 type ActiveTool = 'hammer' | 'glove_menu' | 'glove_swap' | 'glove_return' | null;
 
 type ToolButtonView = {
+  node: Node;
   button: Button;
   countLabel: Label;
   icon: Node;
@@ -59,6 +63,9 @@ type CatSkillPanelView = {
   node: Node;
   button: Button;
   portrait: Node;
+  cooldownOverlay: Node;
+  speechBubble: Node;
+  speechBubbleGraphics: Graphics;
   nameLabel: Label;
   cooldownLabel: Label;
   descriptionLabel: Label;
@@ -138,12 +145,12 @@ export function buildGameScreenImagePaths(level: number, theme?: number) {
 
 export interface GameScreenOptions {
   level: number;
-  /** 关卡主题序号（0 起，-1 强制通用皮肤）；缺省按关卡号推导（每主题 20 关）。超级挑战传 -1 */
+  /** 关卡主题序号（0 起，-1 强制通用皮肤）；缺省按关卡号推导（每主题 20 关）。超萌挑战传 -1 */
   theme?: number;
   levelDefinition?: LevelDefinition;
-  /** 超级挑战模式：赢了改发大额金币，不发星星；对局数据不计入难度自适应 */
+  /** 超萌挑战模式：赢了改发大额金币，不发星星；对局数据不计入难度自适应 */
   challenge?: { coinReward: number };
-  /** 超级挑战通关时回调（用于结算每日限领的大奖） */
+  /** 超萌挑战通关时回调（用于结算每日限领的大奖） */
   onChallengeWin?: (durationMs: number) => void;
   /** 无尽模式：棋盘永不空完，按消除卡片数结算；不推进主线，成绩上报无尽榜 */
   endless?: {
@@ -164,6 +171,8 @@ export interface GameScreenOptions {
   getItemCount: (id: ItemId) => number;
   onConsumeItem: (id: ItemId) => boolean;
   getEquippedCat: () => CatId | null;
+  getGamePetPosition: () => GamePetPosition;
+  onGamePetPositionChanged: (position: GamePetPosition) => void;
   getCatSkillState: (id: CatId) => CatSkillState;
   onCatSkillFired: (id: CatId) => number;
   onCatSkillCharge: (id: CatId, charge: number) => void;
@@ -248,8 +257,10 @@ export class GameScreen {
   private settlementWin = false;
   private settlementCoinReward = 0;
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  private readonly performanceManager = PerformanceManager.getInstance();
   private readonly tweenTargets = new Set<object>();
   private readonly toolButtonViews = new Map<ItemId, ToolButtonView>();
+  private readonly usedTools = new Set<ItemId>();
   private extraSlotNode: Node | null = null;
   private gloveMenuNode: Node | null = null;
   private gloveSelectedTile: Tile | null = null;
@@ -260,7 +271,14 @@ export class GameScreen {
   private catSkillConfig: ReturnType<typeof getCatSkillConfig> | null = null;
   private catSkillPanel: CatSkillPanelView | null = null;
   private catSkillRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private catSkillBubbleTimer: ReturnType<typeof setInterval> | null = null;
+  private catSkillBubbleVisible = true;
   private catSkillUsed = false;
+  private catSkillDockSide: 'left' | 'right' = 'right';
+  private catSkillDragActive = false;
+  private catSkillDragMoved = false;
+  private catSkillDragOffset = new Vec3();
+  private catSkillSuppressClick = false;
   private settlementPopup: SettlementPopup | null = null;
   private endlessRecorded = false;
 
@@ -269,11 +287,11 @@ export class GameScreen {
     this.options = options;
     this.coins = options.getCoins();
     this.equippedCatId = options.getEquippedCat();
-    // 槽位数可按玩法配置（超级挑战用 5 槽），含额外槽位整体居中：6+1 槽时与原 -264 常量一致
+    // 槽位数可按玩法配置（超萌挑战用 5 槽），含额外槽位整体居中：6+1 槽时与原 -264 常量一致
     this.baseTraySlots = Math.max(4, Math.min(7, options.traySlots ?? 6));
     this.trayCapacity = this.baseTraySlots;
     this.trayFirstSlotX = -(this.baseTraySlots / 2) * this.traySlotSpacing;
-    // 主题皮肤：显式传入优先（超级挑战传 -1 强制通用皮肤），否则按关卡号推导
+    // 主题皮肤：显式传入优先（超萌挑战传 -1 强制通用皮肤），否则按关卡号推导
     this.themeIndex = options.theme ?? Math.floor((options.level - 1) / LEVELS_PER_THEME);
     this.itemNames = THEME_ITEM_SKINS[this.themeIndex]?.names ?? GENERIC_ITEM_NAMES;
     if (options.endless) this.endlessDirector = new EndlessDirector(options.endless.seed, this.startedAt);
@@ -332,6 +350,7 @@ export class GameScreen {
       this.gameUI.setSiblingIndex(this.gameUI.parent.children.length - 1);
     }
     this.startCatSkillRefresh();
+    this.startCatSkillBubbleCycle();
     if (this.options.endless) this.startEndlessHud();
     if (this.options.levelDefinition || this.options.endless) {
       this.beginBoardIntro();
@@ -392,7 +411,7 @@ export class GameScreen {
     const levelBanner = this.image(this.gameUI, this.gamePath(3), -86, headerY, 260, 80);
     const levelTitle = this.label(
       levelBanner,
-      this.options.endless ? '无尽模式' : this.options.challenge ? '超级挑战' : `第 ${this.options.level} 关`,
+      this.options.endless ? '无尽模式' : this.options.challenge ? '超萌挑战' : `第 ${this.options.level} 关`,
       0,
       -3,
       30,
@@ -423,8 +442,6 @@ export class GameScreen {
       clearText.isBold = true;
     }
 
-    this.buildCatSkillPanel(220, headerY);
-
     // Keep the progress value available to the game logic without adding a
     // second status bar that is not present in the supplied UI reference.
     this.targetLabel = this.label(this.gameUI, '', 0, 0, 1, Color.TRANSPARENT);
@@ -442,16 +459,31 @@ export class GameScreen {
 
     this.trayLayer = new Node('Tray');
     this.gameUI.addChild(this.trayLayer);
-    this.trayLayer.setPosition(0, -535);
+    this.trayLayer.setPosition(0, -515);
     this.buildTray();
     this.buildComboFeedback();
-    this.buildToolButton('hammer', '锤子', -252, -398, 1, () => this.useHammer());
-    this.buildToolButton('dice', '骰子', -84, -398, 2, () => this.shuffle());
-    this.buildToolButton('glove', '手套', 84, -398, 3, () => this.useGlove());
-    this.buildToolButton('extra_slot', '增加槽位', 252, -398, 4, () => this.addTraySlot());
+    this.buildToolButton('hammer', '锤子', -252, -358, 1, () => this.useHammer());
+    this.buildToolButton('dice', '骰子', -84, -358, 2, () => this.shuffle());
+    this.buildToolButton('glove', '手套', 84, -358, 3, () => this.useGlove());
+    this.buildToolButton('extra_slot', '增加槽位', 252, -358, 4, () => this.addTraySlot());
     this.trayFlightLayer = new Node('TrayFlight');
     this.gameUI.addChild(this.trayFlightLayer);
     this.trayFlightLayer.setPosition(this.trayLayer.position);
+
+    // 宠物是棋盘上的悬浮助手，贴在右侧安全边缘，不再占用顶部目标栏的横向空间。
+    const savedPetPosition = this.options.getGamePetPosition();
+    this.catSkillDockSide = savedPetPosition.side === 'left' ? 'left' : 'right';
+    const petX = this.catSkillDockSide === 'left'
+      ? -visibleSize.width / 2 + 78
+      : visibleSize.width / 2 - 78;
+    const minPetY = -visibleSize.height / 2 + 88;
+    const maxPetY = visibleSize.height / 2 - 118;
+    const defaultPetY = Math.max(220, headerY - 300);
+    const petY = Math.max(
+      minPetY,
+      Math.min(maxPetY, Number.isFinite(savedPetPosition.y) ? savedPetPosition.y : defaultPetY),
+    );
+    this.buildCatSkillPanel(petX, petY);
     this.gameUI.active = false;
     this.created = true;
   }
@@ -483,11 +515,14 @@ export class GameScreen {
     this.hidePreparingHint(true);
     if (this.catSkillRefreshTimer) clearInterval(this.catSkillRefreshTimer);
     this.catSkillRefreshTimer = null;
+    if (this.catSkillBubbleTimer) clearInterval(this.catSkillBubbleTimer);
+    this.catSkillBubbleTimer = null;
     if (this.endlessHudTimer) clearInterval(this.endlessHudTimer);
     this.endlessHudTimer = null;
     this.endlessHudLabel = null;
     this.leaveConfirmNode = null;
     this.endlessDirector = null;
+    if (this.catSkillPanel) Tween.stopAllByTarget(this.catSkillPanel.node);
     this.catSkillPanel = null;
     this.settlementPopup = null;
     this.toolButtonViews.clear();
@@ -535,93 +570,182 @@ export class GameScreen {
   }
 
   private buildCatSkillPanel(x: number, y: number) {
-    const panel = this.addPanel(
-      'CatSkillPanel',
-      x,
-      y,
-      300,
-      96,
-      new Color(255, 248, 226, 248),
-      this.gameUI,
-    );
-    const panelGraphics = panel.getComponent(Graphics);
-    if (panelGraphics) {
-      panelGraphics.strokeColor = new Color(235, 205, 158, 255);
-      panelGraphics.lineWidth = 3;
-      panelGraphics.roundRect(-150, -48, 300, 96, 22);
-      panelGraphics.stroke();
-    }
+    const panel = new Node('CatSkillPanel');
+    this.gameUI.addChild(panel);
+    panel.setPosition(x, y);
+    panel.addComponent(UITransform).setContentSize(156, 156);
+
+    // 阴影和金色外圈让宠物从棋盘背景中浮出来，点击热区保持 156×156。
+    const shadow = new Node('CatSkillShadow');
+    panel.addChild(shadow);
+    shadow.setPosition(0, -70);
+    shadow.addComponent(UITransform).setContentSize(112, 28);
+    const shadowGraphics = shadow.addComponent(Graphics);
+    shadowGraphics.fillColor = new Color(92, 54, 22, 70);
+    shadowGraphics.ellipse(0, 0, 52, 12);
+    shadowGraphics.fill();
+
+    const frame = new Node('CatSkillFrame');
+    panel.addChild(frame);
+    frame.setPosition(0, -4);
+    frame.addComponent(UITransform).setContentSize(128, 128);
+    const frameGraphics = frame.addComponent(Graphics);
+    frameGraphics.fillColor = new Color(255, 248, 226, 248);
+    frameGraphics.strokeColor = new Color(235, 205, 158, 255);
+    frameGraphics.lineWidth = 4;
+    frameGraphics.circle(0, 0, 62);
+    frameGraphics.fill();
+    frameGraphics.stroke();
 
     const portraitPath = this.equippedCatId
       ? getCatDefinition(this.equippedCatId).portraitPath
-      : 'cat_detail/icon_skill';
-    const portrait = this.image(panel, portraitPath, -116, 0, 58, 58);
-    const skillIcon = this.image(panel, 'game/cat_skill_badge', -98, 22, 22, 22);
+      : 'cats/cat_orange';
+    const portrait = this.image(panel, portraitPath, 0, -4, 110, 110);
+    const portraitSprite = portrait.getComponent(Sprite);
+    if (!this.equippedCatId && portraitSprite) {
+      // 未装备时保留猫咪轮廓，但以中性灰色显示，和已装备状态形成明确区分。
+      portraitSprite.color = new Color(154, 154, 154, 255);
+    }
+    const skillIcon = this.image(panel, 'game/cat_skill_badge', 45, 42, 30, 30);
     const skillSprite = skillIcon.getComponent(Sprite);
     if (skillSprite) skillSprite.color = new Color(255, 189, 42, 255);
 
-    // 300x96 面板三行排布，行中心 y = 32 / -2 / -34，行间留 4-5px 空隙；
-    // 文字框宽度按字号精确计算（正文 15px，每行最多 14 字 = 210px），
-    // 名字、冷却、状态左右对齐固定在内容区 x=-84..142 两端，行间互不挤压。
-    const nameLabel = this.label(panel, '', -19, 32, 18, new Color(111, 62, 28));
+    const cooldownOverlay = new Node('CatSkillCooldownOverlay');
+    panel.addChild(cooldownOverlay);
+    cooldownOverlay.setPosition(0, -4);
+    cooldownOverlay.addComponent(UITransform).setContentSize(112, 112);
+    const cooldownGraphics = cooldownOverlay.addComponent(Graphics);
+    cooldownGraphics.fillColor = new Color(48, 37, 28, 142);
+    cooldownGraphics.circle(0, 0, 55);
+    cooldownGraphics.fill();
+    cooldownOverlay.active = false;
+
+    const cooldownLabel = this.label(panel, '', 0, -4, 25, new Color(255, 251, 238));
+    cooldownLabel.isBold = true;
+    cooldownLabel.node.addComponent(UIOpacity);
+    cooldownLabel.node.getComponent(UITransform)!.setContentSize(112, 36);
+
+    const nameLabel = this.label(panel, '', 0, -73, 18, new Color(111, 62, 28));
     nameLabel.isBold = true;
-    nameLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+    nameLabel.outlineWidth = 3;
+    nameLabel.outlineColor = new Color(255, 248, 226, 255);
     nameLabel.overflow = Label.Overflow.CLAMP;
-    nameLabel.lineHeight = 22;
-    nameLabel.node.getComponent(UITransform)!.setContentSize(130, 22);
-    const cooldownLabel = this.label(panel, '', 96, 32, 15, new Color(177, 106, 43));
-    cooldownLabel.horizontalAlign = Label.HorizontalAlign.RIGHT;
-    cooldownLabel.overflow = Label.Overflow.CLAMP;
-    cooldownLabel.lineHeight = 22;
-    cooldownLabel.node.getComponent(UITransform)!.setContentSize(92, 22);
+    nameLabel.node.getComponent(UITransform)!.setContentSize(140, 26);
 
-    const descriptionLabel = this.label(panel, '', 29, -2, 15, new Color(112, 69, 40));
-    descriptionLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+    const speechBubble = new Node('CatSkillSpeechBubble');
+    panel.addChild(speechBubble);
+    speechBubble.setPosition(-142, 62);
+    speechBubble.addComponent(UITransform).setContentSize(264, 70);
+    const bubbleGraphics = speechBubble.addComponent(Graphics);
+    bubbleGraphics.fillColor = new Color(255, 248, 226, 252);
+    bubbleGraphics.strokeColor = new Color(235, 205, 158, 255);
+    bubbleGraphics.lineWidth = 3;
+    bubbleGraphics.roundRect(-132, -35, 264, 70, 20);
+    bubbleGraphics.fill();
+    bubbleGraphics.stroke();
+    bubbleGraphics.moveTo(118, -31);
+    bubbleGraphics.lineTo(132, -48);
+    bubbleGraphics.lineTo(104, -34);
+    bubbleGraphics.close();
+    bubbleGraphics.fill();
+
+    const descriptionLabel = this.label(speechBubble, '', 0, 0, 19, new Color(112, 69, 40));
     descriptionLabel.verticalAlign = Label.VerticalAlign.CENTER;
-    descriptionLabel.lineHeight = 18;
+    descriptionLabel.lineHeight = 25;
     descriptionLabel.overflow = Label.Overflow.CLAMP;
-    descriptionLabel.node.getComponent(UITransform)!.setContentSize(226, 36);
+    descriptionLabel.node.getComponent(UITransform)!.setContentSize(238, 56);
 
-    const chargeLabel = this.label(panel, '', -47, -34, 15, new Color(145, 99, 54));
-    chargeLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
-    chargeLabel.overflow = Label.Overflow.CLAMP;
-    chargeLabel.lineHeight = 20;
-    chargeLabel.node.getComponent(UITransform)!.setContentSize(74, 20);
-
+    // 保留充能字段，改为宠物脚下的小进度条，避免丢失技能进度反馈。
+    const chargeLabel = this.label(panel, '', -45, -51, 15, new Color(145, 99, 54));
+    chargeLabel.node.getComponent(UITransform)!.setContentSize(90, 20);
     const chargeTrack = new Node('CatSkillChargeTrack');
     panel.addChild(chargeTrack);
-    chargeTrack.setPosition(29, -34);
-    chargeTrack.addComponent(UITransform).setContentSize(64, 10);
+    chargeTrack.setPosition(34, -51);
+    chargeTrack.addComponent(UITransform).setContentSize(66, 10);
     const trackGraphics = chargeTrack.addComponent(Graphics);
     trackGraphics.fillColor = new Color(235, 215, 177, 255);
-    trackGraphics.roundRect(-32, -5, 64, 10, 5);
+    trackGraphics.roundRect(-33, -5, 66, 10, 5);
     trackGraphics.fill();
-
     const chargeFillNode = new Node('CatSkillChargeFill');
     panel.addChild(chargeFillNode);
-    chargeFillNode.setPosition(29, -34);
-    chargeFillNode.addComponent(UITransform).setContentSize(64, 10);
+    chargeFillNode.setPosition(34, -51);
+    chargeFillNode.addComponent(UITransform).setContentSize(66, 10);
     const chargeFill = chargeFillNode.addComponent(Graphics);
-
-    const statusLabel = this.label(panel, '', 103, -34, 15, new Color(177, 106, 43));
-    statusLabel.isBold = true;
-    statusLabel.horizontalAlign = Label.HorizontalAlign.RIGHT;
-    statusLabel.overflow = Label.Overflow.CLAMP;
-    statusLabel.lineHeight = 20;
-    statusLabel.node.getComponent(UITransform)!.setContentSize(78, 20);
+    const statusLabel = this.label(panel, '', 0, -92, 1, Color.TRANSPARENT);
+    statusLabel.node.active = false;
 
     const button = panel.addComponent(Button);
     button.transition = Button.Transition.SCALE;
     button.zoomScale = 0.93;
     button.node.on(Button.EventType.CLICK, () => {
+      // Cocos Button 的 CLICK 可能先于 TOUCH_END 到达，拖动时必须屏蔽这次点击。
+      if (this.catSkillDragMoved || this.catSkillDragActive || this.catSkillSuppressClick) return;
       this.options.onPlaySound('click');
       this.onCatSkillTap();
     });
+
+    panel.on(Node.EventType.TOUCH_START, (event: EventTouch) => {
+      const touchPosition = this.getCatSkillTouchPosition(event);
+      this.catSkillDragActive = true;
+      this.catSkillDragMoved = false;
+      this.catSkillDragOffset.set(
+        panel.position.x - touchPosition.x,
+        panel.position.y - touchPosition.y,
+        0,
+      );
+    });
+    panel.on(Node.EventType.TOUCH_MOVE, (event: EventTouch) => {
+      if (!this.catSkillDragActive) return;
+      const touchPosition = this.getCatSkillTouchPosition(event);
+      const distanceX = touchPosition.x + this.catSkillDragOffset.x - panel.position.x;
+      const distanceY = touchPosition.y + this.catSkillDragOffset.y - panel.position.y;
+      if (!this.catSkillDragMoved && Math.hypot(distanceX, distanceY) < 8) return;
+      this.catSkillDragMoved = true;
+      const visibleSize = view.getVisibleSize();
+      const halfWidth = 78;
+      const nextX = touchPosition.x + this.catSkillDragOffset.x;
+      const nextY = touchPosition.y + this.catSkillDragOffset.y;
+      panel.setPosition(
+        Math.max(-visibleSize.width / 2 + halfWidth, Math.min(visibleSize.width / 2 - halfWidth, nextX)),
+        Math.max(-visibleSize.height / 2 + 88, Math.min(visibleSize.height / 2 - 118, nextY)),
+      );
+      const nextSide = panel.position.x < 0 ? 'left' : 'right';
+      if (nextSide !== this.catSkillDockSide) this.updateCatSkillBubbleSide(nextSide);
+    });
+    const finishCatSkillDrag = () => {
+      if (!this.catSkillDragActive) return;
+      this.catSkillDragActive = false;
+      if (!this.catSkillDragMoved) return;
+      this.catSkillSuppressClick = true;
+      const visibleSize = view.getVisibleSize();
+      const halfWidth = 78;
+      const rightX = visibleSize.width / 2 - halfWidth;
+      const leftX = -visibleSize.width / 2 + halfWidth;
+      const targetSide = panel.position.x < 0 ? 'left' : 'right';
+      const targetX = targetSide === 'left' ? leftX : rightX;
+      this.updateCatSkillBubbleSide(targetSide);
+      this.options.onGamePetPositionChanged({ side: targetSide, y: panel.position.y });
+      Tween.stopAllByTarget(panel);
+      tween(panel)
+        .to(0.18, { position: new Vec3(targetX, panel.position.y, 0) }, { easing: 'backOut' })
+        .start();
+      const resetTimer = setTimeout(() => {
+        this.timers.delete(resetTimer);
+        this.catSkillDragMoved = false;
+        this.catSkillSuppressClick = false;
+      }, 0);
+      this.timers.add(resetTimer);
+    };
+    panel.on(Node.EventType.TOUCH_END, finishCatSkillDrag);
+    panel.on(Node.EventType.TOUCH_CANCEL, finishCatSkillDrag);
 
     this.catSkillPanel = {
       node: panel,
       button,
       portrait,
+      cooldownOverlay,
+      speechBubble,
+      speechBubbleGraphics: bubbleGraphics,
       nameLabel,
       cooldownLabel,
       descriptionLabel,
@@ -629,7 +753,50 @@ export class GameScreen {
       statusLabel,
       chargeFill,
     };
+    this.updateCatSkillBubbleSide('right');
     this.refreshCatSkillPanel();
+  }
+
+  private getCatSkillTouchPosition(event: EventTouch) {
+    const location = event.getUILocation();
+    const transform = this.gameUI.getComponent(UITransform);
+    return transform
+      ? transform.convertToNodeSpaceAR(new Vec3(location.x, location.y, 0))
+      : new Vec3(location.x, location.y, 0);
+  }
+
+  private updateCatSkillBubbleSide(side: 'left' | 'right') {
+    const panel = this.catSkillPanel;
+    if (!panel) return;
+    this.catSkillDockSide = side;
+    panel.speechBubble.setPosition(side === 'right' ? -142 : 142, 62);
+    const graphics = panel.speechBubbleGraphics;
+    graphics.clear();
+    graphics.fillColor = new Color(255, 248, 226, 252);
+    graphics.strokeColor = new Color(235, 205, 158, 255);
+    graphics.lineWidth = 3;
+    graphics.roundRect(-132, -35, 264, 70, 20);
+    graphics.fill();
+    graphics.stroke();
+    const direction = side === 'right' ? 1 : -1;
+    graphics.moveTo(direction * 118, -31);
+    graphics.lineTo(direction * 132, -48);
+    graphics.lineTo(direction * 104, -34);
+    graphics.close();
+    graphics.fill();
+  }
+
+  private startCatSkillBubbleCycle() {
+    const panel = this.catSkillPanel;
+    if (!panel) return;
+    this.catSkillBubbleVisible = true;
+    panel.speechBubble.active = true;
+    // 气泡展示 4 秒、隐藏 4 秒，隐藏期间仍会正常更新技能状态。
+    this.catSkillBubbleTimer = setInterval(() => {
+      if (this.destroyed || !panel.node.isValid) return;
+      this.catSkillBubbleVisible = !this.catSkillBubbleVisible;
+      panel.speechBubble.active = this.catSkillBubbleVisible;
+    }, 4000);
   }
 
   private startCatSkillRefresh() {
@@ -646,24 +813,26 @@ export class GameScreen {
     const config = this.catSkillConfig;
     const portraitPath = catId
       ? getCatDefinition(catId).portraitPath
-      : 'cat_detail/icon_skill';
+      : 'cats/cat_orange';
     const portraitSprite = panel.portrait.getComponent(Sprite);
     const portraitFrame = this.assets.getFrame(portraitPath);
     if (portraitSprite && portraitFrame) portraitSprite.spriteFrame = portraitFrame;
     if (!catId || !skill || !config) {
       panel.portrait.active = true;
-      panel.nameLabel.string = '未佩戴宠物';
+      if (portraitSprite) portraitSprite.color = new Color(154, 154, 154, 255);
+      panel.nameLabel.string = '宠物位';
       panel.cooldownLabel.string = '';
-      panel.descriptionLabel.string = '去首页更多里的图鉴上阵宠物';
+      panel.descriptionLabel.string = '还没有宠物\n去图鉴装备一只吧';
       panel.chargeLabel.string = '';
       panel.statusLabel.string = '去上阵';
-      panel.statusLabel.color = new Color(145, 99, 54);
+      panel.cooldownOverlay.active = false;
       panel.button.interactable = true;
       panel.chargeFill.clear();
       return;
     }
 
     const definition = getCatDefinition(catId);
+    if (portraitSprite) portraitSprite.color = Color.WHITE;
     const required = config.chargeRequired;
     const charge = Math.min(required, Math.max(0, skill.charge));
     const cooldownRemaining = Math.max(0, skill.readyAt - Date.now());
@@ -676,10 +845,16 @@ export class GameScreen {
 
     panel.portrait.active = true;
     panel.nameLabel.string = definition.name;
-    panel.descriptionLabel.string = this.wrapCatSkillDescription(definition.skill);
+    panel.descriptionLabel.string = cooldownRemaining > 0
+      ? `技能冷却中\n${this.formatCatSkillRemaining(cooldownRemaining)}`
+      : this.catSkillUsed
+        ? '本局技能已使用'
+        : canFire
+          ? '点击我使用技能！'
+          : `技能充能 ${charge}/${required}`;
     panel.cooldownLabel.string = cooldownRemaining > 0
-      ? `冷却 ${this.formatCatSkillRemaining(cooldownRemaining)}`
-      : '冷却完成';
+      ? this.formatCatSkillRemaining(cooldownRemaining)
+      : '';
     panel.chargeLabel.string = `充能 ${charge}/${required}`;
     panel.statusLabel.string = this.catSkillUsed
       ? '本局已发动'
@@ -692,20 +867,21 @@ export class GameScreen {
       ? new Color(190, 59, 51)
       : new Color(177, 106, 43);
     panel.button.interactable = !this.gameOver && !this.catSkillUsed && !this.boardIntroActive;
+    panel.cooldownOverlay.active = cooldownRemaining > 0;
 
     panel.chargeFill.clear();
     if (charge > 0) {
-      const width = 64 * charge / required;
+      const width = 66 * charge / required;
       panel.chargeFill.fillColor = canFire
         ? new Color(255, 189, 42, 255)
         : new Color(244, 183, 77, 255);
-      panel.chargeFill.roundRect(-32, -5, width, 10, 5);
+      panel.chargeFill.roundRect(-33, -5, width, 10, 5);
       panel.chargeFill.fill();
     }
   }
 
   private wrapCatSkillDescription(text: string) {
-    // 每行 14 字 × 15px = 210px，确保在 226px 宽的描述框内单行放下不二次折行
+    // 每行 14 字 × 18px = 252px，确保在 260px 宽的描述框内单行放下不二次折行
     const characters = text.replace(/\s+/g, '').split('');
     const lines: string[] = [];
     for (let index = 0; index < characters.length; index += 14) {
@@ -937,10 +1113,12 @@ export class GameScreen {
     this.sortBoardTileNodes();
     this.updateTargetLabel();
 
+    // 使用性能管理器的批次延迟
+    const config = this.performanceManager.getConfig();
     const timer = setTimeout(() => {
       this.timers.delete(timer);
       if (!this.destroyed) this.spawnOpeningPlacements(placements, endIndex);
-    }, 28);
+    }, config.batchDelay);
     this.timers.add(timer);
   }
 
@@ -960,17 +1138,24 @@ export class GameScreen {
     tile.node.setScale(new Vec3(0.72, 0.72, 1));
     tile.node.angle = tile.boardAngle + (start.x < target.x ? -18 : 18);
     this.boardIntroPending += 1;
-    tween(tile.node)
-      .delay((index % 8) * 0.012)
-      .to(0.32, {
+
+    // 根据设备性能调整动画时长
+    const pm = this.performanceManager;
+    const baseDelay = (index % 8) * 0.024;
+    const moveDuration = pm.adjustDuration(0.52);
+    const fadeDuration = pm.adjustDuration(0.28);
+
+    managedTween(tile.node)
+      .delay(baseDelay)
+      .to(moveDuration, {
         position: target,
         scale: new Vec3(1, 1, 1),
         angle: tile.boardAngle,
       }, { easing: 'cubicOut' })
       .start();
-    tween(opacity)
-      .delay((index % 8) * 0.012)
-      .to(0.18, { opacity: 255 }, { easing: 'sineOut' })
+    managedTween(opacity)
+      .delay(baseDelay)
+      .to(fadeDuration, { opacity: 255 }, { easing: 'sineOut' })
       .call(() => {
         if (this.destroyed) return;
         this.boardIntroPending = Math.max(0, this.boardIntroPending - 1);
@@ -1191,17 +1376,24 @@ export class GameScreen {
 
   private animateTileToTray(tile: Tile, startPosition: Vec3, targetPosition: Vec3, startAngle: number) {
     const horizontalDelta = targetPosition.x - startPosition.x;
-    const lift = Math.min(116, Math.max(76, Math.abs(startPosition.y - targetPosition.y) * 0.18));
+    const verticalDelta = targetPosition.y - startPosition.y;
+    const distance = Math.sqrt(horizontalDelta * horizontalDelta + verticalDelta * verticalDelta);
+
+    // 动态调整抛物线高度，距离越远弧度越高
+    const lift = Math.min(180, Math.max(100, distance * 0.25));
+
+    // 优化贝塞尔曲线控制点，让轨迹更自然
     const controlStart = new Vec3(
-      startPosition.x + horizontalDelta * 0.18,
-      startPosition.y + lift,
+      startPosition.x + horizontalDelta * 0.25,
+      startPosition.y + lift * 1.1,
       0,
     );
     const controlEnd = new Vec3(
-      targetPosition.x - horizontalDelta * 0.2,
-      targetPosition.y + lift * 0.62,
+      targetPosition.x - horizontalDelta * 0.15,
+      targetPosition.y + lift * 0.45,
       0,
     );
+
     const direction = horizontalDelta >= 0 ? 1 : -1;
     const motion = { ratio: 0 };
     const targetScale = new Vec3(
@@ -1211,31 +1403,52 @@ export class GameScreen {
     );
     this.tweenTargets.add(motion);
 
-    // A single bezier path keeps the flight continuous while the shorter
-    // duration leaves room for quick decisions and chained matches.
-    tween(motion)
+    // 添加点击时的轻微缩放反馈
+    tile.node.setScale(new Vec3(1.08, 1.08, 1));
+
+    // 使用更丝滑的缓动函数组合
+    managedTween(motion)
       .to(this.trayFlightDuration, { ratio: 1 }, {
-        easing: 'cubicOut',
+        easing: 'sineInOut',  // 改用更柔和的缓动
         onUpdate: () => {
           const ratio = motion.ratio;
           const inverse = 1 - ratio;
           const inverseSquared = inverse * inverse;
+          const inverseCubed = inverseSquared * inverse;
           const ratioSquared = ratio * ratio;
-          const curveX = inverseSquared * inverse * startPosition.x
+          const ratioCubed = ratioSquared * ratio;
+
+          // 三次贝塞尔曲线，更平滑的路径
+          const curveX = inverseCubed * startPosition.x
             + 3 * inverseSquared * ratio * controlStart.x
             + 3 * inverse * ratioSquared * controlEnd.x
-            + ratioSquared * ratio * targetPosition.x;
-          const curveY = inverseSquared * inverse * startPosition.y
+            + ratioCubed * targetPosition.x;
+          const curveY = inverseCubed * startPosition.y
             + 3 * inverseSquared * ratio * controlStart.y
             + 3 * inverse * ratioSquared * controlEnd.y
-            + ratioSquared * ratio * targetPosition.y;
-          const arc = Math.sin(Math.PI * ratio);
-          const scaleX = 1 + (targetScale.x - 1) * ratio + 0.035 * arc;
-          const scaleY = 1 + (targetScale.y - 1) * ratio + 0.035 * arc;
+            + ratioCubed * targetPosition.y;
+
+          // 优化缩放动画，添加弹性效果
+          const scaleProgress = ratio < 0.5
+            ? ratio * 2  // 前半段快速缩小
+            : 1 + (ratio - 0.5) * 0.2;  // 后半段轻微放大
+          const arc = Math.sin(Math.PI * ratio * 0.8);  // 减少震荡
+          const scaleX = 1.08 + (targetScale.x - 1.08) * scaleProgress + 0.02 * arc;
+          const scaleY = 1.08 + (targetScale.y - 1.08) * scaleProgress + 0.02 * arc;
 
           tile.node.setPosition(curveX, curveY, 0);
           tile.node.setScale(scaleX, scaleY, 1);
-          tile.node.angle = startAngle * (1 - ratio) + direction * 5 * arc;
+
+          // 优化旋转动画，更自然的翻转
+          const rotationArc = Math.sin(Math.PI * ratio);
+          tile.node.angle = startAngle * (1 - ratio) + direction * 8 * rotationArc;
+
+          // 添加透明度渐变（可选，让动画更有层次）
+          const opacity = tile.node.getComponent(UIOpacity);
+          if (opacity) {
+            // 在飞行过程中保持完全不透明，只在接近目标时微调
+            opacity.opacity = 255;
+          }
         },
       })
       .call(() => {
@@ -1246,10 +1459,13 @@ export class GameScreen {
         tile.node.setPosition(targetPosition);
         tile.node.angle = 0;
         this.resizeTrayTile(tile.node);
-        tile.node.setScale(new Vec3(1, 1, 1));
-        tween(tile.node)
-          .to(this.traySettleDuration, { scale: new Vec3(1.04, 1.04, 1) }, { easing: 'backOut' })
-          .to(this.traySettleReturnDuration, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
+        tile.node.setScale(new Vec3(0.96, 0.96, 1));  // 稍小开始
+
+        // 更有弹性的落地动画
+        managedTween(tile.node)
+          .to(0.12, { scale: new Vec3(1.12, 1.12, 1) }, { easing: 'backOut' })
+          .to(0.08, { scale: new Vec3(0.98, 0.98, 1) }, { easing: 'sineOut' })
+          .to(0.06, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
           .call(() => {
             this.pendingTrayAnimations = Math.max(0, this.pendingTrayAnimations - 1);
             this.resolveTrayMatches();
@@ -1751,7 +1967,7 @@ export class GameScreen {
       return;
     }
     // 过关固定奖励 3 星：每主题 20 关 × 3 星 = 60 星，正好覆盖建筑三阶段（15/20/25）的星星消耗；
-    // 超级挑战不计入关卡进度，改发大额金币。
+    // 超萌挑战不计入关卡进度，改发大额金币。
     const challenge = this.options.challenge;
     const starReward = win && !challenge ? 3 : 0;
     const coinReward = win ? (challenge ? challenge.coinReward : 50) : 0;
@@ -2004,15 +2220,26 @@ export class GameScreen {
     activeFrame.active = false;
     const icon = this.image(buttonNode, activePath, 0, 0, 84, 82);
     icon.name = 'Icon';
-    const count = this.label(buttonNode, `${this.options.getItemCount(itemId)}`, 21, -23, 11, new Color(255, 251, 238));
+    const countBadge = new Node('ToolCountBadge');
+    buttonNode.addChild(countBadge);
+    countBadge.setPosition(42, -34);
+    countBadge.addComponent(UITransform).setContentSize(44, 44);
+    const countBackground = countBadge.addComponent(Graphics);
+    countBackground.fillColor = new Color(190, 59, 51, 255);
+    countBackground.strokeColor = new Color(255, 248, 226, 255);
+    countBackground.lineWidth = 3;
+    countBackground.circle(0, 0, 20);
+    countBackground.fill();
+    countBackground.stroke();
+    const count = this.label(countBadge, `${this.options.getItemCount(itemId)}`, 0, 0, 22, Color.WHITE);
     count.isBold = true;
-    count.outlineWidth = 2;
+    count.outlineWidth = 3;
     count.outlineColor = new Color(90, 61, 38);
     this.toolNameBadge(buttonNode, name, 82);
     const button = buttonNode.addComponent(Button);
     button.transition = Button.Transition.SCALE;
     button.zoomScale = 0.93;
-    this.toolButtonViews.set(itemId, { button, countLabel: count, icon, activeFrame });
+    this.toolButtonViews.set(itemId, { node: buttonNode, button, countLabel: count, icon, activeFrame });
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       callback();
@@ -2025,8 +2252,9 @@ export class GameScreen {
   private refreshToolButtons() {
     this.toolButtonViews.forEach((viewData, itemId) => {
       const count = Math.max(0, this.options.getItemCount(itemId));
-      viewData.countLabel.string = `${count}`;
-      viewData.button.interactable = count > 0 && !this.gameOver && !this.boardIntroActive;
+      const used = this.usedTools.has(itemId);
+      viewData.countLabel.string = used ? '✓' : `${count}`;
+      viewData.button.interactable = count > 0 && !used && !this.gameOver && !this.boardIntroActive;
       viewData.activeFrame.active = itemId === 'hammer'
         ? this.activeTool === 'hammer'
         : itemId === 'glove'
@@ -2037,7 +2265,7 @@ export class GameScreen {
           );
       const sprite = viewData.icon.getComponent(Sprite);
       if (sprite) {
-        sprite.color = count > 0
+        sprite.color = count > 0 && !used
           ? Color.WHITE
           : new Color(178, 169, 150, 220);
       }
@@ -2058,8 +2286,8 @@ export class GameScreen {
   }
 
   private toolNameBadge(parent: Node, name: string, iconHeight: number) {
-    const fontSize = 18;
-    const padding = 5;
+    const fontSize = 20;
+    const padding = 8;
     const badgeWidth = name.length * fontSize + padding * 2;
     const badgeHeight = fontSize + 8 + padding * 2;
     const badge = new Node('ToolNameBadge');
@@ -2067,15 +2295,17 @@ export class GameScreen {
     badge.setPosition(0, -(iconHeight / 2 + 15 + badgeHeight / 2));
     badge.addComponent(UITransform).setContentSize(badgeWidth, badgeHeight);
     const background = badge.addComponent(Graphics);
-    background.fillColor = new Color(214, 184, 137);
-    background.strokeColor = new Color(166, 130, 84);
-    background.lineWidth = 2;
+    background.fillColor = new Color(255, 248, 226, 255);
+    background.strokeColor = new Color(235, 205, 158, 255);
+    background.lineWidth = 3;
     background.roundRect(-badgeWidth / 2, -badgeHeight / 2, badgeWidth, badgeHeight, 8);
     background.fill();
     background.stroke();
 
-    const text = this.label(badge, name, 0, 0, fontSize, Color.WHITE);
+    const text = this.label(badge, name, 0, 0, fontSize, new Color(91, 53, 34));
     text.isBold = true;
+    text.outlineWidth = 2;
+    text.outlineColor = new Color(255, 248, 226, 255);
     text.verticalAlign = Label.VerticalAlign.CENTER;
     text.node.getComponent(UITransform)!.setContentSize(
       badgeWidth - padding * 2,
@@ -2083,8 +2313,44 @@ export class GameScreen {
     );
   }
 
+  private playToolUseAnimation(itemId: ItemId) {
+    const viewData = this.toolButtonViews.get(itemId);
+    if (!viewData) return;
+    const buttonNode = viewData.node;
+    Tween.stopAllByTarget(buttonNode);
+    buttonNode.setScale(new Vec3(1, 1, 1));
+    tween(buttonNode)
+      .to(0.08, { scale: new Vec3(1.12, 1.12, 1) }, { easing: 'backOut' })
+      .to(0.16, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
+      .start();
+
+    const flash = new Node('ToolUseFlash');
+    buttonNode.addChild(flash);
+    flash.addComponent(UITransform).setContentSize(136, 136);
+    const flashGraphics = flash.addComponent(Graphics);
+    flashGraphics.strokeColor = new Color(255, 224, 108, 245);
+    flashGraphics.lineWidth = 5;
+    flashGraphics.circle(0, 0, 54);
+    flashGraphics.stroke();
+    const opacity = flash.addComponent(UIOpacity);
+    opacity.opacity = 230;
+    tween(flash)
+      .to(0.26, { scale: new Vec3(1.18, 1.18, 1) }, { easing: 'cubicOut' })
+      .start();
+    tween(opacity)
+      .to(0.26, { opacity: 0 }, { easing: 'cubicOut' })
+      .call(() => {
+        if (flash.isValid) flash.destroy();
+      })
+      .start();
+  }
+
   private addTraySlot() {
     if (this.gameOver || this.boardIntroActive) return;
+    if (this.usedTools.has('extra_slot')) {
+      this.toast('增加槽位本局已经使用过了');
+      return;
+    }
     this.clearToolMode();
     if (this.extraTraySlot) {
       this.toast('额外槽位本局已经开启');
@@ -2095,43 +2361,36 @@ export class GameScreen {
       return;
     }
     this.extraTraySlot = true;
+    this.usedTools.add('extra_slot');
     this.trayCapacity = this.baseTraySlots + 1;
     const frame = this.assets.getFrame(this.toolPath(11));
     const sprite = this.extraSlotNode?.getComponent(Sprite);
     if (frame && sprite) sprite.spriteFrame = frame;
+    this.playToolUseAnimation('extra_slot');
+    if (this.extraSlotNode?.isValid) {
+      Tween.stopAllByTarget(this.extraSlotNode);
+      tween(this.extraSlotNode)
+        .to(0.1, { scale: new Vec3(1.16, 1.16, 1) }, { easing: 'backOut' })
+        .to(0.18, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
+        .start();
+    }
     this.toast(`已开启第 ${this.trayCapacity} 个收集槽位`);
     this.refreshToolButtons();
   }
 
   private useGlove() {
     if (this.gameOver || this.boardIntroActive) return;
-    if (
-      this.activeTool === 'glove_menu'
-      || this.activeTool === 'glove_swap'
-      || this.activeTool === 'glove_return'
-    ) {
-      this.clearToolMode();
-      this.toast('已取消手套');
+    if (this.usedTools.has('glove')) {
+      this.toast('手套本局已经使用过了');
       return;
     }
     this.clearToolMode();
-    if (this.pendingTrayAnimations > 0) {
-      this.toast('请等待元素归位');
-      return;
-    }
     if (this.trayTiles.length === 0) {
       this.toast('卡槽里还没有可撤回的元素');
       return;
     }
-    if (this.options.getItemCount('glove') <= 0) {
-      this.toast('手套道具不足');
-      return;
-    }
-
-    this.activeTool = 'glove_menu';
-    this.buildGloveMenu();
-    this.refreshToolButtons();
-    this.toast('请选择手套功能');
+    // 手套固定撤回最后放入卡槽的牌，避免玩家在危急时刻还要多做一次选择。
+    this.returnTrayTile(this.trayTiles[this.trayTiles.length - 1]);
   }
 
   // —— 装备猫咪技能 ——
@@ -2265,6 +2524,10 @@ export class GameScreen {
 
   private useHammer() {
     if (this.gameOver || this.boardIntroActive) return;
+    if (this.usedTools.has('hammer')) {
+      this.toast('锤子本局已经使用过了');
+      return;
+    }
     if (this.activeTool === 'hammer') {
       this.clearToolMode();
       this.toast('已取消锤子');
@@ -2302,6 +2565,7 @@ export class GameScreen {
       this.toast('锤子道具不足');
       return;
     }
+    this.usedTools.add('hammer');
     tile.active = false;
     tile.inTray = false;
     Tween.stopAllByTarget(tile.node);
@@ -2311,6 +2575,7 @@ export class GameScreen {
     this.addEliminated(1);
     this.updateTargetLabel();
     this.options.onPlaySound('collect');
+    this.playToolUseAnimation('hammer');
     this.toast(`锤子移除了一个${this.itemNames[tile.kind]}`);
     tween(tile.node)
       .to(0.14, { scale: new Vec3(0.1, 0.1, 1), angle: tile.boardAngle + 10 }, { easing: 'quadIn' })
@@ -2329,6 +2594,10 @@ export class GameScreen {
 
   private shuffle() {
     if (this.gameOver || this.boardIntroActive) return;
+    if (this.usedTools.has('dice')) {
+      this.toast('骰子本局已经使用过了');
+      return;
+    }
     this.clearToolMode();
     if (this.pendingTrayAnimations > 0) {
       this.toast('请等待元素归位');
@@ -2340,20 +2609,56 @@ export class GameScreen {
       return;
     }
     if (this.options.getItemCount('dice') <= 0) {
-      this.toast('骰子道具不足');
+      this.toast('�骰子道具不足');
       return;
     }
     if (!this.options.onConsumeItem('dice')) {
       this.toast('骰子道具不足');
       return;
     }
+    this.usedTools.add('dice');
+
+    // 重新排列卡片种类
     const kinds = active.map(tile => tile.kind);
     const originalKinds = kinds.slice();
     for (let attempt = 0; attempt < 8; attempt += 1) {
       this.shuffleArray(kinds);
       if (kinds.some((kind, index) => kind !== originalKinds[index])) break;
     }
-    active.forEach((tile, index) => this.setTileKind(tile, kinds[index]));
+
+    this.playToolUseAnimation('dice');
+
+    // 第一阶段：卡片飞散（打乱）
+    active.forEach((tile, index) => {
+      Tween.stopAllByTarget(tile.node);
+
+      // 随机飞散的目标位置（相对当前位置的偏移）
+      const randomOffsetX = (Math.random() - 0.5) * 280;
+      const randomOffsetY = (Math.random() - 0.5) * 280;
+      const randomAngle = tile.boardAngle + (Math.random() - 0.5) * 60;
+      const randomScale = 0.6 + Math.random() * 0.3;
+
+      tween(tile.node)
+        .delay(index * 0.012)
+        // 飞散阶段：卡片飞向随机位置、旋转、缩小
+        .to(0.28, {
+          position: new Vec3(tile.boardPosition.x + randomOffsetX, tile.boardPosition.y + randomOffsetY, 0),
+          angle: randomAngle,
+          scale: new Vec3(randomScale, randomScale, 1),
+        }, { easing: 'quadOut' })
+        // 更换卡片种类（在飞散到最远处时切换）
+        .call(() => {
+          this.setTileKind(tile, kinds[index]);
+        })
+        // 归位阶段：卡片回到原位、恢复角度和大小
+        .to(0.32, {
+          position: tile.boardPosition,
+          angle: tile.boardAngle,
+          scale: new Vec3(1, 1, 1),
+        }, { easing: 'backOut' })
+        .start();
+    });
+
     this.toast('棋盘上的元素已重新排列');
   }
 
@@ -2461,12 +2766,14 @@ export class GameScreen {
       this.toast('手套道具不足');
       return;
     }
+    this.usedTools.add('glove');
     [this.trayTiles[firstIndex], this.trayTiles[secondIndex]] = [
       this.trayTiles[secondIndex],
       this.trayTiles[firstIndex],
     ];
     this.clearToolMode();
     this.options.onPlaySound('collect');
+    this.playToolUseAnimation('glove');
     this.toast('已交换两个槽位元素');
     this.reflowTray();
   }
@@ -2491,6 +2798,7 @@ export class GameScreen {
       this.toast('手套道具不足');
       return;
     }
+    this.usedTools.add('glove');
     this.trayTiles.splice(index, 1);
     this.clearToolMode();
     Tween.stopAllByTarget(tile.node);
@@ -2507,6 +2815,7 @@ export class GameScreen {
     this.collectedTotal = Math.max(0, this.collectedTotal - 1);
     this.updateTargetLabel();
     this.options.onPlaySound('collect');
+    this.playToolUseAnimation('glove');
     this.toast(`已将${this.itemNames[tile.kind]}放回棋盘`);
     tween(tile.node)
       .to(0.16, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })

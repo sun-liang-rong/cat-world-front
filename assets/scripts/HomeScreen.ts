@@ -131,6 +131,8 @@ export class HomeScreen {
   private activityLastSeenPoints = -1;
   private taskBadge: Node | null = null;
   private taskBadgeLabel: Label | null = null;
+  private readonly navSelectedPlates: Node[] = [];
+  private selectedNavIndex = -1;
   private guideLoading = false;
   private settingsLoading = false;
 
@@ -203,6 +205,8 @@ export class HomeScreen {
     this.moreBadge = null;
     this.taskBadge = null;
     this.taskBadgeLabel = null;
+    this.navSelectedPlates.length = 0;
+    this.selectedNavIndex = -1;
     this.guideLoading = false;
     this.settingsLoading = false;
   }
@@ -514,7 +518,7 @@ export class HomeScreen {
   private buildStartCluster(bottom: number) {
     const cluster = new Node('StartCluster');
     this.homeUI!.addChild(cluster);
-    cluster.setPosition(0, bottom + 336);
+    cluster.setPosition(0, bottom + 380);
 
     const banner = this.creamPanel(
       cluster, 0, 468, 360, 52, 26,
@@ -570,7 +574,7 @@ export class HomeScreen {
 
     const endless = new Node('EndlessButton');
     cluster.addChild(endless);
-    endless.setPosition(0, -72);
+    endless.setPosition(0, -81);
     endless.addComponent(UITransform).setContentSize(300, 78);
 
     const endlessShadow = new Node('EndlessShadow');
@@ -653,7 +657,8 @@ export class HomeScreen {
   private buildBottomNav(bottom: number) {
     const navWidth = 702;
     const navHeight = 168;
-    const navFinalY = bottom + navHeight / 2 + 18;
+    // Keep the navigation bar above the home-indicator safe area.
+    const navFinalY = bottom + navHeight / 2 + 68;
     const nav = new Node('BottomNav');
     this.homeUI!.addChild(nav);
     nav.setPosition(0, navFinalY);
@@ -684,6 +689,19 @@ export class HomeScreen {
       nav.addChild(item);
       item.setPosition(-264 + index * 132, 8);
       item.addComponent(UITransform).setContentSize(112, 132);
+      const selectedPlate = this.creamPanel(
+        item,
+        0,
+        3,
+        108,
+        116,
+        24,
+        new Color(255, 238, 191, 220),
+        new Color(235, 205, 158, 220),
+      );
+      selectedPlate.active = false;
+      selectedPlate.setSiblingIndex(0);
+      this.navSelectedPlates.push(selectedPlate);
       this.homeCrop(item, cropName, 0, 14, 88, 88);
       const navLabel = this.label(item, name, 0, -52, 20, new Color(111, 62, 28));
       navLabel.isBold = true;
@@ -696,13 +714,24 @@ export class HomeScreen {
         this.moreBadge = this.notificationBadge(item, 38, 50, 1);
         this.refreshMoreEntries();
       }
-      this.addTapFeedback(item, callback, 0.92);
+      this.addTapFeedback(item, () => {
+        this.selectedNavIndex = index;
+        this.refreshNavSelection();
+        callback();
+      }, 0.92);
     });
     nav.setPosition(0, navFinalY - 240);
     tween(nav)
       .delay(0.12)
       .to(0.42, { position: new Vec3(0, navFinalY, 0) }, { easing: 'cubicOut' })
       .start();
+    this.refreshNavSelection();
+  }
+
+  private refreshNavSelection() {
+    this.navSelectedPlates.forEach((plate, index) => {
+      plate.active = index === this.selectedNavIndex;
+    });
   }
 
   private toggleMore(active = !this.moreUI?.active) {

@@ -24,7 +24,7 @@ import { AdventureScreen, THEME_INFO } from './AdventureScreen';
 
 const { ccclass, property } = _decorator;
 
-// 超级挑战：首页入口的固定单关，对标"羊了个羊第二关"——
+// 超萌挑战：首页入口的固定单关，对标"羊了个羊第二关"——
 // spike 压力原型把牌量压到普通关一半左右（约 45~55 张）配满额 15 种元素、6～7 层深堆，
 // 收集槽缩到 5 格（额外槽位道具可 +1）；fullTrayPressure 贴满压力规划：
 // 最优路径长期骑在 4/5 满槽边缘、无放松段，并按残酷度挑选候选；
@@ -449,6 +449,8 @@ export class Main extends Component {
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(),
+      getGamePetPosition: () => this.playerStore.getGamePetPosition(),
+      onGamePetPositionChanged: position => this.playerStore.setGamePetPosition(position),
       getCatSkillState: id => this.playerStore.getCatSkillState(id),
       onCatSkillFired: id => this.playerStore.fireCatSkill(id),
       onCatSkillCharge: (id, charge) => this.playerStore.setCatSkillCharge(id, charge),
@@ -473,7 +475,7 @@ export class Main extends Component {
     this.gameScreen.loadAndCreate(onReady);
   }
 
-  // 超级挑战：固定种子的单一超高难度关卡；重试时只换元素排布，难度曲线不变
+  // 超萌挑战：固定种子的单一超高难度关卡；重试时只换元素排布，难度曲线不变
   private startChallenge() {
     if (this.startingGame) return;
     this.startingGame = true;
@@ -513,7 +515,7 @@ export class Main extends Component {
       this.challengePreparing = false;
       if (this.gameScreen && !this.challengeLevelDefinition) {
         this.returnHomeFromGame();
-        Toast.show(this.root, '超级挑战准备失败，请稍后再试');
+        Toast.show(this.root, '超萌挑战准备失败，请稍后再试');
       }
     });
   }
@@ -526,7 +528,7 @@ export class Main extends Component {
       : CHALLENGE_COIN_REWARD;
     this.gameScreen = new GameScreen(this.root, this.assets, {
       level: CHALLENGE_LEVEL_NUMBER,
-      // 超级挑战不属于任何主题，强制使用通用元素皮肤
+      // 超萌挑战不属于任何主题，强制使用通用元素皮肤
       theme: -1,
       levelDefinition: this.challengeLevelDefinition || undefined,
       challenge: { coinReward: challengeCoinReward },
@@ -541,6 +543,8 @@ export class Main extends Component {
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(),
+      getGamePetPosition: () => this.playerStore.getGamePetPosition(),
+      onGamePetPositionChanged: position => this.playerStore.setGamePetPosition(position),
       getCatSkillState: id => this.playerStore.getCatSkillState(id),
       onCatSkillFired: id => this.playerStore.fireCatSkill(id),
       onCatSkillCharge: (id, charge) => this.playerStore.setCatSkillCharge(id, charge),
@@ -593,6 +597,8 @@ export class Main extends Component {
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(),
+      getGamePetPosition: () => this.playerStore.getGamePetPosition(),
+      onGamePetPositionChanged: position => this.playerStore.setGamePetPosition(position),
       getCatSkillState: id => this.playerStore.getCatSkillState(id),
       onCatSkillFired: id => this.playerStore.fireCatSkill(id),
       onCatSkillCharge: (id, charge) => this.playerStore.setCatSkillCharge(id, charge),
