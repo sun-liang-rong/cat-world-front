@@ -36,7 +36,7 @@ export const MOMENT_DEFINITIONS: MomentDefinition[] = [
     id: 'arrival',
     category: 'town',
     dateLabel: '第 1 天',
-    title: '初到喵爪星球',
+    title: '初到猫爪星球',
     description: '一条安静的小路，正在等你把这里变成家。',
     unlockHint: '进入小镇后记录',
     imagePath: 'home/home_bg',

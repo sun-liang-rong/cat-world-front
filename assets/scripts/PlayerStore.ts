@@ -35,7 +35,7 @@ import {
   TaskSnapshot,
   ItemId,
 } from './PlayerTypes';
-import { PlayerRun } from './level/LevelTypes';
+import { AdFunnelBand, AdFunnelBandStats, AdFunnelState, PlayerRun } from './level/LevelTypes';
 import {
   BuildingView,
   BUILDING_DEFINITIONS,
@@ -176,6 +176,35 @@ export class PlayerStore {
 
   getBuildStage() {
     return this.state.buildStage;
+  }
+
+  // 主线至少通过一关：进度已越过第 1 关，或任意关卡留下过星星记录
+  hasClearedAnyLevel() {
+    if (this.state.level > 1) return true;
+    return Object.keys(this.state.levelStars).some(key => (this.state.levelStars[Number(key)] ?? 0) > 0);
+  }
+
+  // 任意一栋建筑推进过至少一个阶段，即视为建设过小镇
+  hasBuiltTown() {
+    if (this.state.buildStage > 0) return true;
+    return BUILDING_DEFINITIONS.some(definition => this.getBuildingStage(definition.id) > 0);
+  }
+
+  shouldShowTownBuildHint() {
+    return this.hasClearedAnyLevel() && !this.hasBuiltTown();
+  }
+
+  // 任意一栋建筑走完清理/修复/装饰，即视为小镇装饰完成
+  hasDecoratedTown() {
+    return BUILDING_DEFINITIONS.some(definition => this.isBuildingCompleted(definition.id));
+  }
+
+  hasEquippedPet() {
+    return this.state.equippedCat !== null;
+  }
+
+  shouldShowCatEquipHint() {
+    return this.hasDecoratedTown() && !this.hasEquippedPet();
   }
 
   getLevelStar(level: number) {
@@ -760,8 +789,75 @@ export class PlayerStore {
       shop: this.createShopDailyState(this.todayKey()),
       activity: createActivityState(getCurrentActivity(), this.todayKey()),
       recentRuns: [],
+      adFunnel: this.createAdFunnel(),
       endless: this.createEndlessProgress(),
     };
+  }
+
+  private createAdFunnelBand(): AdFunnelBandStats {
+    return {
+      fails: 0,
+      pairFails: 0,
+      failProgressSum: 0,
+      adRevives: 0,
+      freeRevives: 0,
+      reviveWins: 0,
+      doubleCoins: 0,
+    };
+  }
+
+  private createAdFunnel(): AdFunnelState {
+    return {
+      l1_5: this.createAdFunnelBand(),
+      l6_10: this.createAdFunnelBand(),
+      l11_22: this.createAdFunnelBand(),
+      l23: this.createAdFunnelBand(),
+    };
+  }
+
+  static funnelBandForLevel(level: number): AdFunnelBand {
+    if (level <= 5) return 'l1_5';
+    if (level <= 10) return 'l6_10';
+    if (level <= 22) return 'l11_22';
+    return 'l23';
+  }
+
+  getAdFunnel(): AdFunnelState {
+    return this.clone(this.state.adFunnel);
+  }
+
+  getAdFunnelSummary(): string {
+    const funnel = this.state.adFunnel;
+    const format = (label: string, band: AdFunnelBandStats) => {
+      const revives = band.adRevives + band.freeRevives;
+      return `${label} ${band.reviveWins}/${revives}`;
+    };
+    return `复活后通关  ${format('1-5', funnel.l1_5)}  ${format('6-10', funnel.l6_10)}  ${format('11-22', funnel.l11_22)}  ${format('23+', funnel.l23)}`;
+  }
+
+  recordAdFunnel(event: {
+    level: number;
+    fail?: boolean;
+    failHadPair?: boolean;
+    failProgress?: number;
+    adRevive?: boolean;
+    freeRevive?: boolean;
+    reviveWin?: boolean;
+    doubleCoins?: boolean;
+  }) {
+    const band = this.state.adFunnel[PlayerStore.funnelBandForLevel(event.level)];
+    if (event.fail) {
+      band.fails += 1;
+      if (event.failHadPair) band.pairFails += 1;
+      if (Number.isFinite(event.failProgress)) {
+        band.failProgressSum += Math.max(0, Math.min(100, Math.floor(event.failProgress!)));
+      }
+    }
+    if (event.adRevive) band.adRevives += 1;
+    if (event.freeRevive) band.freeRevives += 1;
+    if (event.reviveWin) band.reviveWins += 1;
+    if (event.doubleCoins) band.doubleCoins += 1;
+    this.save();
   }
 
   private createEndlessProgress(): EndlessProgress {
@@ -849,6 +945,7 @@ export class PlayerStore {
         if (sanitized) state.recentRuns.push(sanitized);
       });
     }
+    state.adFunnel = this.sanitizeAdFunnel(value.adFunnel);
     (Object.keys(state.cats) as CatId[]).forEach(id => {
       const saved = value.cats?.[id];
       if (!saved) return;
@@ -1093,7 +1190,7 @@ export class PlayerStore {
   private sanitizeRun(run: PlayerRun): PlayerRun | null {
     if (!run || typeof run !== 'object') return null;
     if (typeof run.won !== 'boolean' || !Number.isFinite(run.level) || run.level <= 0) return null;
-    return {
+    const sanitized: PlayerRun = {
       won: run.won,
       level: Math.max(1, Math.floor(run.level)),
       remainingSlots: Math.max(0, Math.floor(this.safeNumber(run.remainingSlots, 0))),
@@ -1104,6 +1201,33 @@ export class PlayerStore {
       collectedElements: Math.max(0, Math.floor(this.safeNumber(run.collectedElements, 0))),
       matchCount: Math.max(0, Math.floor(this.safeNumber(run.matchCount, 0))),
     };
+    if (run.role === 'normal' || run.role === 'breather' || run.role === 'spike') sanitized.role = run.role;
+    if (Number.isFinite(run.failProgress)) {
+      sanitized.failProgress = Math.max(0, Math.min(100, Math.floor(run.failProgress!)));
+    }
+    if (typeof run.failHadPair === 'boolean') sanitized.failHadPair = run.failHadPair;
+    if (run.revived === true) sanitized.revived = true;
+    if (run.reviveFree === true) sanitized.reviveFree = true;
+    return sanitized;
+  }
+
+  private sanitizeAdFunnel(value: AdFunnelState | undefined): AdFunnelState {
+    const funnel = this.createAdFunnel();
+    if (!value || typeof value !== 'object') return funnel;
+    (Object.keys(funnel) as AdFunnelBand[]).forEach(band => {
+      const saved = value[band];
+      if (!saved || typeof saved !== 'object') return;
+      funnel[band] = {
+        fails: this.nonNegativeInteger(saved.fails, 0),
+        pairFails: this.nonNegativeInteger(saved.pairFails, 0),
+        failProgressSum: this.nonNegativeInteger(saved.failProgressSum, 0),
+        adRevives: this.nonNegativeInteger(saved.adRevives, 0),
+        freeRevives: this.nonNegativeInteger(saved.freeRevives, 0),
+        reviveWins: this.nonNegativeInteger(saved.reviveWins, 0),
+        doubleCoins: this.nonNegativeInteger(saved.doubleCoins, 0),
+      };
+    });
+    return funnel;
   }
 
   private safeNumber(value: unknown, fallback: number) {

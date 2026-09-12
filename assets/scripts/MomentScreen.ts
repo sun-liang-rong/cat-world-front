@@ -4,6 +4,7 @@ import {
   Color,
   Graphics,
   Label,
+  Layout,
   Mask,
   Node,
   Sprite,
@@ -14,7 +15,7 @@ import {
   Vec3,
   view,
 } from 'cc';
-import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
+import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { MomentCategory, MomentSnapshot, MOMENT_DEFINITIONS } from './MomentContent';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
@@ -26,6 +27,7 @@ export interface MomentScreenOptions {
 }
 
 type MomentCardView = {
+  item: Node;
   card: Node;
   photoSprite: Sprite | null;
   thumbnailMask: Mask | null;
@@ -106,10 +108,12 @@ const CATEGORY_COLORS: Record<Exclude<MomentCategory, 'all'>, Color> = {
   levels: new Color(242, 167, 112),
 };
 
-const CARD_COUNT = 4;
+const MIN_PAGE_SIZE = 4;
+const MAX_PAGE_SIZE = 5;
+const MIN_CARD_GAP = 8;
 const CARD_WIDTH = 656;
 const CARD_HEIGHT = 180;
-const CARD_STEP = 188;
+const TAB_OFFSET = 270;
 const PHOTO_SIZE = 164;
 const PHOTO_MASK_RADIUS = 76;
 const PHOTO_RING_RADIUS = 82;
@@ -152,11 +156,13 @@ export class MomentScreen {
   private nextControl: Node | null = null;
   private prevButton: Button | null = null;
   private nextButton: Button | null = null;
+  private listLayout: Layout | null = null;
   private readonly cardViews: MomentCardView[] = [];
   private readonly tabViews: CategoryTab[] = [];
   private active = false;
   private category: MomentCategory = 'all';
   private pageStart = 0;
+  private pageSize = MIN_PAGE_SIZE;
 
   constructor(
     private readonly root: Node,
@@ -169,7 +175,7 @@ export class MomentScreen {
       ...MOMENT_ASSETS,
       ...MOMENT_DEFINITIONS.map(moment => moment.imagePath),
     ]));
-    this.assets.loadImages(paths, () => {
+    this.assets.loadImagesFor(this, paths, () => {
       this.create();
       onReady?.();
     });
@@ -201,6 +207,7 @@ export class MomentScreen {
     this.nextControl = null;
     this.prevButton = null;
     this.nextButton = null;
+    this.listLayout = null;
   }
 
   private create() {
@@ -211,12 +218,13 @@ export class MomentScreen {
 
     this.momentUI = new Node('MomentUI');
     this.root.addChild(this.momentUI);
+    this.momentUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     this.momentUI.active = this.active;
 
     this.buildBackground(visibleSize);
     this.buildHeader(top);
     this.buildTabs(top);
-    this.buildCards(top);
+    this.buildCards(top, bottom);
     this.buildPageControls(bottom);
     this.toastY = bottom + 262;
     this.buildDetailOverlay(visibleSize);
@@ -242,7 +250,7 @@ export class MomentScreen {
     const title = this.label(plate, '瞬间', 0, -2, 40, COLORS.title);
     title.isBold = true;
 
-    const progress = this.image(this.momentUI!, 'moment/moment_progress', 258, rowY, 172, 57);
+    const progress = this.image(this.momentUI!, 'moment/moment_progress', 258, belowWeChatCapsule(top, 57), 172, 57);
     const fillNode = new Node('MomentProgressFill');
     progress.addChild(fillNode);
     this.progressFill = fillNode.addComponent(Graphics);
@@ -253,7 +261,7 @@ export class MomentScreen {
   }
 
   private buildTabs(top: number) {
-    const y = top - 240;
+    const y = top - TAB_OFFSET;
     this.buildShelf(y - 34);
     CATEGORY_TABS.forEach((tab, index) => {
       const node = this.image(this.momentUI!, tab.offPath, -213 + index * TAB_STEP, y, TAB_WIDTH, TAB_HEIGHT);
@@ -285,17 +293,58 @@ export class MomentScreen {
     graphics.fill();
   }
 
-  private buildCards(top: number) {
-    const firstY = top - 395;
-    for (let index = 0; index < CARD_COUNT; index++) {
-      this.cardViews.push(this.buildCard(index, firstY - index * CARD_STEP));
-    }
+  private listBounds(top: number, bottom: number) {
+    const tabBottom = top - TAB_OFFSET - TAB_HEIGHT / 2;
+    const controlsTop = bottom + PAGE_ARROW_Y_OFFSET + ARROW_SIZE / 2;
+    const listTop = tabBottom - 16;
+    const listBottom = controlsTop + 16;
+    const height = Math.max(CARD_HEIGHT, listTop - listBottom);
+    return { listTop, height };
   }
 
-  private buildCard(index: number, y: number): MomentCardView {
-    const ui = this.momentUI!;
-    this.drawShadow(ui, 0, y - CARD_HEIGHT / 2 - 6, 520, 28);
-    const card = this.image(ui, 'moment/moment_card', 0, y, CARD_WIDTH, CARD_HEIGHT);
+  private pageSizeForHeight(height: number) {
+    const needed = MAX_PAGE_SIZE * CARD_HEIGHT + (MAX_PAGE_SIZE - 1) * MIN_CARD_GAP;
+    return height >= needed ? MAX_PAGE_SIZE : MIN_PAGE_SIZE;
+  }
+
+  private cardGap(height: number, pageSize: number) {
+    if (pageSize <= 1) return MIN_CARD_GAP;
+    return Math.max(MIN_CARD_GAP, (height - pageSize * CARD_HEIGHT) / (pageSize - 1));
+  }
+
+  private buildCards(top: number, bottom: number) {
+    const { listTop, height } = this.listBounds(top, bottom);
+    this.pageSize = this.pageSizeForHeight(height);
+    const gap = this.cardGap(height, this.pageSize);
+
+    const list = new Node('MomentCardList');
+    this.momentUI!.addChild(list);
+    list.setPosition(0, listTop - height / 2);
+    list.addComponent(UITransform).setContentSize(CARD_WIDTH, height);
+    const layout = list.addComponent(Layout);
+    layout.type = Layout.Type.VERTICAL;
+    layout.resizeMode = Layout.ResizeMode.NONE;
+    layout.verticalDirection = Layout.VerticalDirection.TOP_TO_BOTTOM;
+    layout.alignVertical = true;
+    layout.spacingY = gap;
+    layout.paddingTop = 0;
+    layout.paddingBottom = 0;
+    layout.affectedByScale = false;
+    this.listLayout = layout;
+
+    for (let index = 0; index < MAX_PAGE_SIZE; index++) {
+      this.cardViews.push(this.buildCard(list, index));
+    }
+    layout.updateLayout();
+  }
+
+  private buildCard(parent: Node, index: number): MomentCardView {
+    const item = new Node(`MomentCardItem${index}`);
+    parent.addChild(item);
+    item.addComponent(UITransform).setContentSize(CARD_WIDTH, CARD_HEIGHT);
+
+    this.drawShadow(item, 0, -CARD_HEIGHT / 2 - 6, 520, 28);
+    const card = this.image(item, 'moment/moment_card', 0, 0, CARD_WIDTH, CARD_HEIGHT);
 
     const thumbnail = new Node('MomentThumbnail');
     card.addChild(thumbnail);
@@ -349,6 +398,7 @@ export class MomentScreen {
     });
 
     return {
+      item,
       card,
       photoSprite: photo.getComponent(Sprite),
       thumbnailMask: mask,
@@ -367,14 +417,14 @@ export class MomentScreen {
     const y = bottom + PAGE_ARROW_Y_OFFSET;
     this.prevControl = this.pageArrow('moment/moment_arrow_prev', -118, y, () => {
       if (this.pageStart <= 0) return;
-      this.pageStart = Math.max(0, this.pageStart - CARD_COUNT);
+      this.pageStart = Math.max(0, this.pageStart - this.pageSize);
       this.refresh();
     });
     this.prevButton = this.prevControl.getComponent(Button);
     this.nextControl = this.pageArrow('moment/moment_arrow_next', 118, y, () => {
       const count = this.filteredMoments().length;
-      if (this.pageStart + CARD_COUNT >= count) return;
-      this.pageStart += CARD_COUNT;
+      if (this.pageStart + this.pageSize >= count) return;
+      this.pageStart += this.pageSize;
       this.refresh();
     });
     this.nextButton = this.nextControl.getComponent(Button);
@@ -478,18 +528,20 @@ export class MomentScreen {
     if (!this.momentUI) return;
     const moments = this.filteredMoments();
     const total = moments.length;
-    const maxStart = Math.max(0, Math.floor(Math.max(0, total - 1) / CARD_COUNT) * CARD_COUNT);
+    const pageSize = this.pageSize;
+    const maxStart = Math.max(0, Math.floor(Math.max(0, total - 1) / pageSize) * pageSize);
     this.pageStart = Math.min(this.pageStart, maxStart);
 
     const allMoments = this.options.getMoments();
     const allUnlocked = allMoments.filter(moment => moment.unlocked).length;
     this.refreshProgress(allUnlocked, allMoments.length);
-    this.refreshDots(Math.max(1, Math.ceil(total / CARD_COUNT)), Math.floor(this.pageStart / CARD_COUNT));
+    this.refreshDots(Math.max(1, Math.ceil(total / pageSize)), Math.floor(this.pageStart / pageSize));
     this.updateControlState(this.prevControl, this.prevButton, this.pageStart > 0);
-    this.updateControlState(this.nextControl, this.nextButton, this.pageStart + CARD_COUNT < total);
+    this.updateControlState(this.nextControl, this.nextButton, this.pageStart + pageSize < total);
 
     this.cardViews.forEach((viewData, index) => {
-      const moment = moments[this.pageStart + index];
+      const moment = index < pageSize ? moments[this.pageStart + index] : undefined;
+      viewData.item.active = !!moment;
       viewData.card.active = !!moment;
       if (!moment) return;
       const frame = moment.unlocked
@@ -523,6 +575,7 @@ export class MomentScreen {
         viewData.card.setScale(new Vec3(1, 1, 1));
       }
     });
+    this.listLayout?.updateLayout();
   }
 
   private refreshProgress(unlocked: number, total: number) {

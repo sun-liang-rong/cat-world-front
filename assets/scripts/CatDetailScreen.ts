@@ -9,7 +9,7 @@ import {
   UIOpacity,
   view,
 } from 'cc';
-import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
+import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { SettlementButton } from './SettlementButton';
 import { Toast } from './Toast';
@@ -105,7 +105,7 @@ export class CatDetailScreen {
       'cat_detail/icon_skill',
       ...CAT_DEFINITIONS.map(cat => cat.portraitPath),
     ];
-    this.assets.loadImages(paths, () => {
+    this.assets.loadImagesFor(this, paths, () => {
       this.create();
       onReady?.();
     });
@@ -136,6 +136,7 @@ export class CatDetailScreen {
     const top = visibleSize.height / 2;
     this.detailUI = new Node('CatDetailUI');
     this.root.addChild(this.detailUI);
+    this.detailUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     this.detailUI.active = this.active;
     this.image(this.detailUI, 'home/home_bg', 0, 0, visibleSize.width, visibleSize.height);
     this.addWarmVeil(visibleSize.width, visibleSize.height);
@@ -145,7 +146,7 @@ export class CatDetailScreen {
     this.buildBackButton(this.detailUI, -315, headerY, this.options.onReturnCollection);
     const title = this.label(this.detailUI, '猫咪详情', 0, headerY, 40, COLOR_TITLE);
     title.isBold = true;
-    const coinChip = this.capsule(this.detailUI, 250, headerY, 208, 56, new Color(255, 248, 226, 235), COLOR_STROKE);
+    const coinChip = this.capsule(this.detailUI, 250, belowWeChatCapsule(top, 56), 208, 56, new Color(255, 248, 226, 235), COLOR_STROKE);
     this.image(coinChip, COMMON_UI_ASSETS.coinIcon, -70, 0, 42, 42);
     this.coinLabel = this.label(coinChip, '', 18, 0, 23, COLOR_BODY);
     this.coinLabel.isBold = true;
@@ -429,7 +430,7 @@ export class CatDetailScreen {
         : progress.level >= MAX_CAT_LEVEL
             ? '已是最高等级'
           : !affordable
-            ? `还差 ${upgradeCost} 金币`
+            ? `还差 ${upgradeCost - coins} 金币`
             : `升级 · ${upgradeCost} 金币`;
       this.upgradeOpacity.opacity = this.upgradeButton.interactable ? 255 : 160;
     }

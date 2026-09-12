@@ -10,13 +10,13 @@ function testDefaultsAndRewards() {
   store.load();
   const initial = store.getState();
   assert(initial.coins === 100, 'new players should start with 100 coins');
-  assert(initial.stars === 25, 'new players should start with 25 stars');
+  assert(initial.stars === 0, 'new players should start with 0 stars');
   assert(initial.level === 1, 'new players should start at level 1');
   assert(initial.buildings.cat_house.unlocked, 'cat house should be unlocked');
   assert(!initial.cats.orange.unlocked, 'orange cat should start locked');
   store.addReward({ coins: 40, stars: 3, items: { hammer: 2 } });
   assert(store.getCoins() === 140, 'reward coins should be added');
-  assert(store.getStars() === 28, 'reward stars should be added');
+  assert(store.getStars() === 3, 'reward stars should be added');
   assert(store.getItemCount('hammer') === 2, 'reward items should be added');
   assert(store.spendCoins(40), 'spending available coins should succeed');
   assert(store.getCoins() === 100, 'spent coins should be deducted');
@@ -27,9 +27,10 @@ function testDefaultsAndRewards() {
 function testBuildingAndCatUnlock() {
   const store = new PlayerStore('player-store-building');
   store.load();
-  assert(store.buildBuildingStage('cat_house').ok, 'first building stage should succeed with starter stars');
+  store.addReward({ stars: 15 });
+  assert(store.buildBuildingStage('cat_house').ok, 'first building stage should succeed with granted stars');
   assert(!store.buildBuildingStage('cat_house').ok, 'building should fail when stars are insufficient');
-  store.addReward({ stars: 35 });
+  store.addReward({ stars: 45 });
   assert(store.buildBuildingStage('cat_house').ok, 'second building stage should succeed');
   assert(store.buildBuildingStage('cat_house').ok, 'third building stage should succeed');
   assert(store.isBuildingCompleted('cat_house'), 'cat house should be completed');
@@ -72,10 +73,10 @@ function testDailyTasksAndChest() {
 function testCatInteractionsAndChallengeReward() {
   const store = new PlayerStore('player-store-cats');
   store.load();
-  store.addReward({ stars: 35 });
-  store.buildBuildingStage('cat_house');
-  store.buildBuildingStage('cat_house');
-  store.buildBuildingStage('cat_house');
+  store.addReward({ stars: 60 });
+  assert(store.buildBuildingStage('cat_house').ok, 'first house stage should succeed');
+  assert(store.buildBuildingStage('cat_house').ok, 'second house stage should succeed');
+  assert(store.buildBuildingStage('cat_house').ok, 'third house stage should succeed');
   assert(store.getCat('orange').unlocked, 'orange cat should be unlocked for interaction tests');
   const beforeCoins = store.getCoins();
   assert(store.interactWithCat('orange', 'pet').ok, 'pet interaction should succeed once per day');
@@ -103,6 +104,43 @@ function testEndlessProgress() {
   assert(store.isEndlessUnlocked(), 'clearing level 1 should unlock endless');
 }
 
+function testAdFunnelAndRunFields() {
+  const store = new PlayerStore('player-store-ad-funnel');
+  store.load();
+  const empty = store.getAdFunnel();
+  assert(empty.l23.fails === 0 && empty.l1_5.reviveWins === 0, 'new saves should start with an empty ad funnel');
+  store.recordRun({
+    won: false,
+    level: 24,
+    remainingSlots: 0,
+    mistakes: 2,
+    elapsedMs: 40000,
+    decisionCount: 6,
+    nearFailureCount: 1,
+    collectedElements: 70,
+    matchCount: 18,
+    role: 'spike',
+    failProgress: 88,
+    failHadPair: true,
+  });
+  const recent = store.getRecentRuns()[0];
+  assert(recent.role === 'spike', 'optional run role should persist');
+  assert(recent.failProgress === 88, 'fail progress should persist');
+  assert(recent.failHadPair === true, 'fail pair flag should persist');
+  store.recordAdFunnel({ level: 24, fail: true, failHadPair: true, failProgress: 88 });
+  store.recordAdFunnel({ level: 24, adRevive: true });
+  store.recordAdFunnel({ level: 24, reviveWin: true });
+  const funnel = store.getAdFunnel();
+  assert(funnel.l23.fails === 1 && funnel.l23.pairFails === 1, 'monetization-tier fails should land in L23+');
+  assert(funnel.l23.adRevives === 1 && funnel.l23.reviveWins === 1, 'revive funnel should count separately from recentRuns');
+  assert(store.getAdFunnelSummary().indexOf('23+ 1/1') >= 0, 'settings summary should show revive conversion');
+
+  const reloaded = new PlayerStore('player-store-ad-funnel');
+  reloaded.load();
+  assert(reloaded.getAdFunnel().l23.reviveWins === 1, 'ad funnel should survive reload');
+  assert(reloaded.getRecentRuns()[0].failHadPair === true, 'optional run fields should survive reload');
+}
+
 function testSaveNormalization() {
   const key = 'player-store-normalization';
   sys.localStorage.setItem(key, JSON.stringify({ version: 1, coins: -50, level: 4, inventory: { hammer: 3 } }));
@@ -124,5 +162,6 @@ testShopLimits();
 testDailyTasksAndChest();
 testCatInteractionsAndChallengeReward();
 testEndlessProgress();
+testAdFunnelAndRunFields();
 testSaveNormalization();
-process.stdout.write('PlayerStore validation passed: defaults, rewards, buildings, shop, daily tasks, cats, challenge marker, endless, normalization.\n');
+process.stdout.write('PlayerStore validation passed: defaults, rewards, buildings, shop, daily tasks, cats, challenge marker, endless, ad funnel, normalization.\n');

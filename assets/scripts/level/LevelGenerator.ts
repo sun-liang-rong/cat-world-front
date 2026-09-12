@@ -1,4 +1,4 @@
-import { LevelRules, LevelSolver } from './LevelSolver';
+import { CoverBoardState, LevelRules, LevelSolver, TileCoverGraph } from './LevelSolver';
 import {
   LevelArchetype,
   LevelDefinition,
@@ -10,11 +10,25 @@ import {
   TileDefinition,
 } from './LevelTypes';
 
+type PlayerRiskEstimate = {
+  estimatedFailureRate: number;
+  wrongChoiceRisk: number;
+  /** 失败时平均棋盘进度（已取走牌数占比，0-100）。 */
+  failureProgressAvg: number;
+  /** 失败瞬间槽内存在 ≥1 对听牌的失败局占比（0-100）。 */
+  trappedPairRate: number;
+  /** 复活（按游戏规则清一对/最右 1 张）后剩余棋盘可解的失败局占比（0-100），无失败局时 100。 */
+  reviveRescueRate: number;
+};
+
 type GenerationContext = {
   target: number;
+  /** Accept/distance target after role density correction (spike boards are short). */
+  acceptTarget: number;
   failureRateBand: { min: number; max: number };
   role: LevelRole;
   attempts: number;
+  solverMaxStates: number;
   recentFingerprints: string[];
   recentArchetypes: LevelArchetype[];
   best: LevelDefinition | null;
@@ -92,8 +106,13 @@ export class LevelGenerator {
       const evaluation = this.evaluateAttempt(options, attempt, context);
       if (evaluation?.accepted) return evaluation.candidate;
     }
+    const extra = this.extraAttemptsForFailFeel(options, context);
+    for (let attempt = context.attempts; attempt < context.attempts + extra; attempt += 1) {
+      const evaluation = this.evaluateAttempt(options, attempt, context);
+      if (evaluation?.accepted) return evaluation.candidate;
+    }
 
-    if (context.best) return context.best;
+    if (context.best) return this.finalizeBestScore(context.best);
     throw new Error(`[LevelGenerator] Unable to create a solvable level for seed ${options.seed}`);
   }
 
@@ -119,6 +138,13 @@ export class LevelGenerator {
     abort: { cancelled: boolean },
   ): Promise<LevelDefinition> {
     const context = this.createGenerationContext(options);
+    // 微信小游戏 JS 比桌面慢一个数量级：墙钟预算兜底，有 best 就提前交付，
+    // 避免高关为了「更接近目标」把 24 次 attempt 跑满。
+    // 超萌挑战必须跑满候选再按残酷度挑选；墙钟截断会让再玩一次明显变简单。
+    const wallClockBudgetMs = options.fullTrayPressure === true
+      ? Number.POSITIVE_INFINITY
+      : options.level >= 40 ? 1200 : 800;
+    const startedAt = Date.now();
     return new Promise<LevelDefinition>((resolve, reject) => {
       let attempt = 0;
       const runAttempt = () => {
@@ -126,9 +152,10 @@ export class LevelGenerator {
           reject(new AsyncGenerationCancelledError());
           return;
         }
-        if (attempt >= context.attempts) {
+        const extra = this.extraAttemptsForFailFeel(options, context);
+        if (attempt >= context.attempts + extra) {
           if (context.best) {
-            resolve(context.best);
+            resolve(this.finalizeBestScore(context.best));
           } else {
             reject(new Error(`[LevelGenerator] Unable to create a solvable level for seed ${options.seed}`));
           }
@@ -147,6 +174,11 @@ export class LevelGenerator {
           return;
         }
 
+        if (context.best && Date.now() - startedAt >= wallClockBudgetMs) {
+          resolve(this.finalizeBestScore(context.best));
+          return;
+        }
+
         // Yield between candidates so generation never monopolizes the Cocos
         // frame loop while the player is entering a level.
         setTimeout(runAttempt, 0);
@@ -157,13 +189,34 @@ export class LevelGenerator {
   }
 
   private createGenerationContext(options: LevelGenerationOptions): GenerationContext {
+    // 主线默认 24 次：配合见证路径快路径 + 结构预筛，足够收敛；
+    // L11+ 失败质量门槛更严，多给几次用来卡尾段失败 / 听牌 / 复活可解，而不是把门槛往回松；
+    // 超萌挑战仍跑满 48 次以挑最残酷候选。
+    const attempts = options.maxAttempts
+      || (options.fullTrayPressure === true ? 48 : options.level >= 23 ? 48 : 40);
+    // 高关棋盘更大，给 DFS 多一点预算；挑战保持上限。
+    const solverMaxStates = options.fullTrayPressure === true
+      ? 250000
+      : options.level >= 40 ? 120000 : 80000;
+    const target = options.targetDifficulty === undefined
+      ? LevelGenerator.baseDifficulty(options.level)
+      : options.targetDifficulty;
+    const role = options.rescue ? 'normal' : options.role ?? 'normal';
+    // Spike 关刻意把牌量压到普通关一半左右，共享难度分被棋盘规模主导，
+    // 再硬的密度也顶不进 base+9 的目标带。验收按密度校正后的目标进行，
+    // 保证能提前 accept，而不是 24 次全跑完再拿兜底候选。
+    // 普通关同理：难度分在 L70 之后饱和在 54，验收目标不能继续跟着 baseDifficulty
+    // 往上爬，否则高关进不了容差带、只能空转跑满 attempt。
+    const acceptTarget = role === 'spike'
+      ? Math.max(30, target - 12)
+      : Math.min(target, LevelGenerator.difficultySaturation);
     return {
-      target: options.targetDifficulty === undefined
-        ? LevelGenerator.baseDifficulty(options.level)
-        : options.targetDifficulty,
+      target,
+      acceptTarget,
       failureRateBand: LevelGenerator.failureRateBand(options.level, options.rescue === true),
-      role: options.rescue ? 'normal' : options.role ?? 'normal',
-      attempts: options.maxAttempts || 48,
+      role,
+      attempts,
+      solverMaxStates,
       recentFingerprints: options.recentFingerprints || [],
       recentArchetypes: options.recentArchetypes || [],
       best: null,
@@ -199,21 +252,49 @@ export class LevelGenerator {
       // the cover rule.
       return null;
     }
+    // 一次候选只建一张遮挡图：Solver 与玩家风险模拟共用。
+    const coverGraph = new TileCoverGraph(candidate);
     const result = this.solver.solve(candidate, {
-      maxStates: 250000,
+      maxStates: context.solverMaxStates,
       analyzeBranches: options.solverAnalyzeBranches === true,
       preferredSolution: candidate.plan.solution,
+      coverGraph,
     });
     if (!result.solvable) return null;
 
-    const score = this.scoreCandidate(
+    // 结构分（不跑玩家风险模拟）先做粗筛：难度明显不达标时直接丢弃，
+    // 避免每个候选都付 estimatePlayerRisk 的全盘模拟成本。
+    const structuralScore = this.scoreCandidate(
       candidate,
       result,
       context.target,
       context.recentFingerprints,
       context.recentArchetypes,
+      null,
     );
     candidate.plan = this.makePlan(candidate, result.solution);
+    candidate.score = structuralScore;
+    const difficultyGap = Math.abs(structuralScore.difficulty - context.target);
+    const needsRisk = options.fullTrayPressure === true
+      || difficultyGap <= LevelGenerator.targetTolerance + 1
+      // 验收带按 acceptTarget 判定（不再只认 target）：
+      // 高关普通关的难度分饱和在 54，而 baseDifficulty 已爬到 60+，只按 target 判断会让
+      // 这些候选跳过风险模拟、estimatedFailureRate 恒为 0，被 failureRateBand 的 30 下限
+      // 挡在门外，于是永远验收不通过、只能烧满 24 次 attempt。
+      || Math.abs(structuralScore.difficulty - context.acceptTarget) <= LevelGenerator.targetTolerance + 1
+      // 广告门槛关多跑风险模拟，避免未打分候选用默认 revive=100 抢走兜底席位。
+      || (context.failureRateBand.max > 15
+        && Math.abs(structuralScore.difficulty - context.acceptTarget) <= LevelGenerator.targetTolerance + 4);
+    const score = needsRisk
+      ? this.scoreCandidate(
+          candidate,
+          result,
+          context.target,
+          context.recentFingerprints,
+          context.recentArchetypes,
+          this.estimatePlayerRisk(candidate, coverGraph),
+        )
+      : structuralScore;
     candidate.score = score;
     if (options.fullTrayPressure === true) {
       // 贴满压力档：难度分被"棋盘规模"主导、对小棋盘失真，改按残酷度挑选——
@@ -228,17 +309,29 @@ export class LevelGenerator {
       }
       return { candidate, accepted: false };
     }
-    const distance = this.candidateDistance(score, context.target, context.failureRateBand);
-    if (score.repetition < 100 && distance < context.bestDistance) {
+    const distance = this.candidateDistance(
+      score,
+      context.acceptTarget,
+      context.failureRateBand,
+      context.role,
+      options.rescue === true,
+      candidate.slotCapacity,
+    );
+    // 爽关的结构难度天然被棋盘规模顶高，往往进不了 base-14 的容差带；
+    // 兜底候选必须优先保住连击链（验收要求 maxCombo ≥ 2）。
+    const rankedDistance = context.role === 'breather' && score.maxCombo < 2
+      ? distance + 1000
+      : distance;
+    if (score.repetition < 100 && rankedDistance < context.bestDistance) {
       context.best = candidate;
-      context.bestDistance = distance;
+      context.bestDistance = rankedDistance;
     }
     return {
       candidate,
       accepted: this.accept(
         candidate,
         score,
-        context.target,
+        context.acceptTarget,
         archetype,
         candidate.fingerprint,
         context.recentFingerprints,
@@ -432,6 +525,7 @@ export class LevelGenerator {
       level,
       seed,
       archetype,
+      role,
       slotCapacity,
       kindCount,
       tiles,
@@ -880,13 +974,18 @@ export class LevelGenerator {
       const newKinds = pressureCandidates.filter(item => tray[item.kind] === 0);
       const pairing = safe.filter(item => tray[item.kind] === 1);
       let choice: { group: number; value: number; kind: number };
+      // 尾段（≥80% 进度）进入"困对"区：与贴满压力档同一套凑对逻辑，
+      // 但只作用于普通关/难关的尾声——让玩家失败时"带着对子死"，
+      // "再来一张就消了"的听牌感是复活广告转化的最高点。
+      // combo/rescue 原型（爽关/救援关）走 useDispersal=false，天然不受影响。
+      const endgameTrap = !fullPressure && (result.length + 0.5) / Math.max(total, 1) >= 0.8;
       if (useDispersal && trayLength >= capacity - 2) {
         // 分散模式下槽位吃紧（≥4 张）时优先"完成 > 配对"，分散目标让位：
         // 否则"挑新元素"的策略会把槽位堆满互不相同的单张，序列模拟进入死局，
         // 只能退化到兜底序列，产出的关卡会因脆弱状态过多被 forgiveness 门槛拒绝。
-        // 贴满压力档反过来：3/5 时优先"凑对"把槽位顶到 4/5 再消——
+        // 贴满压力档与尾段困对反过来：3/5 时优先"凑对"把槽位顶到 4/5 再消——
         // 最优路径也要长期骑在满槽边缘，这是超萌挑战残酷度的核心。
-        if (fullPressure && trayLength < capacity - 1 && pairing.length > 0) {
+        if ((fullPressure || endgameTrap) && trayLength < capacity - 1 && pairing.length > 0) {
           choice = pickDispersed(pairing);
         } else if (completing.length > 0) {
           choice = pickDispersed(completing);
@@ -998,10 +1097,10 @@ export class LevelGenerator {
     target: number,
     recentFingerprints: string[],
     recentArchetypes: LevelArchetype[],
+    risk: PlayerRiskEstimate | null,
   ): LevelScore {
     const metrics = result.pathMetrics;
     const maxLayer = Math.max(...level.tiles.map(tile => tile.layer));
-    const risk = this.estimatePlayerRisk(level);
     // Keep the score on the same scale as baseDifficulty. Raw decision counts
     // grow with board size, so normalize them before combining the signals.
     const structural = level.tiles.length * 0.12 + maxLayer * 2.2;
@@ -1032,10 +1131,12 @@ export class LevelGenerator {
     // forgiveness 只拦截真正极端的关卡：immediateFailures（分析关闭时）与
     // failureRisk 是同一个高压信号，高槽压设计下天然偏高，不去重会错杀
     // stacked/hidden/order 压力原型（双重扣分直接钳到 0）。
-    const forgiveness = this.clamp(Math.round(
-      100 - risk.estimatedFailureRate * 1.1 - risk.wrongChoiceRisk * 0.15
-        - Math.min(wrongChoiceRate, 1) * 15,
-    ), 0, 100);
+    const forgiveness = risk
+      ? this.clamp(Math.round(
+          100 - risk.estimatedFailureRate * 1.1 - risk.wrongChoiceRisk * 0.15
+            - Math.min(wrongChoiceRate, 1) * 15,
+        ), 0, 100)
+      : this.clamp(Math.round(100 - Math.min(wrongChoiceRate, 1) * 15), 0, 100);
     const rhythmRequirement = level.tiles.length <= 24 ? 1 : 2;
     // 压力为主、转化为节奏拍、relief 为加分项：高压节奏（denseRhythmAt）下
     // relief 稀缺是设计意图，不能让 relief 缺失把压力原型挡在门外。
@@ -1057,8 +1158,11 @@ export class LevelGenerator {
       forcedMoves: metrics.forcedMoves,
       maxTrayOccupancy: metrics.maxTrayOccupancy,
       failureRisk: metrics.failureRisk,
-      estimatedFailureRate: risk.estimatedFailureRate,
-      wrongChoiceRisk: risk.wrongChoiceRisk,
+      estimatedFailureRate: risk ? risk.estimatedFailureRate : 0,
+      wrongChoiceRisk: risk ? risk.wrongChoiceRisk : 0,
+      failureProgressAvg: risk ? risk.failureProgressAvg : 0,
+      trappedPairRate: risk ? risk.trappedPairRate : 0,
+      reviveRescueRate: risk ? risk.reviveRescueRate : 100,
       comboOpportunities: metrics.comboOpportunities,
       maxCombo: metrics.maxCombo,
       comebackOpportunities: metrics.comebackOpportunities,
@@ -1088,6 +1192,14 @@ export class LevelGenerator {
       || score.difficulty > target + LevelGenerator.targetTolerance) return false;
     if (score.estimatedFailureRate < failureRateBand.min
       || score.estimatedFailureRate > failureRateBand.max) return false;
+    // 失败可挽回感（广告变现硬指标）：失败必须发生在尾段、槽内带着听牌，
+    // 并且看广告清对子后残局真可解。失败率太低的关（爽关/救援/新手关）
+    // 没什么复活场景，不卡这三条。
+    if (LevelGenerator.needsFailFeelGates(score, role, failureRateBand, archetype === 'rescue')) {
+      if (score.reviveRescueRate < LevelGenerator.minReviveRescueRate) return false;
+      if (score.failureProgressAvg < LevelGenerator.minFailureProgress) return false;
+      if (score.trappedPairRate < LevelGenerator.minTrappedPairRate) return false;
+    }
     if (score.forgiveness < 25) return false;
     if ((archetype === 'combo' || archetype === 'rescue') && score.satisfaction < 40) return false;
     if (role === 'breather') {
@@ -1102,11 +1214,37 @@ export class LevelGenerator {
   }
 
   private static readonly targetTolerance = 6;
+  static readonly minFailureProgress = 80;
+  static readonly minTrappedPairRate = 60;
+  static readonly minReviveRescueRate = 55;
 
-  private static failureRateBand(level: number, rescue: boolean) {
+  static needsFailFeelGates(
+    score: Pick<LevelScore, 'estimatedFailureRate'>,
+    role: LevelRole,
+    band: { min: number; max: number } = { min: 0, max: 100 },
+    rescue = false,
+  ) {
+    if (role === 'breather' || rescue) return false;
+    // 新手保护带太窄（L1-5 上限 ≤15%），卡广告门槛会把失败率顶出带。
+    if (band.max <= 15) return false;
+    return score.estimatedFailureRate >= Math.max(10, band.min * 0.5);
+  }
+
+  // 难度分的实测饱和上限。structural 分量被棋盘规模（牌量上限 90、层数上限 9）封顶，
+  // decisions / pressure 两个分量都按每格归一化，因此 difficulty 在 L70 之后稳定停在
+  // 54.0，而 baseDifficulty 会一路爬到 65。若不封顶，高关永远进不了 ±targetTolerance
+  // 的验收带，只能把 24 次 attempt 跑满再兜底 —— 实测 L80 单关生成 86~113ms，
+  // 是 L50（6ms）的十几倍，进关时会明显顿一下。验收目标同样封顶即可提前 accept。
+  private static readonly difficultySaturation = 54;
+
+  static failureRateBand(level: number, rescue = false) {
     if (rescue) return { min: 5, max: 15 };
     if (level <= 1) return { min: 0, max: 8 };
-    if (level <= 8) return { min: 15, max: 25 };
+    // 新手保护期（L2-5）：失败率压到 8-15%。D1/D3 留存死在头几关，
+    // 此时玩家还没形成"失败→看广告复活"的行为习惯，少赚的广告费远小于
+    // 流失损失；变现档位（30-45%）推迟到 L23+ 才进入。
+    if (level <= 5) return { min: 8, max: 15 };
+    if (level <= 10) return { min: 15, max: 25 };
     if (level <= 22) return { min: 25, max: 40 };
     return { min: 30, max: 45 };
   }
@@ -1115,6 +1253,9 @@ export class LevelGenerator {
     score: LevelScore,
     target: number,
     failureRateBand: { min: number; max: number },
+    role: LevelRole = 'normal',
+    rescue = false,
+    slotCapacity = 6,
   ) {
     const difficultyDistance = score.difficulty < target - LevelGenerator.targetTolerance
       ? target - LevelGenerator.targetTolerance - score.difficulty
@@ -1126,79 +1267,170 @@ export class LevelGenerator {
       : score.estimatedFailureRate > failureRateBand.max
         ? score.estimatedFailureRate - failureRateBand.max
         : 0;
-    return difficultyDistance + riskDistance * 0.8;
+    let failFeelDistance = 0;
+    const riskUnscored = score.estimatedFailureRate === 0 && score.failureProgressAvg === 0;
+    if (riskUnscored && failureRateBand.min >= 8 && role !== 'breather' && !rescue) {
+      // 没跑玩家风险模拟的候选不能靠默认 revive=100 抢兜底席位。
+      failFeelDistance += 40;
+    } else if (LevelGenerator.needsFailFeelGates(score, role, failureRateBand, rescue)) {
+      failFeelDistance += Math.max(0, LevelGenerator.minReviveRescueRate - score.reviveRescueRate) * 1.2;
+      failFeelDistance += Math.max(0, LevelGenerator.minFailureProgress - score.failureProgressAvg) * 8;
+      failFeelDistance += Math.max(0, LevelGenerator.minTrappedPairRate - score.trappedPairRate);
+    }
+    // 普通关/难关通关不能太空：见证路径峰值占用过低说明这关几乎不压槽，广告没人看。
+    // 只作距离惩罚，不做硬拒绝，避免 1000 seed 被规模分打死。爽关和救援关不罚。
+    let occupancyDistance = 0;
+    if (role !== 'breather' && !rescue) {
+      const spareSlots = Math.max(0, slotCapacity - score.maxTrayOccupancy);
+      occupancyDistance = Math.max(0, spareSlots - 2) * 4;
+    }
+    // 失败率带必须压过失败质量：否则兜底会发出「尾段很好、但失败率出带」的关。
+    return difficultyDistance + riskDistance * 4 + failFeelDistance * 1.6 + occupancyDistance;
+  }
+
+  private extraAttemptsForFailFeel(options: LevelGenerationOptions, context: GenerationContext) {
+    if (options.fullTrayPressure === true) return 0;
+    if (!context.best) return 48;
+    this.finalizeBestScore(context.best);
+    if (!LevelGenerator.needsFailFeelGates(
+      context.best.score,
+      context.role,
+      context.failureRateBand,
+      options.rescue === true,
+    )) return 0;
+    if (context.best.score.failureProgressAvg >= LevelGenerator.minFailureProgress
+      && context.best.score.trappedPairRate >= LevelGenerator.minTrappedPairRate
+      && context.best.score.reviveRescueRate >= LevelGenerator.minReviveRescueRate) {
+      return 0;
+    }
+    return 48;
+  }
+
+  /**
+   * 风险模拟局数必须能命中当前关卡的失败率验收带。
+   * estimatedFailureRate = round(failures/n*100)，n=4 时只能取 0/25/50/75/100，
+   * 与 L22+ 的 30–45 带完全没有交集——高关 accept 永远失败，只能跑满全部 attempt。
+   */
+  private static riskTrialCount(level: number, tileCount: number, rescue: boolean) {
+    const band = LevelGenerator.failureRateBand(level, rescue);
+    const candidates = tileCount >= 72 ? [10, 8, 12] : [10, 8, 12, 6];
+    for (const trialCount of candidates) {
+      for (let failures = 0; failures <= trialCount; failures += 1) {
+        const rate = Math.round((failures / trialCount) * 100);
+        if (rate >= band.min && rate <= band.max) return trialCount;
+      }
+    }
+    return 10;
   }
 
   /**
    * Estimates failure pressure with a bounded, deterministic player model.
    * The model prefers an immediate match or a pair, but occasionally picks a
    * near-best visible card to represent an ordinary player's mistake.
+   * Uses a precomputed cover graph so each step is O(edges), not O(n² geometry).
+   *
+   * 除失败率外还产出"失败画像"三指标（可挽回感量化）：
+   * - failureProgressAvg：失败发生在多晚——越晚越是"差一点就赢"；
+   * - trappedPairRate：失败时槽内是否有听牌对子——有对子玩家才想复活；
+   * - reviveRescueRate：复活（清一对）后棋盘是否真可解——广告价值的硬保证。
    */
-  private estimatePlayerRisk(level: LevelDefinition) {
-    const trialCount = 6;
+  private estimatePlayerRisk(level: LevelDefinition, coverGraph?: TileCoverGraph): PlayerRiskEstimate {
+    const trialCount = LevelGenerator.riskTrialCount(
+      level.level,
+      level.tiles.length,
+      level.archetype === 'rescue',
+    );
     // This is the chance of a meaningful misclick at one decision point, not
     // every card tap. Small values keep the estimate close to normal play.
-    const mistakeChance = level.level <= 8 ? 0.004 : 0.008;
-    const blockers = level.tiles.map((tile, index) => level.tiles
-      .map((other, otherIndex) => ({ other, otherIndex }))
-      .filter(({ other, otherIndex }) => otherIndex !== index
-        && other.layer > tile.layer
-        && LevelRules.overlaps(tile, other))
-      .map(({ otherIndex }) => otherIndex));
-    const availableTiles = (active: boolean[]) => level.tiles.filter((_, index) =>
-      active[index] && !blockers[index].some(blockerIndex => active[blockerIndex]));
-    const tileIndexById = new Map(level.tiles.map((tile, index) => [tile.id, index]));
-    const move = (active: boolean[], counts: number[], tile: TileDefinition) => {
-      const index = tileIndexById.get(tile.id);
-      if (index === undefined || !active[index]) return null;
-      const nextActive = active.slice();
-      nextActive[index] = false;
-      const nextCounts = counts.slice();
-      nextCounts[tile.kind] += 1;
-      let cleared = 0;
-      let trayLength = nextCounts.reduce((sum, count) => sum + count, 0);
-      for (let kind = 0; kind < nextCounts.length; kind += 1) {
-        while (nextCounts[kind] >= 3) {
-          nextCounts[kind] -= 3;
-          trayLength -= 3;
-          cleared += 1;
-        }
-      }
-      return { active: nextActive, counts: nextCounts, trayLength, cleared };
-    };
+    // 真人看不见被盖住的牌：隐藏信息（记忆与推理负担）是真人失误的主要来源，
+    // 而模拟器对全棋盘种类全知。按原型给失误率分档补偿，否则 hidden/stacked
+    // 原型的 estimatedFailureRate 被系统性低估，验收带对它们失准。
+    const hiddenMistakeFactor = level.archetype === 'hidden'
+      ? 3
+      : level.archetype === 'stacked' ? 1.5 : 1;
+    const baseMistakeChance = (level.level <= 8 ? 0.004 : 0.008) * hiddenMistakeFactor;
+    const graph = coverGraph ?? new TileCoverGraph(level);
+    const tiles = level.tiles;
+    const dependents = graph.dependents;
     let failures = 0;
     let wrongChoices = 0;
     let decisions = 0;
+    let failureProgressSum = 0;
+    let trappedPairFailures = 0;
+    let reviveRescues = 0;
 
     for (let trial = 0; trial < trialCount; trial += 1) {
       const random = new SeededRandom(level.seed ^ Math.imul(trial + 1, 0x45d9f3b));
-      let active = level.tiles.map(() => true);
-      let counts = Array.from({ length: level.kindCount }, () => 0);
+      const board = new CoverBoardState(graph);
+      const counts = Array.from({ length: level.kindCount }, () => 0);
+      const trayIndices: number[] = [];
+      let trayLength = 0;
+      let availableCount = board.availableIndices().length;
       let won = false;
 
       for (let step = 0; step < level.tiles.length + 1; step += 1) {
-        const available = availableTiles(active);
+        const available = board.availableIndices();
         if (available.length === 0) break;
-        const choices = available.map(tile => {
-          const nextMove = move(active, counts, tile)!;
-          const afterAvailable = nextMove
-            ? availableTiles(nextMove.active).length
-            : 0;
-          const pairBonus = counts[tile.kind] === 1 ? 80 : 0;
-          const clearBonus = nextMove?.cleared ? 1000 : 0;
-          const trayPenalty = nextMove ? nextMove.trayLength * 6 : 1000;
+        availableCount = available.length;
+        const choices = available.map(index => {
+          const tile = tiles[index];
+          const kind = tile.kind;
+          board.take(index);
+          counts[kind] += 1;
+          let nextTray = trayLength + 1;
+          let cleared = 0;
+          while (counts[kind] >= 3) {
+            counts[kind] -= 3;
+            nextTray -= 3;
+            cleared += 1;
+          }
+          // Incremental available count: removing one free tile unblocks only
+          // its dependents that still had exactly one live blocker.
+          let afterAvailable = availableCount - 1;
+          const unlocked = dependents[index];
+          for (let i = 0; i < unlocked.length; i += 1) {
+            const child = unlocked[i];
+            if (board.active[child] && board.blockerCount[child] === 0) afterAvailable += 1;
+          }
+          // Undo preview.
+          if (cleared > 0) {
+            counts[kind] += cleared * 3;
+          }
+          counts[kind] -= 1;
+          board.untake(index);
+
+          const pairBonus = counts[kind] === 1 ? 80 : 0;
+          const clearBonus = cleared > 0 ? 1000 : 0;
+          const trayPenalty = nextTray * 6;
           return {
-            tile,
-            move: nextMove,
+            index,
+            tileId: tile.id,
+            kind,
+            cleared,
+            nextTray,
             score: clearBonus + pairBonus + afterAvailable * 2 - trayPenalty,
           };
         });
         const bestScore = Math.max(...choices.map(choice => choice.score));
-        const idealChoice = level.plan.solution
-          .map(tileId => choices.find(choice => choice.tile.id === tileId))
-          .find(choice => !!choice);
+        let idealChoice: (typeof choices)[number] | undefined;
+        for (const tileId of level.plan.solution) {
+          const found = choices.find(choice => choice.tileId === tileId);
+          if (found) {
+            idealChoice = found;
+            break;
+          }
+        }
         const nearBest = choices.filter(choice => choice.score >= bestScore - 120);
         const mistakePool = nearBest.filter(choice => choice !== idealChoice);
+        const taken = tiles.length - board.remaining;
+        const progress = taken / Math.max(tiles.length, 1);
+        // 80% 进度前几乎不失手，失败才会堆在尾段。L6-10 尾段加权更轻，避免顶出 15-25% 带。
+        const lateFactor = level.level < 6
+          ? 1
+          : progress < 0.8
+            ? 0.12
+            : (level.level <= 10 ? 3.4 : 4.2);
+        const mistakeChance = baseMistakeChance * lateFactor;
         const useMistake = mistakePool.length > 0
           && available.length > 1
           && random.next() < mistakeChance;
@@ -1207,23 +1439,124 @@ export class LevelGenerator {
           : idealChoice || random.pick(choices.filter(item => item.score === bestScore));
         if (choice !== idealChoice) wrongChoices += 1;
         if (available.length > 1) decisions += 1;
-        if (!choice.move) break;
 
-        active = choice.move.active;
-        counts = choice.move.counts;
-        if (!active.some(Boolean)) {
+        board.take(choice.index);
+        counts[choice.kind] += 1;
+        trayIndices.push(choice.index);
+        trayLength += 1;
+        while (counts[choice.kind] >= 3) {
+          counts[choice.kind] -= 3;
+          trayLength -= 3;
+          // 三消离槽：该 kind 的三张全部从槽序中移除（复活检查要按真实槽序复盘）
+          let toDrop = 3;
+          for (let i = trayIndices.length - 1; i >= 0 && toDrop > 0; i -= 1) {
+            if (tiles[trayIndices[i]].kind === choice.kind) {
+              trayIndices.splice(i, 1);
+              toDrop -= 1;
+            }
+          }
+        }
+        if (board.remaining === 0) {
           won = true;
           break;
         }
-        if (choice.move.trayLength >= level.slotCapacity) break;
+        if (trayLength >= level.slotCapacity) break;
       }
-      if (!won) failures += 1;
+      if (won) continue;
+      failures += 1;
+      // 失败画像：进度（玩家视角"棋盘快空了"= 已取走牌数占比）与槽内听牌。
+      failureProgressSum += Math.round(((tiles.length - board.remaining) / tiles.length) * 100);
+      if (counts.some(count => count >= 2)) trappedPairFailures += 1;
+      if (this.canReviveRescue(level, graph, board.active, trayIndices)) reviveRescues += 1;
     }
 
     return {
       estimatedFailureRate: Math.round(failures / trialCount * 100),
       wrongChoiceRisk: decisions > 0 ? Math.round(wrongChoices / decisions * 100) : 0,
+      failureProgressAvg: failures > 0 ? Math.round(failureProgressSum / failures) : 0,
+      trappedPairRate: failures > 0 ? Math.round(trappedPairFailures / failures * 100) : 0,
+      reviveRescueRate: failures > 0 ? Math.round(reviveRescues / failures * 100) : 100,
     };
+  }
+
+  /**
+   * 复活可解性检查：完整复刻 GameScreen.reviveFromAd 的真实机制后验证可解性。
+   * 游戏实际规则（不是笼统的"清 3 张"）：
+   * 1. 清掉槽内数量最多的对子 kind 的 2 张（平手取最靠右的）；无对子只清最右 1 张；
+   * 2. 若清走一对后该 kind 在棋盘可用牌中已绝迹，最后 1 张会被放回棋盘。
+   * 残局规模小（失败多发生在尾段），2 万状态预算足够；
+   * 搜索被截断按不可救处理（保守，不高估复活价值）。
+   */
+  private canReviveRescue(
+    level: LevelDefinition,
+    graph: TileCoverGraph,
+    activeBase: boolean[],
+    trayIndices: number[],
+  ) {
+    if (trayIndices.length === 0) return false;
+    const tiles = level.tiles;
+    // 与 GameScreen.pickRevivePairKind 一致：数量最多的对子 kind，平手取槽内最靠右
+    const trayCounts = Array.from({ length: level.kindCount }, () => 0);
+    trayIndices.forEach(index => {
+      trayCounts[tiles[index].kind] += 1;
+    });
+    let pairKind = -1;
+    let bestCount = 1;
+    let bestRight = -1;
+    trayCounts.forEach((count, kind) => {
+      if (count < 2) return;
+      let right = -1;
+      trayIndices.forEach((index, position) => {
+        if (tiles[index].kind === kind) right = position;
+      });
+      if (count > bestCount || (count === bestCount && right > bestRight)) {
+        pairKind = kind;
+        bestCount = count;
+        bestRight = right;
+      }
+    });
+    const removed = pairKind >= 0
+      ? trayIndices.filter(index => tiles[index].kind === pairKind).slice(-2)
+      : trayIndices.slice(-1);
+    if (removed.length === 0) return false;
+
+    const board = new CoverBoardState(graph, activeBase);
+    const active = activeBase.slice();
+    const revivedTray = trayIndices.filter(index => removed.indexOf(index) === -1);
+    // 返还逻辑：清走一对后该 kind 在棋盘可用牌里绝迹 → 最后一张放回棋盘
+    const needReturn = removed.length >= 2
+      && !board.availableIndices().some(index => tiles[index].kind === tiles[removed[0]].kind);
+    if (needReturn) {
+      const returned = removed[removed.length - 1];
+      active[returned] = true;
+    }
+    const counts = Array.from({ length: level.kindCount }, () => 0);
+    revivedTray.forEach(index => {
+      counts[tiles[index].kind] += 1;
+    });
+    const result = this.solver.solve(level, {
+      maxStates: 20000,
+      analyzeBranches: false,
+      coverGraph: graph,
+      initialState: { active, counts },
+    });
+    return result.solvable;
+  }
+
+  /** Fill in player-risk fields on the fallback winner that skipped risk scoring. */
+  private finalizeBestScore(best: LevelDefinition) {
+    const risk = this.estimatePlayerRisk(best, new TileCoverGraph(best));
+    const wrongChoiceRate = best.score.wrongChoiceCount / Math.max(best.tiles.length, 1);
+    best.score.estimatedFailureRate = risk.estimatedFailureRate;
+    best.score.wrongChoiceRisk = risk.wrongChoiceRisk;
+    best.score.failureProgressAvg = risk.failureProgressAvg;
+    best.score.trappedPairRate = risk.trappedPairRate;
+    best.score.reviveRescueRate = risk.reviveRescueRate;
+    best.score.forgiveness = this.clamp(Math.round(
+      100 - risk.estimatedFailureRate * 1.1 - risk.wrongChoiceRisk * 0.15
+        - Math.min(wrongChoiceRate, 1) * 15,
+    ), 0, 100);
+    return best;
   }
 
   private chooseArchetype(level: number, random: SeededRandom, recent: LevelArchetype[], role: LevelRole = 'normal') {
@@ -1257,11 +1590,14 @@ export class LevelGenerator {
     return 'pressure';
   }
 
-  // 高压节奏：relief 窗口从 52% 压到 24%，三消完成集中在少数释放点，
+  // 高压节奏：relief 窗口从 52% 压到约 18%，三消完成集中在少数释放点，
   // 其余大部分时间玩家要在槽位里憋着配不成对的牌。
+  // 尾段（≥80%）不再安排解压窗口（原 94% relief 已撤销）：
+  // 失败的可挽回感来自"差一点就赢"——把槽压峰值逼到棋盘尾声，
+  // 让失败集中发生在高进度处，而不是中盘绝望崩盘。
   private denseRhythmAt(index: number, total: number): LevelRhythm {
     const progress = (index + 0.5) / Math.max(total, 1);
-    if (progress < 0.06 || (progress >= 0.48 && progress < 0.60) || progress >= 0.94) {
+    if (progress < 0.06 || (progress >= 0.42 && progress < 0.62)) {
       return 'relief';
     }
     return 'pressure';
@@ -1341,9 +1677,10 @@ export class LevelGenerator {
     const candidate = Math.round((base + variation) / 3) * 3;
     const normal = Math.max(minimum, Math.min(maxTiles, candidate));
     if (role === 'spike') {
-      // 难关必须短：牌量压到普通关一半左右，靠"同类更少、等待更长"换难度
+      // 难关必须短：牌量压到普通关一半左右，靠"同类更少、等待更长"换难度。
+      // 下限 36 与验收脚本一致，避免 accept 提前命中时落到 33（11 种×3）过短。
       const spikeCandidate = Math.round((normal * 0.55 + (random ? random.int(-1, 1) * 3 : 0)) / 3) * 3;
-      return Math.max(minimum, Math.min(60, spikeCandidate));
+      return Math.max(Math.max(minimum, 36), Math.min(60, spikeCandidate));
     }
     return normal;
   }
@@ -1370,6 +1707,7 @@ export class LevelGenerator {
       solvability: 0, difficulty: 0, tension: 0, satisfaction: 0, comeback: 0,
       repetition: 0, forgiveness: 0, decisionCount: 0, decisionPoints: 0, forcedMoves: 0,
       maxTrayOccupancy: 0, failureRisk: 0, estimatedFailureRate: 0, wrongChoiceRisk: 0,
+      failureProgressAvg: 0, trappedPairRate: 0, reviveRescueRate: 100,
       comboOpportunities: 0, maxCombo: 0,
       comebackOpportunities: 0, wrongChoiceCount: 0, exploredStates: 0,
       pressureMoments: 0, reliefMoments: 0, rhythmTransitions: 0, rhythm: 0,

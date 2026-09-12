@@ -7,6 +7,40 @@ declare module 'cc' {
       clear(): void;
     };
   };
+
+  export class ImageAsset {}
+  export class Texture2D {
+    image: ImageAsset | null;
+    destroy(): void;
+  }
+  export class SpriteFrame {
+    texture: Texture2D | null;
+    destroy(): void;
+  }
+
+  export namespace AssetManager {
+    class Bundle {
+      load(
+        path: string,
+        type: typeof ImageAsset,
+        callback: (error: Error | null, asset?: ImageAsset) => void,
+      ): void;
+    }
+  }
+
+  export const assetManager: {
+    getBundle(name: string): AssetManager.Bundle | null;
+    loadBundle(name: string, callback: (error: Error | null, bundle?: AssetManager.Bundle) => void): void;
+    releaseAsset(asset: ImageAsset): void;
+  };
+
+  export const resources: {
+    load(
+      path: string,
+      type: typeof ImageAsset,
+      callback: (error: Error | null, asset?: ImageAsset) => void,
+    ): void;
+  };
 }
 
 declare const process: {

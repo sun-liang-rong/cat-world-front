@@ -1,4 +1,4 @@
-import { ENDLESS_REFILL_REMAINING, EndlessDirector } from '../assets/scripts/level/EndlessDirector';
+import { ENDLESS_BOARD_CAP, ENDLESS_REFILL_REMAINING, EndlessDirector } from '../assets/scripts/level/EndlessDirector';
 import { LevelRules } from '../assets/scripts/level/LevelSolver';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -50,7 +50,7 @@ function testRefillByRemainingCount() {
       minLayer: 0,
       maxLayer: 6,
     }),
-    '51 remaining tiles do not refill',
+    `${ENDLESS_REFILL_REMAINING + 1} remaining tiles do not refill`,
   );
   assert(
     director.shouldRefill({
@@ -58,7 +58,7 @@ function testRefillByRemainingCount() {
       minLayer: 0,
       maxLayer: 6,
     }),
-    '50 remaining tiles start a bottom pad',
+    `${ENDLESS_REFILL_REMAINING} remaining tiles start a bottom pad`,
   );
 }
 
@@ -137,9 +137,47 @@ function testTopLayerHasNoTriple() {
   });
 }
 
+// 上限回归：旧逻辑在剩余容量 3~11 时仍硬补 12 张，棋盘可越界到 ~131。
+// 现在容量不足一波最小补牌（12）时直接暂停，任何时刻棋盘都不得超过 120。
+function testRefillNeverExceedsBoardCap() {
+  [11, 222, 3333].forEach(seed => {
+    const director = new EndlessDirector(seed, Date.now());
+    const opening = director.nextWave({ activeCount: 0, minLayer: null, maxLayer: null });
+    assert(!!opening, `seed ${seed}: opening wave exists`);
+    let board = opening!.tiles.length;
+    let maxBoard = board;
+    let rng = seed;
+    const rand = () => {
+      rng = (rng * 1103515245 + 12345) & 0x7fffffff;
+      return rng / 0x7fffffff;
+    };
+    for (let step = 0; step < 4000; step += 1) {
+      // 交替普通补波与强制补波（复活/洗牌路径），覆盖高占用边界
+      const force = step % 7 === 3;
+      const wave = director.nextWave({
+        activeCount: board,
+        minLayer: 0,
+        maxLayer: 4,
+        trayCounts: [1],
+        force,
+      });
+      if (wave) board += wave.tiles.length;
+      assert(
+        board <= ENDLESS_BOARD_CAP,
+        `seed ${seed} step ${step}: board ${board} exceeds cap ${ENDLESS_BOARD_CAP}`,
+      );
+      if (board > maxBoard) maxBoard = board;
+      const remove = Math.min(board, 3 + Math.floor(rand() * 33));
+      board -= remove;
+    }
+    assert(maxBoard >= 100, `seed ${seed}: refills should keep the board busy (max ${maxBoard})`);
+  });
+}
+
 testStagesFollowRefills();
 testRefillByRemainingCount();
 testBottomPadDoesNotCoverTop();
 testPadMatchesTray();
 testTopLayerHasNoTriple();
-process.stdout.write('EndlessDirector validation passed: early pressure, tray-aware pad, no top-layer triples.\n');
+testRefillNeverExceedsBoardCap();
+process.stdout.write('EndlessDirector validation passed: early pressure, tray-aware pad, no top-layer triples, board cap holds.\n');

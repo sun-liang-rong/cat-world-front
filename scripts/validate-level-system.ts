@@ -69,14 +69,27 @@ for (let index = 0; index < 1000; index += 1) {
   level.tiles.forEach(tile => counts.set(tile.kind, (counts.get(tile.kind) || 0) + 1));
   counts.forEach((count, kind) => assert(count % 3 === 0, `Seed ${level.seed} kind ${kind} is not a multiple of 3`));
   assert(new Set(level.tiles.map(tile => `${tile.layer}:${tile.x}:${tile.y}:${tile.kind}`)).size > 1, `Seed ${level.seed} is degenerate`);
-  if (levelNumber > 1 && levelNumber <= 22) {
-    const minimumFailureRate = levelNumber <= 8 ? 15 : 25;
-    const maximumFailureRate = levelNumber <= 8 ? 25 : 40;
+  if (levelNumber > 1) {
+    const band = LevelGenerator.failureRateBand(levelNumber);
     assert(
-      level.score.estimatedFailureRate >= minimumFailureRate
-        && level.score.estimatedFailureRate <= maximumFailureRate,
-      `Seed ${level.seed} estimated failure rate ${level.score.estimatedFailureRate} is outside ${minimumFailureRate}-${maximumFailureRate}`,
+      level.score.estimatedFailureRate >= band.min
+        && level.score.estimatedFailureRate <= band.max,
+      `Seed ${level.seed} estimated failure rate ${level.score.estimatedFailureRate} is outside ${band.min}-${band.max}`,
     );
+    if (LevelGenerator.needsFailFeelGates(level.score, 'normal', band)) {
+      assert(
+        level.score.failureProgressAvg >= LevelGenerator.minFailureProgress,
+        `Seed ${level.seed} failureProgressAvg ${level.score.failureProgressAvg} below ${LevelGenerator.minFailureProgress}`,
+      );
+      assert(
+        level.score.trappedPairRate >= LevelGenerator.minTrappedPairRate,
+        `Seed ${level.seed} trappedPairRate ${level.score.trappedPairRate} below ${LevelGenerator.minTrappedPairRate}`,
+      );
+      assert(
+        level.score.reviveRescueRate >= LevelGenerator.minReviveRescueRate,
+        `Seed ${level.seed} reviveRescueRate ${level.score.reviveRescueRate} below ${LevelGenerator.minReviveRescueRate}`,
+      );
+    }
   }
 
   levels.push(level);
@@ -156,7 +169,21 @@ difficulty.record({ ...failedRun, won: true, remainingSlots: 3 });
 assert(difficulty.planNext(60).targetDifficulty === 60, 'Recovery did not return to the baseline smoothly');
 
 // —— 关卡角色节拍表：调度正确性 ——
+// 空历史时 mastery 偏低会主动取消 spike（新手保护），先回填 3 局干净胜利再测节拍。
 const scheduler = new DifficultyController();
+for (let index = 0; index < 3; index += 1) {
+  scheduler.record({
+    won: true,
+    level: index + 1,
+    remainingSlots: 2,
+    mistakes: 0,
+    elapsedMs: 20000,
+    decisionCount: 8,
+    nearFailureCount: 0,
+    collectedElements: 60,
+    matchCount: 12,
+  });
+}
 for (let level = 1; level <= 40; level += 1) {
   const position = ((level - 1) % 20) + 1;
   const role = scheduler.planNext(LevelGenerator.baseDifficulty(level), level).role;
@@ -174,6 +201,65 @@ struggle.record(failedRun);
 struggle.record(failedRun);
 assert(struggle.planNext(LevelGenerator.baseDifficulty(14), 14).role === 'normal',
   'Scheduled spike must downgrade to normal after consecutive failures');
+
+// 连败 1 次不再取消难关（保留变现高峰），但必须附免费复活兜底；
+// 无连败时难关照常触发且不送免费复活（广告复活不白送）。
+const spikeFreeRevive = new DifficultyController();
+for (let index = 0; index < 3; index += 1) {
+  spikeFreeRevive.record({
+    won: true,
+    level: index + 1,
+    remainingSlots: 2,
+    mistakes: 0,
+    elapsedMs: 20000,
+    decisionCount: 8,
+    nearFailureCount: 0,
+    collectedElements: 60,
+    matchCount: 12,
+  });
+}
+spikeFreeRevive.record(failedRun);
+const freeRevivePlan = spikeFreeRevive.planNext(LevelGenerator.baseDifficulty(9), 9);
+assert(freeRevivePlan.role === 'spike', 'Single loss must not cancel a scheduled spike anymore');
+assert(freeRevivePlan.freeRevive === true, 'Spike during a loss streak must grant a free revive');
+const noStreakPlanner = new DifficultyController();
+for (let index = 0; index < 3; index += 1) {
+  noStreakPlanner.record({
+    won: true,
+    level: index + 1,
+    remainingSlots: 2,
+    mistakes: 0,
+    elapsedMs: 20000,
+    decisionCount: 8,
+    nearFailureCount: 0,
+    collectedElements: 60,
+    matchCount: 12,
+  });
+}
+const noStreakPlan = noStreakPlanner.planNext(LevelGenerator.baseDifficulty(19), 19);
+assert(noStreakPlan.role === 'spike' && !noStreakPlan.freeRevive,
+  'Spike without a loss streak must keep the ad revive');
+
+const emptyHistory = new DifficultyController();
+assert(emptyHistory.planNext(LevelGenerator.baseDifficulty(9), 9).role === 'normal',
+  'Empty history must still cancel early spikes by mastery');
+assert(emptyHistory.planNext(LevelGenerator.baseDifficulty(29), 29).role === 'spike',
+  'Monetization-tier spikes must keep without a sample');
+
+const revivedWinPlanner = new DifficultyController();
+revivedWinPlanner.record({
+  won: true,
+  level: 24,
+  remainingSlots: 1,
+  mistakes: 0,
+  elapsedMs: 20000,
+  decisionCount: 8,
+  nearFailureCount: 0,
+  collectedElements: 60,
+  matchCount: 12,
+  revived: true,
+});
+assert(revivedWinPlanner.snapshot().winStreak === 0, 'Ad revive wins must not count as a win streak');
 
 const rescueScheduler = new DifficultyController();
 for (let index = 0; index < 4; index += 1) {
@@ -211,7 +297,21 @@ for (let index = 0; index < 10; index += 1) {
 }
 
 // —— spike 难关分布：短棋盘、压力原型、难度在容差带内，且明显短于普通关 ——
+// 与节拍表相同：空历史 mastery 会取消 spike，先回填 3 局干净胜利。
 const spikePlanner = new DifficultyController();
+for (let index = 0; index < 3; index += 1) {
+  spikePlanner.record({
+    won: true,
+    level: index + 1,
+    remainingSlots: 2,
+    mistakes: 0,
+    elapsedMs: 20000,
+    decisionCount: 8,
+    nearFailureCount: 0,
+    collectedElements: 60,
+    matchCount: 12,
+  });
+}
 const spikePlan = spikePlanner.planNext(LevelGenerator.baseDifficulty(14), 14);
 assert(spikePlan.role === 'spike', 'Level 14 must plan a spike');
 let spikeTileTotal = 0;
@@ -228,8 +328,19 @@ for (let index = 0; index < 10; index += 1) {
   assert(spike.tiles.length <= 60, `Spike seed ${spike.seed} exceeds the short-level cap`);
   assert(spike.tiles.length % 3 === 0 && spike.tiles.length >= 36, `Spike seed ${spike.seed} tile count out of range`);
   assert(['stacked', 'hidden', 'order'].indexOf(spike.archetype) >= 0, `Spike seed ${spike.seed} archetype ${spike.archetype} is not a pressure archetype`);
-  assert(spike.score.difficulty >= spikePlan.targetDifficulty - 6, `Spike seed ${spike.seed} difficulty below tolerance band`);
+  // Spike 牌量只有普通关一半左右，共享结构分按规模加权；生成侧验收目标已密度校正（-12），
+  // 容差带再放宽 ±6，因此下限是 target-18。
+  assert(
+    spike.score.difficulty >= spikePlan.targetDifficulty - 18,
+    `Spike seed ${spike.seed} difficulty below density-adjusted band`,
+  );
   assert(isWinningPath(spike, spike.plan.solution), `Spike seed ${spike.seed} witness is invalid`);
+  if (LevelGenerator.needsFailFeelGates(spike.score, 'spike', LevelGenerator.failureRateBand(14))) {
+    assert(
+      spike.score.reviveRescueRate >= LevelGenerator.minReviveRescueRate,
+      `Spike seed ${spike.seed} reviveRescueRate ${spike.score.reviveRescueRate} below ${LevelGenerator.minReviveRescueRate}`,
+    );
+  }
   spikeTileTotal += spike.tiles.length;
 
   const normal = generator.generate({

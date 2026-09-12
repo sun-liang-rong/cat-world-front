@@ -1,5 +1,5 @@
 import { DifficultyController } from './DifficultyController';
-import { LevelGenerator, LevelGenerationOptions } from './LevelGenerator';
+import { LevelGenerator } from './LevelGenerator';
 import { LevelArchetype, LevelDefinition, PlayerRun } from './LevelTypes';
 
 export interface LevelSystemSnapshot {
@@ -47,26 +47,6 @@ export class LevelSystem {
     return baseSeed + perturbation;
   }
 
-  nextLevel(level: number, seed: number): LevelDefinition {
-    const plan = this.difficulty.planNext(LevelGenerator.baseDifficulty(level), level);
-
-    // 应用运气扰动到种子
-    const luckSeed = this.applyLuck(seed);
-
-    const options: LevelGenerationOptions = {
-      level,
-      seed: luckSeed,
-      targetDifficulty: plan.targetDifficulty,
-      rescue: plan.rescue,
-      role: plan.role,
-      recentFingerprints: this.recentLevels.map(item => item.fingerprint),
-      recentArchetypes: this.recentLevels.map(item => item.archetype),
-    };
-    const generated = this.generator.generate(options);
-    this.rememberLevel(generated);
-    return generated;
-  }
-
   nextLevelAsync(level: number, seed: number): Promise<LevelDefinition> {
     const plan = this.difficulty.planNext(LevelGenerator.baseDifficulty(level), level);
 
@@ -82,6 +62,8 @@ export class LevelSystem {
       recentFingerprints: this.recentLevels.map(item => item.fingerprint),
       recentArchetypes: this.recentLevels.map(item => item.archetype),
     }).then(generated => {
+      // 难关免费复活是难度自适应层的决策（连败中才成立），随定义透传给 GameScreen。
+      if (plan.freeRevive) generated.freeRevive = true;
       this.rememberLevel(generated);
       return generated;
     });
@@ -96,23 +78,6 @@ export class LevelSystem {
     this.difficulty.seedHistory(runs);
   }
 
-  retryLevel(level: LevelDefinition, seed: number) {
-    const plan = this.difficulty.planNext(LevelGenerator.baseDifficulty(level.level), level.level);
-
-    // 应用运气扰动到种子
-    const luckSeed = this.applyLuck(seed);
-
-    return this.generator.generate({
-      level: level.level,
-      seed: luckSeed,
-      targetDifficulty: plan.targetDifficulty,
-      rescue: plan.rescue,
-      role: plan.role,
-      recentFingerprints: this.recentLevels.map(item => item.fingerprint),
-      recentArchetypes: this.recentLevels.map(item => item.archetype),
-    });
-  }
-
   retryLevelAsync(level: LevelDefinition, seed: number): Promise<LevelDefinition> {
     const plan = this.difficulty.planNext(LevelGenerator.baseDifficulty(level.level), level.level);
     const luckSeed = this.applyLuck(seed);
@@ -124,6 +89,9 @@ export class LevelSystem {
       role: plan.role,
       recentFingerprints: this.recentLevels.map(item => item.fingerprint),
       recentArchetypes: this.recentLevels.map(item => item.archetype),
+    }).then(generated => {
+      if (plan.freeRevive) generated.freeRevive = true;
+      return generated;
     });
   }
 

@@ -12,7 +12,7 @@ import {
   Vec3,
   view,
 } from 'cc';
-import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
+import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { getCatDefinition } from './GameContent';
 import { BuildingView } from './TownContent';
@@ -124,7 +124,7 @@ export class TownScreen {
       'town/fountain_stage_2',
       'town/fountain_stage_3',
     ];
-    this.assets.loadImages(paths, () => {
+    this.assets.loadImagesFor(this, paths, () => {
       this.create();
       onReady?.();
     });
@@ -134,14 +134,26 @@ export class TownScreen {
     this.active = active;
     if (!this.townUI) return;
     this.townUI.active = active;
-    if (active) this.refresh();
+    if (active) {
+      this.focusBuildableStage();
+      this.refresh();
+    } else {
+      // 页面藏起时收掉施工定时器：否则 900ms 后的 refresh/完成 toast 会打到隐藏页面上。
+      // 施工结果在 onBuild 时已写入存档，下次打开 setActive(true) 的 refresh 会呈现正确状态。
+      this.cancelConstructionTimer();
+    }
   }
 
   destroy() {
-    if (this.constructionTimer) clearTimeout(this.constructionTimer);
-    this.constructionTimer = null;
+    this.cancelConstructionTimer();
     this.townUI?.destroy();
     this.townUI = null;
+  }
+
+  private cancelConstructionTimer() {
+    if (this.constructionTimer) clearTimeout(this.constructionTimer);
+    this.constructionTimer = null;
+    this.isConstructing = false;
   }
 
   private get buildings(): BuildingView[] {
@@ -160,6 +172,7 @@ export class TownScreen {
 
     this.townUI = new Node('TownUI');
     this.root.addChild(this.townUI);
+    this.townUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     this.townUI.active = this.active;
 
     this.image(this.townUI, 'town/town_bg', 0, 0, visibleSize.width, visibleSize.height);
@@ -168,6 +181,7 @@ export class TownScreen {
     this.buildSelector(bottom);
     this.buildConstructionPanel(bottom);
     this.buildHeader(top);
+    this.focusBuildableStage();
     this.refresh();
   }
 
@@ -198,7 +212,7 @@ export class TownScreen {
     this.buildResourceChip(
       this.townUI!,
       304,
-      y,
+      belowWeChatCapsule(top, 62),
       166,
       COMMON_UI_ASSETS.coinIcon,
       () => '' + this.options.getCoins(),
@@ -440,9 +454,8 @@ export class TownScreen {
   private refresh() {
     if (!this.townUI) return;
     const building = this.selected;
-    if (this.selectedStage > Math.min(building.stage, building.maxStage - 1)) {
-      this.selectedStage = Math.min(building.stage, building.maxStage - 1);
-    }
+    const maxSelectable = Math.max(0, building.maxStage - 1);
+    this.selectedStage = Math.max(0, Math.min(this.selectedStage, Math.min(building.stage, maxSelectable)));
 
     if (this.starLabel) this.starLabel.string = '' + this.options.getStars();
     if (this.coinLabel) this.coinLabel.string = '' + this.options.getCoins();
@@ -450,7 +463,9 @@ export class TownScreen {
     this.renderDisplay(building);
     this.renderSelector();
     this.renderPanel(building);
-  }  private stageArtPath(building: BuildingView, stage: number) {
+  }
+
+  private stageArtPath(building: BuildingView, stage: number) {
     return 'town/' + building.artPrefix + '_stage_' + stage;
   }
 
@@ -699,6 +714,11 @@ export class TownScreen {
     return stage < building.stage || building.completed;
   }
 
+  private focusBuildableStage(building = this.selected) {
+    if (!building) return;
+    this.selectedStage = Math.min(building.stage, Math.max(0, building.maxStage - 1));
+  }
+
   private completedConditionText(building: BuildingView) {
     return `${getCatDefinition(building.catId).name}已入住`;
   }
@@ -733,7 +753,7 @@ export class TownScreen {
     const building = this.buildings[index];
     if (!building) return;
     this.selectedBuilding = index;
-    this.selectedStage = Math.min(building.stage, building.maxStage - 1);
+    this.focusBuildableStage(building);
     if (!building.unlocked) {
       this.toast(building.unlockHint);
     }
@@ -768,7 +788,6 @@ export class TownScreen {
     if (this.selectedStage !== currentStage) {
       this.selectedStage = currentStage;
       this.refresh();
-      this.toast('请先完成' + (building.stageNames[currentStage] ?? '') + '阶段');
       return;
     }
     const result = this.options.onBuild(building.id);

@@ -3,7 +3,7 @@ import { LevelArchetype, TileDefinition } from './LevelTypes';
 
 export const ENDLESS_BOARD_CAP = 120;
 export const ENDLESS_RESUME_THRESHOLD = 90;
-export const ENDLESS_REFILL_REMAINING = 50;
+export const ENDLESS_REFILL_REMAINING = 40;
 
 export interface EndlessStageConfig {
   stage: number;
@@ -47,8 +47,14 @@ export class EndlessDirector {
 
   constructor(
     private readonly seed: number,
-    private readonly startedAt = Date.now(),
+    private startedAt = Date.now(),
   ) {}
+
+  // 计时起点对齐到玩家真正开打（startPlay）：预创建/加载等待不计入坚持时长，
+  // 否则 HUD 的「坚持时长」会比结算的 durationMs 多算加载等待时间。
+  markStarted(now = Date.now()) {
+    this.startedAt = now;
+  }
 
   elapsedMs(now = Date.now()) {
     return Math.max(0, now - this.startedAt);
@@ -60,7 +66,7 @@ export class EndlessDirector {
   }
 
   /**
-   * 按场上剩余牌数补卡：开局约 90 张，降到 50 张（含）从底部垫约 40 张。
+   * 按场上剩余牌数补卡：开局约 90 张，降到 40 张（含）从底部垫约 40 张。
    * 点掉几张但还没掉到阈值时不补，避免点一张就塞牌。
    */
   shouldRefill(snapshot: EndlessBoardSnapshot) {
@@ -84,7 +90,9 @@ export class EndlessDirector {
     const stage = this.currentStage();
     const layerCount = opening ? stage.keepLayers : stage.refillLayers;
     const remainingCapacity = ENDLESS_BOARD_CAP - Math.max(0, snapshot.activeCount);
-    if (!opening && remainingCapacity < 3) {
+    // 容量不足一波最小补牌（12 张）时直接暂停，等消除腾出空间；
+    // 否则会突破 120 上限（旧逻辑在容量 3~11 时仍硬补 12 张）。
+    if (!opening && remainingCapacity < 12) {
       this.pausedByCap = true;
       return null;
     }
@@ -92,8 +100,9 @@ export class EndlessDirector {
     let tileCount = opening ? stage.tileCount : stage.refillTiles;
     tileCount = Math.max(12, Math.round(tileCount / 3) * 3);
     if (!opening) {
+      // 补牌量不得超过剩余容量（保持 3 的倍数），上限 120 是硬约束
       const capped = Math.floor(remainingCapacity / 3) * 3;
-      tileCount = Math.max(12, Math.min(tileCount, Math.max(12, capped)));
+      tileCount = Math.min(tileCount, capped);
     }
 
     const waveSeed = (this.seed ^ Math.imul(this.waveIndex + 1, 0x9e3779b9)) | 0;

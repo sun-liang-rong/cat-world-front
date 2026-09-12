@@ -55,7 +55,7 @@ export class RankScreen {
   ) {}
 
   loadAndCreate(onReady?: () => void) {
-    this.assets.loadImages([
+    this.assets.loadImagesFor(this, [
       'home/home_bg',
       'rank/title_banner',
       COMMON_UI_ASSETS.backButton,
@@ -107,6 +107,7 @@ export class RankScreen {
     const bottom = -visibleSize.height / 2;
     this.rankUI = new Node('RankUI');
     this.root.addChild(this.rankUI);
+    this.rankUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     this.rankUI.active = this.active;
     this.toastY = bottom + 420;
 
@@ -230,7 +231,10 @@ export class RankScreen {
     }).catch(error => {
       console.error('[CatWorld] Failed to load rank list', error);
       if (token !== this.loadToken || !this.rankUI) return;
-      this.renderList({ source: 'empty', tab: this.currentTab, entries: [] });
+      // 拉取失败只展示错误提示；不要走空列表渲染，否则「还没有人上榜」会和报错同屏矛盾
+      this.listContent!.destroyAllChildren();
+      this.emptyState!.active = false;
+      this.listContent!.parent!.active = false;
       this.mockCaption!.string = '排行榜暂时连不上，请稍后重试';
       this.mockCaption!.node.active = true;
     });

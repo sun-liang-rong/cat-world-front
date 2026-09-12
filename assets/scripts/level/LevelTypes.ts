@@ -63,6 +63,20 @@ export interface LevelScore {
   estimatedFailureRate: number;
   /** 模拟过程中偏离当前最佳选择的比例（0-100）。 */
   wrongChoiceRisk: number;
+  /**
+   * 模拟玩家失败时的平均棋盘进度（已取走牌数占比，0-100）。
+   * 越高说明失败越集中在"快赢"的尾段——失败的可挽回感越强；
+   * 中盘就失败的关卡是"绝望型失败"，直接劝退。
+   */
+  failureProgressAvg: number;
+  /** 模拟失败局中，失败瞬间槽内存在 ≥1 对听牌的比例（0-100）。带着对子死 → 复活广告转化最高。 */
+  trappedPairRate: number;
+  /**
+   * 模拟失败局中，复活（按游戏规则清掉槽内最多对子的 2 张，无对子清 1 张）后
+   * 剩余棋盘可解的比例（0-100）。玩家看广告复活后必须真能救回来，
+   * 否则广告信任会崩。无失败局时记 100。
+   */
+  reviveRescueRate: number;
   comboOpportunities: number;
   maxCombo: number;
   comebackOpportunities: number;
@@ -79,6 +93,16 @@ export interface LevelDefinition {
   level: number;
   seed: number;
   archetype: LevelArchetype;
+  /**
+   * 生成时使用的关卡角色（normal 缺省）。随定义透传给 GameScreen/Main，
+   * 便于按角色做差异化结算（如难关的复活策略）。
+   */
+  role?: LevelRole;
+  /**
+   * 由 DifficultyPlan 透传的难关免费复活标记（LevelSystem 在生成完成后附上），
+   * 仅在 role === 'spike' 且玩家处于连败中时成立。
+   */
+  freeRevive?: boolean;
   slotCapacity: number;
   kindCount: number;
   tiles: TileDefinition[];
@@ -91,6 +115,14 @@ export interface SolverOptions {
   maxStates?: number;
   analyzeBranches?: boolean;
   preferredSolution?: number[];
+  /** Reuse a prebuilt cover graph (generator builds one per candidate). */
+  coverGraph?: unknown;
+  /**
+   * 从对局中间状态求解（复活可解性检查专用）：
+   * active 为剩余牌掩码（与 level.tiles 等长），counts 为槽内各 kind 的数量。
+   * 提供时跳过见证路径直走，从该状态直接 DFS；pathMetrics 无意义（返回全 0）。
+   */
+  initialState?: { active: boolean[]; counts: number[] };
 }
 
 export interface SolverResult {
@@ -128,7 +160,31 @@ export interface PlayerRun {
   nearFailureCount: number;
   collectedElements: number;
   matchCount: number;
+  /** 本局关卡角色，旧存档可缺省。 */
+  role?: LevelRole;
+  /** 失败时已收集牌占总牌的百分比 0-100。 */
+  failProgress?: number;
+  /** 失败瞬间槽内是否已有听牌对子。 */
+  failHadPair?: boolean;
+  /** 本局是否用过复活；看广告通关不算连胜。 */
+  revived?: boolean;
+  /** 本次复活是否为连败难关赠送的免费复活。 */
+  reviveFree?: boolean;
 }
+
+export type AdFunnelBand = 'l1_5' | 'l6_10' | 'l11_22' | 'l23';
+
+export interface AdFunnelBandStats {
+  fails: number;
+  pairFails: number;
+  failProgressSum: number;
+  adRevives: number;
+  freeRevives: number;
+  reviveWins: number;
+  doubleCoins: number;
+}
+
+export type AdFunnelState = Record<AdFunnelBand, AdFunnelBandStats>;
 
 export interface PlayerPerformanceSnapshot {
   sampleSize: number;
@@ -146,6 +202,12 @@ export interface DifficultyPlan {
   targetDifficulty: number;
   rescue: boolean;
   role: LevelRole;
+  /**
+   * 难关免费复活（仅 role === 'spike' 时有意义）：连败中打难关的玩家失败时
+   * 不看广告直接复活一次（留存兜底）；无连败时该字段为假，走正常广告复活
+   * （难关失败正是复活广告转化最高的场景，不能白送）。
+   */
+  freeRevive?: boolean;
   reason: 'onboarding' | 'steady' | 'player_struggling' | 'player_mastering' | 'recovery'
     | 'scheduled_breather' | 'scheduled_spike'
     | 'deep_rescue' | 'spike_cancelled_failure' | 'spike_cancelled_mastery' | 'slight_help';

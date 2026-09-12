@@ -51,6 +51,14 @@ export interface SettlementPopupOptions {
   onReplay: () => void;
   /** 激励视频完成后，将本局从失败状态恢复为可继续操作。 */
   onRevive?: () => void;
+  /**
+   * 免费复活（连败中打难关的留存兜底）：不看广告直接执行 onRevive。
+   * 由 DifficultyController 在连败 ≥1 且触发 spike 时随关卡透传，每局仍只复活一次；
+   * 无连败的难关失败不附带此标记，正常走广告复活。
+   */
+  freeRevive?: boolean;
+  /** 失败时槽内是否已有听牌对子，用于「就差一对」文案。 */
+  hadTrayPair?: boolean;
   /** 激励视频完成后补发与基础通关奖励相同数量的金币。 */
   onDoubleReward?: () => void;
   onWatchAd?: () => Promise<RewardedAdResult>;
@@ -118,7 +126,7 @@ interface PopupSection {
 const TITLE_TEXTS: Record<PopupMode, string> = {
   win: '关卡完成!',
   challenge: '超萌挑战!',
-  endless: '无尽挑战',
+  endless: '本局结束',
   fail: '差一点!',
 };
 
@@ -182,7 +190,10 @@ export class SettlementPopup extends Component {
       }
       Object.keys(POPUP_ASSETS).forEach(key => {
         const frame = this.assets.getFrame(POPUP_ASSETS[key as PopupFrameKey]);
-        if (frame) this.frames[key as PopupFrameKey] = frame;
+        if (!frame) return;
+        // 装饰切图不要打进动态图集，避免宽高被换成图集尺寸
+        frame.packable = false;
+        this.frames[key as PopupFrameKey] = frame;
       });
       const coinFrame = this.assets.getFrame(COMMON_UI_ASSETS.coinIcon);
       if (coinFrame) this.frames.coinIcon = coinFrame;
@@ -241,17 +252,25 @@ export class SettlementPopup extends Component {
     const buttonCenterY = -(panelHeight / 2 - BOTTOM_PAD - buttonSectionHeight / 2);
     this.buildActionButtons(group, buttonCenterY + (hasAdRow ? (AD_HEIGHT + AD_ROW_GAP) / 2 : 0), mode);
     if (hasAdRow) {
-      const adText = mode === 'fail' ? '看广告清出一对' : '看广告×2金币';
+      const freeRevive = mode === 'fail' && this.options.freeRevive === true;
+      const adText = mode === 'fail'
+        ? (freeRevive ? '免费复活清出一对' : '看广告清出一对')
+        : '看广告×2金币';
       const adCompleted = mode === 'fail'
         ? () => this.options.onRevive!()
         : () => this.options.onDoubleReward!();
-      this.createAdButton(group, adText, 'red', 0, buttonCenterY - (CAPSULE_HEIGHT + AD_ROW_GAP) / 2, adCompleted);
+      this.createAdButton(group, adText, 'red', 0, buttonCenterY - (CAPSULE_HEIGHT + AD_ROW_GAP) / 2, adCompleted, freeRevive);
     }
   }
 
   private hasAdRow(mode: PopupMode) {
+    // 激励视频已接入（RewardedAdService）：失败给「看广告清出一对」复活，
+    // 胜利/无尽给「看广告×2金币」。回调由 GameScreen 按模式与剩余机会注入。
+    // 难关失败例外：freeRevive 时不依赖广告，按钮直接复活（广告总开关关闭时也可用）。
+    if (mode === 'fail') {
+      return !!this.options.onRevive && (!!this.options.onWatchAd || this.options.freeRevive === true);
+    }
     if (!this.options.onWatchAd) return false;
-    if (mode === 'fail') return !!this.options.onRevive;
     return !!this.options.onDoubleReward && (mode !== 'endless' || this.options.coinReward > 0);
   }
 
@@ -260,8 +279,8 @@ export class SettlementPopup extends Component {
       const info = this.options.endless!;
       return [
         { height: 88, build: (parent, y) => this.buildEndlessStat(parent, y, info) },
-        { height: 24, build: (parent, y) => this.buildEndlessRecord(parent, y, info) },
-        { height: 22, build: (parent, y) => this.buildEndlessDuration(parent, y, info) },
+        { height: 60, build: (parent, y) => this.buildEndlessDurationRow(parent, y, info) },
+        { height: 28, build: (parent, y) => this.buildEndlessRecord(parent, y, info) },
         { height: 60, build: (parent, y) => this.buildRewardRow(parent, y) },
       ];
     }
@@ -461,10 +480,13 @@ export class SettlementPopup extends Component {
     this.image(node, 'Toolbox', this.frames.toolbox, -CARD_WIDTH / 2 + 24 + iconSize / 2, 0, iconSize, iconSize);
 
     const textLeft = -CARD_WIDTH / 2 + 24 + iconSize + 22;
-    const titleWidth = this.textWidth('收集槽位已满', 30);
-    const title = this.label(node, '收集槽位已满', textLeft + titleWidth / 2, 20, 30, new Color(233, 64, 57));
+    const titleText = this.options.hadTrayPair ? '就差一对' : '收集槽位已满';
+    const titleWidth = this.textWidth(titleText, 30);
+    const title = this.label(node, titleText, textLeft + titleWidth / 2, 20, 30, new Color(233, 64, 57));
     title.isBold = true;
-    const messageText = '再挑战一次，完成本关目标吧!';
+    const messageText = this.options.hadTrayPair
+      ? '看广告清出这对，下一手就能消'
+      : '再挑战一次，完成本关目标吧!';
     const messageWidth = this.textWidth(messageText, 22);
     const message = this.label(node, messageText, textLeft + messageWidth / 2, -20, 22, new Color(121, 83, 59));
     message.isBold = true;
@@ -474,8 +496,8 @@ export class SettlementPopup extends Component {
   private buildActionButtons(parent: Node, y: number, mode: PopupMode) {
     const leftText = mode === 'fail'
       ? '再玩一次'
-      : mode === 'endless' ? '再玩一局' : mode === 'challenge' ? '回到首页' : this.options.nextButtonLabel ?? '下一关';
-    const leftClick = (mode === 'fail' || mode === 'endless')
+      : mode === 'endless' ? '再玩一局' : mode === 'challenge' ? '再挑战一次' : this.options.nextButtonLabel ?? '下一关';
+    const leftClick = (mode === 'fail' || mode === 'endless' || mode === 'challenge')
       ? this.options.onReplay
       : this.options.onNextLevel;
     const offset = (CAPSULE_WIDTH + CAPSULE_GAP) / 2;
@@ -523,16 +545,25 @@ export class SettlementPopup extends Component {
     record.isBold = true;
   }
 
-  private buildEndlessDuration(parent: Node, y: number, info: EndlessSettlementInfo) {
-    const duration = this.label(
+  private buildEndlessDurationRow(parent: Node, y: number, info: EndlessSettlementInfo) {
+    this.buildRowPill(parent, y);
+    const prefix = '坚持时长：';
+    const value = this.formatDuration(info.durationMs);
+    const prefixWidth = this.textWidth(prefix, 26);
+    const valueWidth = this.textWidth(value, 30);
+    const gap = 10;
+    const startX = -(prefixWidth + gap + valueWidth) / 2;
+    const prefixLabel = this.label(parent, prefix, startX + prefixWidth / 2, y, 26, new Color(112, 62, 29));
+    prefixLabel.isBold = true;
+    const valueLabel = this.label(
       parent,
-      `坚持 ${this.formatDuration(info.durationMs)} · 阶段 ${info.stage}`,
-      0,
+      value,
+      startX + prefixWidth + gap + valueWidth / 2,
       y,
-      20,
-      new Color(121, 83, 59),
+      30,
+      new Color(234, 111, 20),
     );
-    duration.isBold = true;
+    valueLabel.isBold = true;
   }
 
   private formatDuration(durationMs: number) {
@@ -549,6 +580,7 @@ export class SettlementPopup extends Component {
     x: number,
     y: number,
     onCompleted: () => void,
+    skipAd = false,
   ) {
     const node = SettlementButton.create(parent, this.assets, {
       text,
@@ -557,11 +589,20 @@ export class SettlementPopup extends Component {
       height: AD_HEIGHT,
       scale: 1,
       fontSize: 30,
-      onClick: () => this.watchAd(onCompleted),
+      onClick: skipAd ? () => this.completeWithoutAd(onCompleted) : () => this.watchAd(onCompleted),
     });
     node.setPosition(x, y);
     this.adButton = node.getComponent(Button);
     this.adButtonLabel = node.getChildByName('Label')?.getComponent(Label) || null;
+  }
+
+  /** 免费复活（难关助力）：不走激励视频，点击直接发放复活。 */
+  private completeWithoutAd(onCompleted: () => void) {
+    if (this.adBusy || !this.adButton) return;
+    this.adBusy = true;
+    this.adButton.interactable = false;
+    if (this.adButtonLabel) this.adButtonLabel.string = '已领取';
+    onCompleted();
   }
 
   private async watchAd(onCompleted: () => void) {
@@ -727,7 +768,16 @@ export class SettlementPopup extends Component {
   }
 
   private fitSize(frame: SpriteFrame, boxWidth: number, boxHeight: number) {
-    const ratio = frame.width / frame.height;
+    // 动态合图后 frame.width/height 会变成图集尺寸（常见为正方形），
+    // 用它算比例会把横向绶带压成一团。按切图像素来。
+    const rect = frame.rect;
+    const original = frame.originalSize;
+    const width = rect.width > 0 ? rect.width : original.width;
+    const height = rect.height > 0 ? rect.height : original.height;
+    if (width <= 0 || height <= 0) {
+      return { width: boxWidth, height: boxHeight };
+    }
+    const ratio = width / height;
     const boxRatio = boxWidth / boxHeight;
     return ratio > boxRatio
       ? { width: boxWidth, height: Math.round(boxWidth / ratio) }
@@ -749,9 +799,9 @@ export class SettlementPopup extends Component {
     if (frame) {
       const sprite = node.addComponent(Sprite);
       sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+      sprite.trim = false;
       sprite.spriteFrame = frame;
     }
-    transform.setContentSize(width, height);
     return node;
   }
 

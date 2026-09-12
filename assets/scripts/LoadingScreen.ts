@@ -83,6 +83,7 @@ export class LoadingScreen {
     const bottom = -visibleSize.height / 2;
     this.loadingUI = new Node('LoadingUI');
     this.root.addChild(this.loadingUI);
+    this.loadingUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     const entrance = this.loadingUI.addComponent(UIOpacity);
     entrance.opacity = 0;
     tween(entrance).to(0.25, { opacity: 255 }).start();

@@ -31,17 +31,7 @@ export class DifficultyController {
     (Array.isArray(runs) ? runs : []).slice(-this.historyLimit).forEach(run => {
       if (!run || typeof run !== 'object') return;
       if (typeof run.won !== 'boolean' || !Number.isFinite(run.level) || run.level <= 0) return;
-      this.history.push({
-        won: run.won,
-        level: Math.max(1, Math.floor(run.level)),
-        remainingSlots: Math.max(0, Number.isFinite(run.remainingSlots) ? run.remainingSlots : 0),
-        mistakes: Math.max(0, Number.isFinite(run.mistakes) ? run.mistakes : 0),
-        elapsedMs: Math.max(0, Number.isFinite(run.elapsedMs) ? run.elapsedMs : 0),
-        decisionCount: Math.max(0, Number.isFinite(run.decisionCount) ? run.decisionCount : 0),
-        nearFailureCount: Math.max(0, Number.isFinite(run.nearFailureCount) ? run.nearFailureCount : 0),
-        collectedElements: Math.max(0, Number.isFinite(run.collectedElements) ? run.collectedElements : 0),
-        matchCount: Math.max(0, Number.isFinite(run.matchCount) ? run.matchCount : 0),
-      });
+      this.history.push(DifficultyController.copyRun(run));
     });
   }
 
@@ -101,8 +91,10 @@ export class DifficultyController {
     // 优先级1：智能取消难关 - 避免"雪上加霜"
     if (scheduled === 'spike') {
       const mastery = this.masteryScore(snapshot);
-      // 连败 ≥1 次直接取消难关
-      if (snapshot.failureStreak >= 1) {
+      // 连败 ≥2 次才取消难关：难关失败本身是复活广告转化最高的场景，
+      // 连败 1 次就取消会把变现高峰一起扔掉；难关失败会送一次免费复活
+      // （GameScreen 注入 freeRevive）兜底留存，所以单败不再熔断。
+      if (snapshot.failureStreak >= 2) {
         this.currentRescue = false;
         this.recoveryStep = 0;
         return {
@@ -113,8 +105,9 @@ export class DifficultyController {
           recoveryStep: 0,
         };
       }
-      // 精通度 <0.5（胜率低或操作不熟练）时取消难关
-      if (mastery < 0.5) {
+      // 精通度 <0.5 只在变现档之前取消难关。L23+ 难关是复活广告高峰，
+      // 不能因为「看起来不太熟」把变现口误杀掉；连败 ≥2 仍会取消。
+      if ((level ?? 0) < 23 && mastery < 0.5) {
         this.currentRescue = false;
         this.recoveryStep = 0;
         return {
@@ -125,13 +118,16 @@ export class DifficultyController {
           recoveryStep: 0,
         };
       }
-      // 通过检查，可以触发难关
+      // 通过检查，可以触发难关。连败中（仅 1 次）的玩家打难关附赠免费复活：
+      // 难关失败是复活广告转化最高的场景，所以无连败时不白送；
+      // 但连败中的人已经站在流失边缘，再被难关打死就会卸载，给一次不看广告的复活。
       this.currentRescue = false;
       this.recoveryStep = 0;
       return {
         targetDifficulty: this.clamp(base + 9, 0, 100),
         rescue: false,
         role: 'spike',
+        freeRevive: snapshot.failureStreak >= 1,
         reason: 'scheduled_spike',
         recoveryStep: 0,
       };
@@ -262,10 +258,32 @@ export class DifficultyController {
     );
   }
 
+  private static copyRun(run: PlayerRun): PlayerRun {
+    const copied: PlayerRun = {
+      won: run.won,
+      level: Math.max(1, Math.floor(run.level)),
+      remainingSlots: Math.max(0, Number.isFinite(run.remainingSlots) ? run.remainingSlots : 0),
+      mistakes: Math.max(0, Number.isFinite(run.mistakes) ? run.mistakes : 0),
+      elapsedMs: Math.max(0, Number.isFinite(run.elapsedMs) ? run.elapsedMs : 0),
+      decisionCount: Math.max(0, Number.isFinite(run.decisionCount) ? run.decisionCount : 0),
+      nearFailureCount: Math.max(0, Number.isFinite(run.nearFailureCount) ? run.nearFailureCount : 0),
+      collectedElements: Math.max(0, Number.isFinite(run.collectedElements) ? run.collectedElements : 0),
+      matchCount: Math.max(0, Number.isFinite(run.matchCount) ? run.matchCount : 0),
+    };
+    if (run.role === 'normal' || run.role === 'breather' || run.role === 'spike') copied.role = run.role;
+    if (Number.isFinite(run.failProgress)) copied.failProgress = Math.max(0, Math.min(100, Math.floor(run.failProgress!)));
+    if (typeof run.failHadPair === 'boolean') copied.failHadPair = run.failHadPair;
+    if (run.revived === true) copied.revived = true;
+    if (run.reviveFree === true) copied.reviveFree = true;
+    return copied;
+  }
+
   private streak(wins: boolean) {
     let count = 0;
     for (let index = this.history.length - 1; index >= 0; index -= 1) {
-      if (this.history[index].won !== wins) break;
+      const run = this.history[index];
+      if (wins && run.revived === true) break;
+      if (run.won !== wins) break;
       count += 1;
     }
     return count;

@@ -14,7 +14,7 @@ import {
   Vec3,
   view,
 } from 'cc';
-import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
+import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { ComboTracker } from './ComboTracker';
 import { getCatDefinition, getCatSkillConfig } from './GameContent';
@@ -27,7 +27,6 @@ import { LevelDefinition, PlayerRun, TileDefinition, TileGeometry } from './leve
 import { CatId, GamePetPosition, ItemId } from './PlayerTypes';
 import { LEVELS_PER_THEME } from './TownContent';
 import { PerformanceManager } from './PerformanceManager';
-import { managedTween } from './TweenManager';
 
 type Tile = {
   node: Node;
@@ -41,9 +40,18 @@ type Tile = {
   boardAngle: number;
   active: boolean;
   inTray: boolean;
+  // 子节点引用：每帧热路径（遮挡刷新、缩放、换肤）直接取用，
+  // 避免重复的 getChildByName 字符串查找。
+  card: Node;
+  item: Node;
+  blockedOverlay: Node;
+  targetOverlay: Node;
+  // 遮挡判定用的几何体。牌创建后 width/height/boardPosition/boardAngle 不再变化，
+  // 缓存下来可省掉每次点击上万个临时对象分配（overlapsGeometry 只读不写）。
+  geometry: TileGeometry;
 };
 
-type ActiveTool = 'hammer' | 'glove_menu' | 'glove_swap' | 'glove_return' | null;
+type ActiveTool = 'hammer' | null;
 
 type ToolButtonView = {
   node: Node;
@@ -180,10 +188,20 @@ export interface GameScreenOptions {
   onPlaySound: (effect: AudioEffect) => void;
   onVibrate: () => void;
   onPerformance: (run: PlayerRun) => void;
+  onAdFunnel?: (event: {
+    level: number;
+    fail?: boolean;
+    failHadPair?: boolean;
+    failProgress?: number;
+    adRevive?: boolean;
+    freeRevive?: boolean;
+    reviveWin?: boolean;
+    doubleCoins?: boolean;
+  }) => void;
   onNextLevel: () => void;
   onReturnHome: () => void;
   onReplay: () => void;
-  onWatchAd: () => Promise<RewardedAdResult>;
+  onWatchAd?: () => Promise<RewardedAdResult>;
   /**
    * 启动预创建：只搭好关卡 UI，等 startPlay() 再开始计时和显示。
    * 加载页用它在进度条走完前把关卡准备好，避免开打时再等远程图。
@@ -194,8 +212,6 @@ export interface GameScreenOptions {
 export class GameScreen {
   private readonly baseTraySlots: number;
   private readonly trayFlightDuration = 0.32;
-  private readonly traySettleDuration = 0.08;
-  private readonly traySettleReturnDuration = 0.06;
   private readonly trayReflowDuration = 0.16;
   private readonly traySlotWidth = 88;
   private readonly traySlotHeight = 94;
@@ -262,8 +278,6 @@ export class GameScreen {
   private readonly toolButtonViews = new Map<ItemId, ToolButtonView>();
   private readonly usedTools = new Set<ItemId>();
   private extraSlotNode: Node | null = null;
-  private gloveMenuNode: Node | null = null;
-  private gloveSelectedTile: Tile | null = null;
   private activeTool: ActiveTool = null;
   // 装备猫咪的技能：充能进度跨局保留，技能只由玩家手动触发
   private equippedCatId: CatId | null = null;
@@ -301,6 +315,8 @@ export class GameScreen {
     }
     this.gameUI = new Node('GameUI');
     root.addChild(this.gameUI);
+    const visibleSize = view.getVisibleSize();
+    this.gameUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     this.gameUI.active = false;
   }
 
@@ -334,6 +350,8 @@ export class GameScreen {
     this.pendingStart = false;
     this.playStarted = true;
     this.startedAt = Date.now();
+    // 无尽 HUD 的「坚持时长」走 director，把开打时刻同步过去，和结算 durationMs 对齐
+    this.endlessDirector?.markStarted(this.startedAt);
     this.coins = this.options.getCoins();
     this.equippedCatId = this.options.getEquippedCat();
     if (this.equippedCatId) {
@@ -375,6 +393,8 @@ export class GameScreen {
     this.awaitingLevelDefinition = false;
     this.boardIntroActive = false;
     this.hidePreparingHint();
+    // 加载等待不计入通关用时，与第一次开打时棋盘已就绪对齐。
+    this.startedAt = Date.now();
     this.beginBoardIntro();
   }
 
@@ -400,6 +420,7 @@ export class GameScreen {
     back.setPosition(-316, headerY);
     back.addComponent(UITransform).setContentSize(BACK_BUTTON_SIZE.hitWidth, BACK_BUTTON_SIZE.hitHeight);
     this.image(back, COMMON_UI_ASSETS.backButton, 0, 0, BACK_BUTTON_SIZE.visualWidth, BACK_BUTTON_SIZE.visualHeight);
+
     const backButton = back.addComponent(Button);
     backButton.transition = Button.Transition.SCALE;
     backButton.zoomScale = 0.93;
@@ -477,7 +498,7 @@ export class GameScreen {
       ? -visibleSize.width / 2 + 78
       : visibleSize.width / 2 - 78;
     const minPetY = -visibleSize.height / 2 + 88;
-    const maxPetY = visibleSize.height / 2 - 118;
+    const maxPetY = belowWeChatCapsule(visibleSize.height / 2, 156);
     const defaultPetY = Math.max(220, headerY - 300);
     const petY = Math.max(
       minPetY,
@@ -505,8 +526,6 @@ export class GameScreen {
     this.comboFeedbackOpacity = null;
     this.comboFeedbackGlow = null;
     this.extraSlotNode = null;
-    this.gloveMenuNode = null;
-    this.gloveSelectedTile = null;
     this.activeTool = null;
     this.boardIntroActive = false;
     this.boardIntroSpawning = false;
@@ -822,7 +841,7 @@ export class GameScreen {
       if (portraitSprite) portraitSprite.color = new Color(154, 154, 154, 255);
       panel.nameLabel.string = '宠物位';
       panel.cooldownLabel.string = '';
-      panel.descriptionLabel.string = '还没有宠物\n去图鉴装备一只吧';
+      panel.descriptionLabel.string = '还没有宠物\n去猫咪社装备一只吧';
       panel.chargeLabel.string = '';
       panel.statusLabel.string = '去上阵';
       panel.cooldownOverlay.active = false;
@@ -878,16 +897,6 @@ export class GameScreen {
       panel.chargeFill.roundRect(-33, -5, width, 10, 5);
       panel.chargeFill.fill();
     }
-  }
-
-  private wrapCatSkillDescription(text: string) {
-    // 每行 14 字 × 18px = 252px，确保在 260px 宽的描述框内单行放下不二次折行
-    const characters = text.replace(/\s+/g, '').split('');
-    const lines: string[] = [];
-    for (let index = 0; index < characters.length; index += 14) {
-      lines.push(characters.slice(index, index + 14).join(''));
-    }
-    return lines.slice(0, 2).join('\n');
   }
 
   private formatCatSkillRemaining(milliseconds: number) {
@@ -965,9 +974,9 @@ export class GameScreen {
       panelGraphics.stroke();
     }
 
-    const title = this.label(panel, '关卡准备中', 0, 16, 28, new Color(111, 62, 28));
+    const title = this.label(panel, '棋盘加载中', 0, 16, 28, new Color(111, 62, 28));
     title.isBold = true;
-    this.preparingHintLabel = this.label(panel, '正在叠放卡牌', 0, -22, 21, new Color(112, 69, 40));
+    this.preparingHintLabel = this.label(panel, '正在挑选高压关卡', 0, -22, 21, new Color(112, 69, 40));
     this.preparingHintLabel.isBold = true;
 
     const opacity = overlay.addComponent(UIOpacity);
@@ -984,7 +993,7 @@ export class GameScreen {
     this.preparingHintTimer = setInterval(() => {
       if (this.destroyed || !this.preparingHintLabel?.node.isValid) return;
       dots = (dots + 1) % 4;
-      this.preparingHintLabel.string = `正在叠放卡牌${'.'.repeat(dots)}`;
+      this.preparingHintLabel.string = `正在挑选高压关卡${'.'.repeat(dots)}`;
     }, 380);
   }
 
@@ -1145,7 +1154,7 @@ export class GameScreen {
     const moveDuration = pm.adjustDuration(0.52);
     const fadeDuration = pm.adjustDuration(0.28);
 
-    managedTween(tile.node)
+    tween(tile.node)
       .delay(baseDelay)
       .to(moveDuration, {
         position: target,
@@ -1153,7 +1162,7 @@ export class GameScreen {
         angle: tile.boardAngle,
       }, { easing: 'cubicOut' })
       .start();
-    managedTween(opacity)
+    tween(opacity)
       .delay(baseDelay)
       .to(fadeDuration, { opacity: 255 }, { easing: 'sineOut' })
       .call(() => {
@@ -1232,6 +1241,7 @@ export class GameScreen {
     );
     targetGraphics.stroke();
     targetOverlay.active = false;
+    const boardPosition = node.position.clone();
     const tile: Tile = {
       node,
       kind,
@@ -1240,10 +1250,21 @@ export class GameScreen {
       layer: placement.layer,
       width: placement.width,
       height: placement.height,
-      boardPosition: node.position.clone(),
+      boardPosition,
       boardAngle: angle,
       active: true,
       inTray: false,
+      card,
+      item,
+      blockedOverlay,
+      targetOverlay,
+      geometry: {
+        x: boardPosition.x,
+        y: boardPosition.y,
+        width: placement.width,
+        height: placement.height,
+        rotation: angle,
+      },
     };
     node.on(Node.EventType.TOUCH_END, () => this.onTileTap(tile));
     return tile;
@@ -1252,16 +1273,15 @@ export class GameScreen {
   private refreshBoardTileStates() {
     this.boardTiles.forEach(tile => {
       if (!tile.node.isValid) return;
-      const blockedOverlay = tile.node.getChildByName('BlockedOverlay');
-      const targetOverlay = tile.node.getChildByName('ToolTargetOverlay');
+      // 两个遮罩节点在 makeTile 里创建后就不再增删，直接引用即可，无需字符串查找。
       if (!tile.active || tile.inTray || this.boardIntroActive) {
-        if (blockedOverlay) blockedOverlay.active = false;
-        if (targetOverlay) targetOverlay.active = false;
+        tile.blockedOverlay.active = false;
+        tile.targetOverlay.active = false;
         return;
       }
       const top = this.isTopTile(tile);
-      if (blockedOverlay) blockedOverlay.active = !top;
-      if (targetOverlay) targetOverlay.active = this.activeTool === 'hammer' && top;
+      tile.blockedOverlay.active = !top;
+      tile.targetOverlay.active = this.activeTool === 'hammer' && top;
     });
   }
 
@@ -1274,15 +1294,6 @@ export class GameScreen {
     if (!tile.active) return;
     if (this.activeTool === 'hammer') {
       this.selectHammerTile(tile);
-      return;
-    }
-    if (
-      this.activeTool === 'glove_menu'
-      || this.activeTool === 'glove_swap'
-      || this.activeTool === 'glove_return'
-    ) {
-      this.options.onPlaySound('click');
-      this.toast('请点击收集槽中的元素');
       return;
     }
     if (!this.isTopTile(tile)) {
@@ -1307,22 +1318,10 @@ export class GameScreen {
 
   private onTrayTileTap(tile: Tile) {
     if (!tile.inTray || this.gameOver) return;
-    if (this.activeTool === 'glove_return') {
-      this.returnTrayTile(tile);
-      return;
-    }
-    if (this.activeTool === 'glove_swap') {
-      this.selectGloveTile(tile);
-      return;
-    }
     if (this.activeTool === 'hammer') {
       this.options.onPlaySound('click');
       this.toast('锤子只能移除棋盘上的元素');
       return;
-    }
-    if (this.activeTool === 'glove_menu') {
-      this.options.onPlaySound('click');
-      this.toast('请先选择手套功能');
     }
   }
 
@@ -1341,14 +1340,10 @@ export class GameScreen {
     });
   }
 
+  // 牌创建时就把几何体算好缓存在 tile.geometry 上，遮挡判定直接复用，
+  // 不再每次调用新建对象（牌创建后几何体不变）。
   private tileGeometry(tile: Tile): TileGeometry {
-    return {
-      x: tile.boardPosition.x,
-      y: tile.boardPosition.y,
-      width: tile.width,
-      height: tile.height,
-      rotation: tile.boardAngle,
-    };
+    return tile.geometry;
   }
 
   private collectTile(tile: Tile) {
@@ -1407,7 +1402,7 @@ export class GameScreen {
     tile.node.setScale(new Vec3(1.08, 1.08, 1));
 
     // 使用更丝滑的缓动函数组合
-    managedTween(motion)
+    tween(motion)
       .to(this.trayFlightDuration, { ratio: 1 }, {
         easing: 'sineInOut',  // 改用更柔和的缓动
         onUpdate: () => {
@@ -1458,21 +1453,51 @@ export class GameScreen {
         this.trayLayer.addChild(tile.node);
         tile.node.setPosition(targetPosition);
         tile.node.angle = 0;
-        this.resizeTrayTile(tile.node);
-        tile.node.setScale(new Vec3(0.96, 0.96, 1));  // 稍小开始
+        this.resizeTrayTile(tile);
+        tile.node.setScale(new Vec3(0.96, 0.96, 1));
 
-        // 更有弹性的落地动画
-        managedTween(tile.node)
-          .to(0.12, { scale: new Vec3(1.12, 1.12, 1) }, { easing: 'backOut' })
-          .to(0.08, { scale: new Vec3(0.98, 0.98, 1) }, { easing: 'sineOut' })
-          .to(0.06, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
-          .call(() => {
-            this.pendingTrayAnimations = Math.max(0, this.pendingTrayAnimations - 1);
-            this.resolveTrayMatches();
-          })
-          .start();
+        // 检测是否即将形成三连
+        const willMatch = this.checkWillMatch(tile.kind);
+
+        if (willMatch) {
+          // 形成三连：极简落地动画，立即触发消除
+          tween(tile.node)
+            .to(0.06, { scale: new Vec3(1.05, 1.05, 1) }, { easing: 'quadOut' })
+            .to(0.04, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
+            .start();
+
+          // 不等动画完成，立即减少计数并触发消除
+          this.pendingTrayAnimations = Math.max(0, this.pendingTrayAnimations - 1);
+          // 使用短延迟让视觉上卡片"落地"
+          setTimeout(() => {
+            if (!this.destroyed) this.resolveTrayMatches();
+          }, 60);
+        } else {
+          // 正常的弹性落地动画
+          tween(tile.node)
+            .to(0.12, { scale: new Vec3(1.12, 1.12, 1) }, { easing: 'backOut' })
+            .to(0.08, { scale: new Vec3(0.98, 0.98, 1) }, { easing: 'sineOut' })
+            .to(0.06, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
+            .call(() => {
+              this.pendingTrayAnimations = Math.max(0, this.pendingTrayAnimations - 1);
+              this.resolveTrayMatches();
+            })
+            .start();
+        }
       })
       .start();
+  }
+
+  // 检测某个类型的卡片是否会形成三连
+  private checkWillMatch(kind: number): boolean {
+    let count = 0;
+    for (const tile of this.trayTiles) {
+      if (tile.kind === kind) {
+        count++;
+        if (count >= 2) return true;  // 已有2张，加上当前这张就是3张
+      }
+    }
+    return false;
   }
 
   private resolveTrayMatches() {
@@ -1708,32 +1733,28 @@ export class GameScreen {
     });
   }
 
-  private resizeTrayTile(node: Node) {
+  private resizeTrayTile(tile: Tile) {
+    const node = tile.node;
     node.getComponent(UITransform)!.setContentSize(this.traySlotWidth, this.traySlotHeight);
-    const card = node.getChildByName('Card');
-    if (card) card.active = true;
-    card?.getComponent(UITransform)?.setContentSize(this.traySlotWidth, this.traySlotHeight);
-    const cardSprite = card?.getComponent(Sprite);
+    tile.card.active = true;
+    tile.card.getComponent(UITransform)?.setContentSize(this.traySlotWidth, this.traySlotHeight);
+    const cardSprite = tile.card.getComponent(Sprite);
     const trayCardFrame = this.assets.getFrame(this.gamePath(2));
     if (cardSprite && trayCardFrame) cardSprite.spriteFrame = trayCardFrame;
-    const blockedOverlay = node.getChildByName('BlockedOverlay');
-    if (blockedOverlay) blockedOverlay.active = false;
-    const item = node.getChildByName('Item');
-    item?.setPosition(0, 4);
-    item?.getComponent(UITransform)?.setContentSize(61, 61);
+    tile.blockedOverlay.active = false;
+    tile.item.setPosition(0, 4);
+    tile.item.getComponent(UITransform)?.setContentSize(61, 61);
   }
 
   private resizeBoardTile(tile: Tile) {
     tile.node.getComponent(UITransform)!.setContentSize(tile.width, tile.height);
-    const card = tile.node.getChildByName('Card');
-    if (card) card.active = true;
-    card?.getComponent(UITransform)?.setContentSize(tile.width, tile.height);
-    const cardSprite = card?.getComponent(Sprite);
+    tile.card.active = true;
+    tile.card.getComponent(UITransform)?.setContentSize(tile.width, tile.height);
+    const cardSprite = tile.card.getComponent(Sprite);
     const boardCardFrame = this.assets.getFrame(this.gamePath(2));
     if (cardSprite && boardCardFrame) cardSprite.spriteFrame = boardCardFrame;
-    const item = tile.node.getChildByName('Item');
-    item?.setPosition(0, 5);
-    item?.getComponent(UITransform)?.setContentSize(71, 71);
+    tile.item.setPosition(0, 5);
+    tile.item.getComponent(UITransform)?.setContentSize(71, 71);
   }
 
   private traySlotX(index: number) {
@@ -1768,10 +1789,6 @@ export class GameScreen {
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  }
-
-  private activeBoardCount() {
-    return this.boardTiles.filter(tile => tile.active && !tile.inTray).length;
   }
 
   private addEliminated(count: number) {
@@ -1895,7 +1912,7 @@ export class GameScreen {
       new Color(241, 139, 47),
       () => {
         this.closeLeaveConfirm();
-        if (this.options.endless) this.finish(false, true);
+        if (this.options.endless) this.finish(false);
         else this.options.onReturnHome();
       },
     );
@@ -1936,7 +1953,7 @@ export class GameScreen {
     this.leaveConfirmNode = null;
   }
 
-  private finish(win: boolean, skipRevive = false) {
+  private finish(win: boolean) {
     if (this.gameOver) return;
     this.gameOver = true;
     this.clearToolMode();
@@ -1944,6 +1961,8 @@ export class GameScreen {
     if (this.equippedCatId && this.catSkill) {
       this.options.onCatSkillCharge(this.equippedCatId, this.catSkill.charge);
     }
+    const failHadPair = !win && this.trayHasPair();
+    const failProgress = this.failProgressPercent();
     if (!this.performanceReported && !this.options.endless) {
       this.performanceReported = true;
       this.options.onPerformance({
@@ -1956,14 +1975,31 @@ export class GameScreen {
         nearFailureCount: this.nearFailureCount,
         collectedElements: this.collectedTotal,
         matchCount: this.matchCount,
+        role: this.options.levelDefinition?.role,
+        failProgress: win ? undefined : failProgress,
+        failHadPair: win ? undefined : failHadPair,
       });
+    }
+    if (!this.options.endless && !this.options.challenge) {
+      if (!win && !this.reviveUsed) {
+        this.options.onAdFunnel?.({
+          level: this.options.level,
+          fail: true,
+          failHadPair,
+          failProgress,
+        });
+      } else if (win && this.reviveUsed) {
+        this.options.onAdFunnel?.({
+          level: this.options.level,
+          reviveWin: true,
+        });
+      }
     }
     this.closeLeaveConfirm();
     this.options.onPlaySound(this.options.endless || win ? 'win' : 'fail');
     this.options.onVibrate();
     if (this.options.endless) {
-      if (!win && !skipRevive && !this.reviveUsed) this.openEndlessFailWithRevive();
-      else this.openEndlessSettlement();
+      this.openEndlessSettlement();
       return;
     }
     // 过关固定奖励 3 星：每主题 20 关 × 3 星 = 60 星，正好覆盖建筑三阶段（15/20/25）的星星消耗；
@@ -1987,11 +2023,9 @@ export class GameScreen {
       starReward,
       coinReward,
       rating: win ? this.calculateRating() : '未完成',
-      nextButtonLabel: challenge && win ? '回到首页' : undefined,
       onNextLevel: () => {
         this.options.onPlaySound('click');
-        if (challenge) this.options.onReturnHome();
-        else this.options.onNextLevel();
+        this.options.onNextLevel();
       },
       onReturnHome: () => {
         this.options.onPlaySound('click');
@@ -2004,6 +2038,11 @@ export class GameScreen {
       onWatchAd: this.options.onWatchAd,
       // 广告复活每局只开放一次；复活后再次失败时不再展示无效按钮。
       onRevive: win || this.reviveUsed ? undefined : () => this.reviveFromAd(),
+      // 连败中打难关（spike）失败送一次免费复活（不看广告，走同一套清对子逻辑）：
+      // 连败 1 次不再取消难关后，需要这个兜底避免难关变成纯劝退点；
+      // 无连败时此标记为空，难关失败仍走广告复活（变现高峰不白送）。
+      freeRevive: !win && !this.reviveUsed && this.options.levelDefinition?.freeRevive === true,
+      hadTrayPair: !win ? failHadPair : undefined,
       onDoubleReward: win ? () => this.doubleRewardFromAd() : undefined,
     });
   }
@@ -2021,31 +2060,6 @@ export class GameScreen {
     });
     this.coins = this.options.getCoins();
     return { durationMs, result };
-  }
-
-  private openEndlessFailWithRevive() {
-    this.settlementWin = false;
-    this.settlementPopup = SettlementPopup.open(this.gameUI, this.assets, {
-      win: false,
-      level: this.options.level,
-      stars: 0,
-      starReward: 0,
-      coinReward: 0,
-      rating: '未完成',
-      onNextLevel: () => this.options.onReplay(),
-      onReturnHome: () => {
-        this.options.onPlaySound('click');
-        this.recordEndlessIfNeeded();
-        this.options.onReturnHome();
-      },
-      onReplay: () => {
-        this.options.onPlaySound('click');
-        this.recordEndlessIfNeeded();
-        this.options.onReplay();
-      },
-      onWatchAd: this.options.onWatchAd,
-      onRevive: () => this.reviveFromAd(),
-    });
   }
 
   private openEndlessSettlement() {
@@ -2105,6 +2119,7 @@ export class GameScreen {
       : this.trayTiles.slice(-1);
     if (removed.length === 0) return;
 
+    const freeRevive = this.options.levelDefinition?.freeRevive === true;
     this.reviveUsed = true;
     this.gameOver = false;
     this.settlementPopup?.close();
@@ -2135,11 +2150,35 @@ export class GameScreen {
     this.refreshBoardTileStates();
     this.options.onPlaySound('match');
     this.options.onVibrate();
+    if (!this.options.endless && !this.options.challenge) {
+      this.options.onAdFunnel?.({
+        level: this.options.level,
+        adRevive: !freeRevive,
+        freeRevive,
+      });
+    }
+    const prefix = freeRevive ? '免费复活成功' : '广告复活成功';
     this.toast(returned
-      ? '广告复活成功，清出一对并把一张放回棋盘'
+      ? `${prefix}，清出一对并把一张放回棋盘`
       : removed.length >= 2
-        ? '广告复活成功，清出一对，下一手就能三消'
-        : '广告复活成功，清空了 1 个槽位');
+        ? `${prefix}，清出一对，下一手就能三消`
+        : `${prefix}，清空了 1 个槽位`);
+  }
+
+  private trayHasPair() {
+    const counts = new Map<number, number>();
+    for (const tile of this.trayTiles) {
+      const count = (counts.get(tile.kind) || 0) + 1;
+      if (count >= 2) return true;
+      counts.set(tile.kind, count);
+    }
+    return false;
+  }
+
+  private failProgressPercent() {
+    const total = this.boardTiles.length || this.options.levelDefinition?.tiles.length || 0;
+    if (total <= 0) return 0;
+    return Math.max(0, Math.min(100, Math.round((this.collectedTotal / total) * 100)));
   }
 
   private pickRevivePairKind() {
@@ -2183,6 +2222,12 @@ export class GameScreen {
     if (!this.settlementWin || this.doubleRewardUsed || this.settlementCoinReward <= 0) return;
     this.doubleRewardUsed = true;
     this.addCoins(this.settlementCoinReward);
+    if (!this.options.endless && !this.options.challenge) {
+      this.options.onAdFunnel?.({
+        level: this.options.level,
+        doubleCoins: true,
+      });
+    }
     this.toast(`广告奖励：金币 +${this.settlementCoinReward}`);
   }
 
@@ -2255,14 +2300,7 @@ export class GameScreen {
       const used = this.usedTools.has(itemId);
       viewData.countLabel.string = used ? '✓' : `${count}`;
       viewData.button.interactable = count > 0 && !used && !this.gameOver && !this.boardIntroActive;
-      viewData.activeFrame.active = itemId === 'hammer'
-        ? this.activeTool === 'hammer'
-        : itemId === 'glove'
-          && (
-            this.activeTool === 'glove_menu'
-            || this.activeTool === 'glove_swap'
-            || this.activeTool === 'glove_return'
-          );
+      viewData.activeFrame.active = itemId === 'hammer' && this.activeTool === 'hammer';
       const sprite = viewData.icon.getComponent(Sprite);
       if (sprite) {
         sprite.color = count > 0 && !used
@@ -2273,13 +2311,6 @@ export class GameScreen {
   }
 
   private clearToolMode() {
-    if (this.gloveSelectedTile?.node.isValid) {
-      Tween.stopAllByTarget(this.gloveSelectedTile.node);
-      this.gloveSelectedTile.node.setScale(new Vec3(1, 1, 1));
-    }
-    this.gloveSelectedTile = null;
-    if (this.gloveMenuNode?.isValid) this.gloveMenuNode.destroy();
-    this.gloveMenuNode = null;
     this.activeTool = null;
     if (!this.destroyed && this.boardLayer) this.refreshBoardTileStates();
     this.refreshToolButtons();
@@ -2407,7 +2438,7 @@ export class GameScreen {
   private onCatSkillTap() {
     if (this.gameOver || this.boardIntroActive) return;
     if (!this.equippedCatId || !this.catSkill || !this.catSkillConfig) {
-      this.toast('还没有上阵宠物，去首页更多里的图鉴装备一只吧');
+      this.toast('还没有上阵宠物，去首页猫咪社装备一只吧');
       return;
     }
     if (this.catSkillUsed) {
@@ -2609,7 +2640,7 @@ export class GameScreen {
       return;
     }
     if (this.options.getItemCount('dice') <= 0) {
-      this.toast('�骰子道具不足');
+      this.toast('骰子道具不足');
       return;
     }
     if (!this.options.onConsumeItem('dice')) {
@@ -2662,130 +2693,6 @@ export class GameScreen {
     this.toast('棋盘上的元素已重新排列');
   }
 
-  private buildGloveMenu() {
-    const menu = this.addPanel(
-      'GloveMenu',
-      0,
-      -315,
-      536,
-      108,
-      new Color(255, 248, 226, 250),
-      this.gameUI,
-    );
-    const background = menu.getComponent(Graphics);
-    if (background) {
-      background.strokeColor = new Color(235, 205, 158, 255);
-      background.lineWidth = 4;
-      background.stroke();
-    }
-    this.gloveMenuNode = menu;
-    const title = this.label(menu, '选择手套功能', 0, 31, 20, new Color(112, 69, 40));
-    title.isBold = true;
-    this.buildGloveActionButton(menu, '交换两个元素', -126, -18, () => {
-      this.enterGloveMode('glove_swap');
-    });
-    this.buildGloveActionButton(menu, '放回棋盘', 126, -18, () => {
-      this.enterGloveMode('glove_return');
-    });
-  }
-
-  private buildGloveActionButton(parent: Node, text: string, x: number, y: number, callback: () => void) {
-    const width = 190;
-    const visualHeight = 58;
-    const node = new Node(`GloveAction_${text}`);
-    parent.addChild(node);
-    node.setPosition(x, y);
-    node.addComponent(UITransform).setContentSize(width, 88);
-    const graphics = node.addComponent(Graphics);
-    graphics.fillColor = new Color(241, 139, 47, 255);
-    graphics.strokeColor = new Color(184, 102, 26, 255);
-    graphics.lineWidth = 3;
-    graphics.roundRect(-width / 2, -visualHeight / 2, width, visualHeight, 16);
-    graphics.fill();
-    graphics.stroke();
-    const label = this.label(node, text, 0, 0, 20, new Color(255, 251, 238));
-    label.isBold = true;
-    label.verticalAlign = Label.VerticalAlign.CENTER;
-    label.node.getComponent(UITransform)!.setContentSize(width - 12, visualHeight - 8);
-    const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
-    button.node.on(Button.EventType.CLICK, () => {
-      this.options.onPlaySound('click');
-      callback();
-    });
-  }
-
-  private enterGloveMode(mode: 'glove_swap' | 'glove_return') {
-    if (this.gameOver || this.boardIntroActive) return;
-    if (this.pendingTrayAnimations > 0) {
-      this.clearToolMode();
-      this.toast('请等待元素归位');
-      return;
-    }
-    if (mode === 'glove_swap' && this.trayTiles.length < 2) {
-      this.clearToolMode();
-      this.toast('交换顺序至少需要两个槽位元素');
-      return;
-    }
-    this.closeGloveMenu();
-    this.gloveSelectedTile = null;
-    this.activeTool = mode;
-    this.refreshToolButtons();
-    this.toast(mode === 'glove_swap' ? '请选择两个槽位元素交换顺序' : '请选择要放回棋盘的元素');
-  }
-
-  private selectGloveTile(tile: Tile) {
-    if (this.pendingTrayAnimations > 0) {
-      this.toast('请等待元素归位');
-      return;
-    }
-    if (!this.gloveSelectedTile) {
-      this.gloveSelectedTile = tile;
-      Tween.stopAllByTarget(tile.node);
-      tween(tile.node)
-        .to(0.08, { scale: new Vec3(1.08, 1.08, 1) }, { easing: 'backOut' })
-        .start();
-      this.toast('请选择另一个槽位元素');
-      return;
-    }
-    if (this.gloveSelectedTile === tile) {
-      this.clearGloveSelection();
-      this.toast('已取消选择');
-      return;
-    }
-    const firstIndex = this.trayTiles.indexOf(this.gloveSelectedTile);
-    const secondIndex = this.trayTiles.indexOf(tile);
-    if (firstIndex < 0 || secondIndex < 0) {
-      this.clearGloveSelection();
-      this.toast('槽位元素已发生变化，请重新选择');
-      return;
-    }
-    if (!this.options.onConsumeItem('glove')) {
-      this.clearToolMode();
-      this.toast('手套道具不足');
-      return;
-    }
-    this.usedTools.add('glove');
-    [this.trayTiles[firstIndex], this.trayTiles[secondIndex]] = [
-      this.trayTiles[secondIndex],
-      this.trayTiles[firstIndex],
-    ];
-    this.clearToolMode();
-    this.options.onPlaySound('collect');
-    this.playToolUseAnimation('glove');
-    this.toast('已交换两个槽位元素');
-    this.reflowTray();
-  }
-
-  private clearGloveSelection() {
-    if (this.gloveSelectedTile?.node.isValid) {
-      Tween.stopAllByTarget(this.gloveSelectedTile.node);
-      this.gloveSelectedTile.node.setScale(new Vec3(1, 1, 1));
-    }
-    this.gloveSelectedTile = null;
-  }
-
   private returnTrayTile(tile: Tile) {
     if (this.pendingTrayAnimations > 0) {
       this.toast('请等待元素归位');
@@ -2823,11 +2730,6 @@ export class GameScreen {
     this.reflowTray(() => this.resolveTrayMatches());
   }
 
-  private closeGloveMenu() {
-    if (this.gloveMenuNode?.isValid) this.gloveMenuNode.destroy();
-    this.gloveMenuNode = null;
-  }
-
   private sortBoardTileNodes() {
     const boardTiles = this.boardTiles
       .filter(tile => tile.node.isValid && tile.node.parent === this.boardLayer)
@@ -2838,7 +2740,7 @@ export class GameScreen {
 
   private setTileKind(tile: Tile, kind: number) {
     tile.kind = kind;
-    const item = tile.node.getChildByName('Item')?.getComponent(Sprite);
+    const item = tile.item.getComponent(Sprite);
     const frame = this.assets.getFrame(this.itemTilePath(kind));
     if (item && frame) item.spriteFrame = frame;
   }

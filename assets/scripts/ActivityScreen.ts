@@ -10,7 +10,7 @@ import {
   view,
 } from 'cc';
 import { ActivitySnapshot } from './ActivityContent';
-import { AssetStore, BACK_BUTTON_SIZE } from './AssetStore';
+import { AssetStore, BACK_BUTTON_SIZE, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
 import { ActivityRewardId, ActivityTaskId } from './PlayerTypes';
@@ -109,7 +109,7 @@ export class ActivityScreen {
       ...definition.tasks.map(task => task.iconPath),
       ...definition.rewards.map(reward => reward.iconPath),
     ];
-    this.assets.loadImages(paths, () => {
+    this.assets.loadImagesFor(this, paths, () => {
       this.create();
       onReady?.();
     });
@@ -145,6 +145,7 @@ export class ActivityScreen {
 
     this.activityUI = new Node('ActivityUI');
     this.root.addChild(this.activityUI);
+    this.activityUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     this.activityUI.active = this.active;
 
     const coverScale = Math.max(
@@ -180,6 +181,7 @@ export class ActivityScreen {
 
   private buildHeader(activity: ActivitySnapshot) {
     const visuals = activity.definition.visuals;
+    const headerY = belowWeChatCapsule(DESIGN_HEIGHT / 2, 64);
     // Back button (visual art is smaller than the 88px hit area on purpose).
     this.buildImageButton(
       this.contentUI!,
@@ -201,7 +203,7 @@ export class ActivityScreen {
     // Countdown capsule with a small clock icon, matching the reference layout.
     const chip = new Node('CountdownChip');
     this.contentUI!.addChild(chip);
-    chip.setPosition(268, 592);
+    chip.setPosition(268, headerY);
     chip.addComponent(UITransform).setContentSize(170, 64);
     const chipGraphics = chip.addComponent(Graphics);
     chipGraphics.fillColor = new Color(104, 61, 35, 60);

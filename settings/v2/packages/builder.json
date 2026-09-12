@@ -65,7 +65,7 @@
   },
   "splash-setting": {
     "background": {
-      "image": "project://settings/cat.png",
+      "image": "project://settings/游戏启动页面设计_compressed.png",
       "type": "color",
       "color": {
         "x": 1,
@@ -75,8 +75,10 @@
       }
     },
     "logo": {
-      "image": "project://settings/cat.png",
+      "image": "project://settings/cat-logo_compressed.jpg",
       "type": "custom"
-    }
+    },
+    "totalTime": 500,
+    "displayRatio": 1
   }
 }

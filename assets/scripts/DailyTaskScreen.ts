@@ -8,7 +8,7 @@ import {
   UITransform,
   view,
 } from 'cc';
-import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
+import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { DAILY_CHEST_REWARD, DAILY_TASK_DEFINITIONS } from './GameContent';
 import { DailyTaskId, TaskSnapshot } from './PlayerTypes';
@@ -71,7 +71,7 @@ export class DailyTaskScreen {
   ) {}
 
   loadAndCreate(onReady?: () => void) {
-    this.assets.loadImages([
+    this.assets.loadImagesFor(this, [
       'home/home_bg',
       'shop/item_dice',
       COMMON_UI_ASSETS.backButton,
@@ -115,6 +115,7 @@ export class DailyTaskScreen {
     const top = visibleSize.height / 2;
     this.taskUI = new Node('DailyTaskUI');
     this.root.addChild(this.taskUI);
+    this.taskUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     this.taskUI.active = this.active;
 
     this.image(this.taskUI, 'home/home_bg', 0, 0, visibleSize.width, visibleSize.height);
@@ -143,7 +144,7 @@ export class DailyTaskScreen {
     this.drawPawDecoration(this.taskUI!, -205, y + 3, -0.9);
     this.drawPawDecoration(this.taskUI!, 112, y + 3, 0.9);
 
-    const dateChip = this.image(this.taskUI!, 'tasks/daily_date', 228, y, 264, 74);
+    const dateChip = this.image(this.taskUI!, 'tasks/daily_date', 228, belowWeChatCapsule(top, 74), 264, 74);
     this.dateLabel = this.label(dateChip, '', 22, -1, 22, new Color(112, 69, 40));
     this.dateLabel.isBold = true;
     this.dateLabel.node.getComponent(UITransform)!.setContentSize(206, 48);

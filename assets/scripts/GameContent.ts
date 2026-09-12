@@ -59,6 +59,8 @@ export interface CatDefinition {
   rarity: string;
   skill: string;
   unlockHint: string;
+  /** 图鉴名牌用的短解锁条件（unlockHint 太长，放不下卡片）。 */
+  unlockShort: string;
   portraitPath: string;
 }
 
@@ -87,6 +89,7 @@ export const CAT_DEFINITIONS: CatDefinition[] = [
     rarity: '新手猫咪',
     skill: '收集 20 个元素后手动发动，额外清除 1 个棋盘元素。',
     unlockHint: '完成流浪猫小屋装饰后解锁',
+    unlockShort: '完成流浪猫小屋装饰解锁',
     portraitPath: 'cats/cat_orange',
   },
   {
@@ -95,6 +98,7 @@ export const CAT_DEFINITIONS: CatDefinition[] = [
     rarity: '普通',
     skill: '完成 3 次三同消除后手动发动，额外清除 1 个棋盘元素。',
     unlockHint: '完成猫咪咖啡馆装饰后解锁',
+    unlockShort: '完成猫咪咖啡馆装饰解锁',
     portraitPath: 'cats/cat_white',
   },
   {
@@ -103,6 +107,7 @@ export const CAT_DEFINITIONS: CatDefinition[] = [
     rarity: '普通',
     skill: '完成 6 次三同消除后手动发动，从收集槽移走 1 个元素。',
     unlockHint: '完成毛线工坊装饰后解锁',
+    unlockShort: '完成毛线工坊装饰解锁',
     portraitPath: 'cats/cat_black',
   },
   {
@@ -111,6 +116,7 @@ export const CAT_DEFINITIONS: CatDefinition[] = [
     rarity: '稀有',
     skill: '完成 8 次三同消除后手动发动，随机赠送 1 个道具。',
     unlockHint: '完成猫咪社装饰后解锁',
+    unlockShort: '完成猫咪社装饰解锁',
     portraitPath: 'cats/cat_ragdoll',
   },
   {
@@ -119,6 +125,7 @@ export const CAT_DEFINITIONS: CatDefinition[] = [
     rarity: '传说',
     skill: '完成 10 次三同消除后手动发动，额外清除 2 个棋盘元素。',
     unlockHint: '完成星星喷泉装饰后解锁',
+    unlockShort: '完成星星喷泉装饰解锁',
     portraitPath: 'cats/cat_aurora',
   },
 ];

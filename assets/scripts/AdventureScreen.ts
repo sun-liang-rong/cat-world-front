@@ -1,5 +1,5 @@
 import { Button, Color, EventMouse, EventTouch, Graphics, Label, Mask, Node, Sprite, tween, Tween, UITransform, Vec3, view } from 'cc';
-import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
+import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { LEVELS_PER_THEME } from './TownContent';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
@@ -114,7 +114,7 @@ export class AdventureScreen {
   ) {}
 
   loadAndCreate(onReady?: () => void) {
-    this.assets.loadImages([
+    this.assets.loadImagesFor(this, [
       'adventure/adventure_bg',
       COMMON_UI_ASSETS.backButton,
       'adventure/adventure_title',
@@ -226,7 +226,7 @@ export class AdventureScreen {
 
   private buildResourceChip(name: string, x: number, iconPath: string, getValue: () => string) {
     const chip = this.roundedShape(
-      this.adventureUI!, name, x, this.topY() - 92, 140, 55, 27,
+      this.adventureUI!, name, x, belowWeChatCapsule(this.topY(), 55), 140, 55, 27,
       COLORS.cream, COLORS.border,
     );
     this.image(chip, iconPath, -46, 0, 42, 42);
@@ -264,9 +264,14 @@ export class AdventureScreen {
     this.themeTaglineLabel = this.label(banner, '', 0, -18, 17, COLORS.muted);
     this.themeTaglineLabel.node.getComponent(UITransform)!.setContentSize(300, 26);
 
-    // 右上角星形角标：展示玩家累计获得的星星数（过关数进度已在底部主题芯片上展示）
+    // 右上角星形角标：放在金币条正下方，避免与金币条重叠
+    const coinHeight = 55;
+    const starHeight = 52;
+    const resourceGap = 20;
+    const coinY = belowWeChatCapsule(this.topY(), coinHeight);
+    const starY = coinY - coinHeight / 2 - resourceGap - starHeight / 2;
     const starChip = this.roundedShape(
-      this.adventureUI!, 'AdventureStarChip', 289, y, 122, 52, 24,
+      this.adventureUI!, 'AdventureStarChip', 289, starY, 122, starHeight, 24,
       COLORS.chipDark, new Color(255, 248, 226, 60), 2,
     );
     this.starCountLabel = this.label(starChip, '', -12, -1, 20, Color.WHITE);
@@ -547,20 +552,6 @@ export class AdventureScreen {
     const offset = THEME_CHIP_W / 2 + index * THEME_PITCH;
     const scroll = Math.max(-THEME_MAX_SCROLL, Math.min(0, THEME_VIEW_W / 2 - offset));
     return -THEME_VIEW_W / 2 + scroll;
-  }
-
-  private nearestThemeAnchor(x: number) {
-    let nearest = this.themeAnchor(0);
-    let nearestDist = Infinity;
-    for (let index = 0; index < THEME_COUNT; index += 1) {
-      const anchor = this.themeAnchor(index);
-      const dist = Math.abs(anchor - x);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearest = anchor;
-      }
-    }
-    return nearest;
   }
 
   // 主题栏横向拖拽：松手后吸附到最近的主题芯片，选择主题仍由点击完成。

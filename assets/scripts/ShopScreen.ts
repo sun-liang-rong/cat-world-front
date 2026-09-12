@@ -1,5 +1,5 @@
 import { Button, Color, Graphics, Label, Node, Sprite, UITransform, view } from 'cc';
-import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
+import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
 import { ITEM_DEFINITIONS, ItemDefinition } from './GameContent';
@@ -13,7 +13,7 @@ export interface ShopScreenOptions {
   onBuyItem: (id: ItemId) => boolean;
   getShopItemStatus: (id: ItemId) => ShopItemStatus;
   onClaimItemByAd: (id: ItemId) => boolean;
-  onWatchAd: () => Promise<RewardedAdResult>;
+  onWatchAd?: () => Promise<RewardedAdResult>;
   onReturnHome: () => void;
 }
 
@@ -68,7 +68,7 @@ export class ShopScreen {
       'shop/icon_extra_slot',
       'shop/hint_ribbon',
     ];
-    this.assets.loadImages(paths, () => {
+    this.assets.loadImagesFor(this, paths, () => {
       this.create();
       onReady?.();
     });
@@ -95,6 +95,7 @@ export class ShopScreen {
     const bottom = -visibleSize.height / 2;
     this.shopUI = new Node('ShopUI');
     this.root.addChild(this.shopUI);
+    this.shopUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     this.shopUI.active = this.active;
     this.image(this.shopUI, 'home/home_bg', 0, 0, visibleSize.width, visibleSize.height);
     this.addWarmVeil(visibleSize.width, visibleSize.height);
@@ -112,7 +113,7 @@ export class ShopScreen {
     const y = top - 150;
     this.buildBackButton(-315, y);
     const chip = this.pill(
-      this.shopUI!, 272, y, 170, 60, 30,
+      this.shopUI!, 272, belowWeChatCapsule(top, 60), 170, 60, 30,
       new Color(255, 248, 226, 250), new Color(235, 205, 158),
     );
     this.image(chip, COMMON_UI_ASSETS.coinIcon, -55, 0, 42, 42);
@@ -222,7 +223,9 @@ export class ShopScreen {
 
   private buildHintRibbon(bottom: number) {
     const ribbon = this.image(this.shopUI!, 'shop/hint_ribbon', 0, bottom + 112, 380, 84);
-    const hint = this.label(ribbon, '每种道具每天最多获取 5 次\n首次金币购买，之后观看广告', 0, 2, 18, new Color(136, 94, 63));
+    // TODO: 暂时隐藏广告提示，后续接入广告接口后再放开
+    const hint = this.label(ribbon, '每种道具每天最多获取 5 次\n首次金币购买即可获得', 0, 2, 18, new Color(136, 94, 63));
+    // const hint = this.label(ribbon, '每种道具每天最多获取 5 次\n首次金币购买，之后观看广告', 0, 2, 18, new Color(136, 94, 63));
     hint.lineHeight = 24;
     hint.isBold = true;
   }
@@ -239,28 +242,51 @@ export class ShopScreen {
       const busy = this.pendingAdItemId !== null;
       const count = this.options.getItemCount(viewData.id);
       viewData.countLabel.string = `已有${count}`;
+
+      // TODO: 暂时隐藏广告入口，只允许金币购买一次
+      const alreadyPurchased = status.coinPurchased;
       viewData.button.interactable = definition.purchasable
-        && !atLimit
+        && !alreadyPurchased
         && !busy
-        && (status.coinPurchased || affordable);
+        && affordable;
+
       viewData.buttonLabel.string = !definition.purchasable
         ? '未开放'
         : waitingOnThis
-          ? '广告中...'
-          : atLimit
-            ? '明日再来'
-            : status.coinPurchased
-              ? '观看广告'
-              : affordable ? `${definition.price}金币` : '金币不足';
-      viewData.buttonLabel.color = !definition.purchasable || atLimit || waitingOnThis
+          ? '处理中...'
+          : alreadyPurchased
+            ? '已购买'
+            : affordable ? `${definition.price}金币` : '金币不足';
+
+      viewData.buttonLabel.color = !definition.purchasable || alreadyPurchased || waitingOnThis
         ? new Color(150, 137, 121)
-        : !status.coinPurchased && !affordable
+        : !affordable
           ? new Color(190, 59, 51)
           : new Color(150, 78, 20);
-      if (viewData.buttonSprite && status.coinPurchased && definition.purchasable) {
-        const adFrame = this.assets.getFrame('shop/button_ad');
-        if (adFrame) viewData.buttonSprite.spriteFrame = adFrame;
-      }
+
+      // 原有逻辑（已注释）：
+      // viewData.button.interactable = definition.purchasable
+      //   && !atLimit
+      //   && !busy
+      //   && (status.coinPurchased || affordable);
+      // viewData.buttonLabel.string = !definition.purchasable
+      //   ? '未开放'
+      //   : waitingOnThis
+      //     ? '广告中...'
+      //     : atLimit
+      //       ? '明日再来'
+      //       : status.coinPurchased
+      //         ? '观看广告'
+      //         : affordable ? `${definition.price}金币` : '金币不足';
+      // viewData.buttonLabel.color = !definition.purchasable || atLimit || waitingOnThis
+      //   ? new Color(150, 137, 121)
+      //   : !status.coinPurchased && !affordable
+      //     ? new Color(190, 59, 51)
+      //     : new Color(150, 78, 20);
+      // if (viewData.buttonSprite && status.coinPurchased && definition.purchasable) {
+      //   const adFrame = this.assets.getFrame('shop/button_ad');
+      //   if (adFrame) viewData.buttonSprite.spriteFrame = adFrame;
+      // }
     });
   }
 
@@ -281,13 +307,21 @@ export class ShopScreen {
       return;
     }
 
+    // 广告总开关关闭（onWatchAd 未注入）时不进入广告领取路径；
+    // 正常情况下按钮在金币首购后已置灰，这里只是兜底守卫。
+    const watchAd = this.options.onWatchAd;
+    if (!watchAd) {
+      this.toast('今天已经买过啦，明天再来');
+      return;
+    }
+
     this.pendingAdItemId = id;
     this.toast('正在准备广告...');
     this.refresh();
 
     let result: RewardedAdResult;
     try {
-      result = await this.options.onWatchAd();
+      result = await watchAd();
     } catch (error) {
       console.error('[CatWorld] Rewarded ad callback failed', error);
       result = { completed: false, simulated: false };

@@ -1,4 +1,4 @@
-import { PlayerRun } from './level/LevelTypes';
+import { AdFunnelState, PlayerRun } from './level/LevelTypes';
 
 export type CatId = 'orange' | 'white' | 'black' | 'ragdoll' | 'aurora';
 
@@ -118,6 +118,11 @@ export interface PlayerState {
   shop: ShopDailyState;
   activity: ActivityState;
   recentRuns: PlayerRun[];
+  /**
+   * 主线广告漏斗，只写本机、不上报。
+   * 与 recentRuns 拆开：自适应看第一次失败，漏斗看复活后是否通关。
+   */
+  adFunnel: AdFunnelState;
   /** 无尽模式本地纪录，不上报排行榜 */
   endless: EndlessProgress;
 }

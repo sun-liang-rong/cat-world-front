@@ -3,6 +3,11 @@ export interface RewardedAdResult {
   simulated: boolean;
 }
 
+// 激励视频总开关：false 时 Main 不给任何页面注入看广告能力，
+// 结算复活/双倍、首页金币广告、商店广告领道具的入口会全部自动隐藏。
+// 流量主开通、要恢复广告时改回 true 即可（各页面逻辑无需再动）。
+export const REWARDED_AD_ENABLED = false;
+
 interface WechatRewardedVideoAd {
   show: () => Promise<void>;
   load: () => Promise<void>;
