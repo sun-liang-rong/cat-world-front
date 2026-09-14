@@ -398,7 +398,6 @@ export class ShopScreen {
 
   private toast(text: string) {
     if (!this.shopUI) return;
-    const bottom = -view.getVisibleSize().height / 2;
-    Toast.show(this.shopUI, text, { y: bottom + 235 });
+    Toast.show(this.shopUI, text);
   }
 }

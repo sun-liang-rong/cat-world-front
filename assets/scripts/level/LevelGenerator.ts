@@ -34,6 +34,8 @@ type GenerationContext = {
   best: LevelDefinition | null;
   bestDistance: number;
   bestBrutality: number;
+  /** 贴满压力档（超萌挑战）的前 K 残酷候选：终选时跑玩家风险模拟，挑模拟失败率最高者。 */
+  brutalists: Array<{ candidate: LevelDefinition; brutality: number }>;
 };
 
 export interface LevelGenerationOptions {
@@ -112,7 +114,11 @@ export class LevelGenerator {
       if (evaluation?.accepted) return evaluation.candidate;
     }
 
-    if (context.best) return this.finalizeBestScore(context.best);
+    if (context.best) {
+      return options.fullTrayPressure === true
+        ? this.finalizeChallenge(context)
+        : this.finalizeBestScore(context.best);
+    }
     throw new Error(`[LevelGenerator] Unable to create a solvable level for seed ${options.seed}`);
   }
 
@@ -139,8 +145,8 @@ export class LevelGenerator {
   ): Promise<LevelDefinition> {
     const context = this.createGenerationContext(options);
     // 微信小游戏 JS 比桌面慢一个数量级：墙钟预算兜底，有 best 就提前交付，
-    // 避免高关为了「更接近目标」把 24 次 attempt 跑满。
-    // 超萌挑战必须跑满候选再按残酷度挑选；墙钟截断会让再玩一次明显变简单。
+    // 避免高关为了「更接近目标」把 40 次 attempt 跑满。
+    // 超萌挑战必须跑满候选再按残酷度+风险模拟挑选；墙钟截断会让再玩一次明显变简单。
     const wallClockBudgetMs = options.fullTrayPressure === true
       ? Number.POSITIVE_INFINITY
       : options.level >= 40 ? 1200 : 800;
@@ -155,7 +161,9 @@ export class LevelGenerator {
         const extra = this.extraAttemptsForFailFeel(options, context);
         if (attempt >= context.attempts + extra) {
           if (context.best) {
-            resolve(this.finalizeBestScore(context.best));
+            resolve(options.fullTrayPressure === true
+              ? this.finalizeChallenge(context)
+              : this.finalizeBestScore(context.best));
           } else {
             reject(new Error(`[LevelGenerator] Unable to create a solvable level for seed ${options.seed}`));
           }
@@ -189,9 +197,9 @@ export class LevelGenerator {
   }
 
   private createGenerationContext(options: LevelGenerationOptions): GenerationContext {
-    // 主线默认 24 次：配合见证路径快路径 + 结构预筛，足够收敛；
+    // 主线默认 40 次（L23+ 48）：配合见证路径快路径 + 结构预筛，足够收敛；
     // L11+ 失败质量门槛更严，多给几次用来卡尾段失败 / 听牌 / 复活可解，而不是把门槛往回松；
-    // 超萌挑战仍跑满 48 次以挑最残酷候选。
+    // 超萌挑战跑满 48 次以攒入围候选。
     const attempts = options.maxAttempts
       || (options.fullTrayPressure === true ? 48 : options.level >= 23 ? 48 : 40);
     // 高关棋盘更大，给 DFS 多一点预算；挑战保持上限。
@@ -222,6 +230,7 @@ export class LevelGenerator {
       best: null,
       bestDistance: Number.POSITIVE_INFINITY,
       bestBrutality: Number.NEGATIVE_INFINITY,
+      brutalists: [],
     };
   }
 
@@ -299,11 +308,19 @@ export class LevelGenerator {
     if (options.fullTrayPressure === true) {
       // 贴满压力档：难度分被"棋盘规模"主导、对小棋盘失真，改按残酷度挑选——
       // 最优路径槽位峰值（封顶 capacity-1）为主、失败风险与诱错数为辅，
-      // 不做提前验收，全部尝试跑完取最残酷者。
+      // 不做提前验收。槽位峰值一大半候选都能打满 cap，区分度差，
+      // 所以只在这里排前 K 候选，终选时再跑玩家风险模拟挑模拟失败率最高者。
       const brutality = result.pathMetrics.maxTrayOccupancy * 300
         + result.pathMetrics.failureRisk * 3
         + result.pathMetrics.wrongChoiceCount * 2;
-      if (score.repetition < 100 && brutality > context.bestBrutality) {
+      if (score.repetition < 100) {
+        context.brutalists.push({ candidate, brutality });
+        context.brutalists.sort((a, b) => b.brutality - a.brutality);
+        if (context.brutalists.length > LevelGenerator.CHALLENGE_FINALIST_COUNT) {
+          context.brutalists.length = LevelGenerator.CHALLENGE_FINALIST_COUNT;
+        }
+      }
+      if (brutality > context.bestBrutality) {
         context.best = candidate;
         context.bestBrutality = brutality;
       }
@@ -487,15 +504,16 @@ export class LevelGenerator {
   ): LevelDefinition {
     const tileCount = archetype === 'rescue'
       ? LevelGenerator.rescueTileCount(level, random)
-      : LevelGenerator.tileCount(level, random, role);
+      : LevelGenerator.tileCount(level, random, role, fullTrayPressure);
     const kindCount = LevelGenerator.kindCount(level, role);
     const layerCount = archetype === 'rescue'
       ? Math.max(2, this.layerCount(level) - 3)
       : fullTrayPressure
-        // 超萌挑战不要顶到主线后期的 9 层：6～7 层配 45～55 张，每层更密、遮挡仍够狠
-        ? 6 + random.int(0, 1)
+        // 超萌挑战顶满 PRD 的层数上限（6~7 层取 7）：60 张配 7 层 ≈ 每层 8.6 张，
+        // 再叠全叠柱，可见牌常年只有 3~5 张。
+        ? 7
         : this.layerCount(level);
-    const tiles = this.createLayout(tileCount, layerCount, archetype, random);
+    const tiles = this.createLayout(tileCount, layerCount, archetype, random, 'cone', fullTrayPressure);
     const order = this.createRemovalOrder(tiles, archetype, random);
     const layerOfPosition = order.map(tileId => tiles.find(tile => tile.id === tileId)!.layer);
     const plannedKinds = this.createKindSequence(
@@ -541,6 +559,7 @@ export class LevelGenerator {
     archetype: LevelArchetype,
     random: SeededRandom,
     pack: 'cone' | 'dense' = 'cone',
+    deepStack = false,
   ) {
     const layerSizes = pack === 'dense'
       ? this.denseLayerSizes(total, layerCount)
@@ -553,7 +572,9 @@ export class LevelGenerator {
     for (let layer = 0; layer < layerCount; layer += 1) {
       const count = layerSizes[layer];
       const parents = tiles.filter(tile => tile.layer === layer - 1);
-      const positions = this.createSymmetricLayerPositions(count, parents, archetype, random, stackDepths);
+      const positions = this.createSymmetricLayerPositions(
+        count, parents, archetype, random, stackDepths, deepStack,
+      );
       if (positions.length !== count) {
         throw new Error(`[LevelGenerator] Layer placement drifted: ${positions.length}/${count}`);
       }
@@ -587,6 +608,7 @@ export class LevelGenerator {
     archetype: LevelArchetype,
     random: SeededRandom,
     stackDepths: Map<string, number>,
+    deepStack = false,
   ): Array<[number, number]> {
     const positions: Array<[number, number]> = [];
     const pairCount = Math.floor(count / 2);
@@ -722,7 +744,7 @@ export class LevelGenerator {
     // 柱子到深度上限后再开新柱。canPlace 复用同层互斥与父子遮挡校验，全叠
     // 比例 1.0 由 LevelRules.isAllowedCoverRatio 放行。
     const maxStackDepth = archetype === 'stacked' ? 4 : 3;
-    const stackQuota = this.fullStackPairQuota(count, archetype, random);
+    const stackQuota = this.fullStackPairQuota(count, archetype, random, deepStack);
     if (stackQuota > 0 && parents.length > 0) {
       const deepColumns: string[] = [];
       const freshColumns: string[] = [];
@@ -804,15 +826,25 @@ export class LevelGenerator {
    * 全叠配额：本层拿多少镜像对直接压在父层同位牌上（占本层镜像对的比例）。
    * stacked 原型叠得最密，hidden/order 次之，其余原型走基础比例——
    * 全叠只是把"能看见底牌的一角"变成"完全藏住"，机制上两者都不可点。
+   * deepStack（超萌挑战）：在压力原型基础上再抬 0.15，埋藏率顶满。
    */
-  private fullStackPairQuota(count: number, archetype: LevelArchetype, random: SeededRandom) {
+  private fullStackPairQuota(
+    count: number,
+    archetype: LevelArchetype,
+    random: SeededRandom,
+    deepStack = false,
+  ) {
     const pairCount = Math.floor(count / 2);
     if (pairCount <= 0) return 0;
-    const minRatio = archetype === 'stacked'
-      ? 0.4
-      : archetype === 'hidden' || archetype === 'order'
-        ? 0.3
-        : 0.22;
+    const minRatio = deepStack
+      ? archetype === 'stacked'
+        ? 0.55
+        : 0.45
+      : archetype === 'stacked'
+        ? 0.4
+        : archetype === 'hidden' || archetype === 'order'
+          ? 0.3
+          : 0.22;
     const ratio = minRatio + random.next() * 0.25;
     return Math.min(pairCount, Math.max(1, Math.round(pairCount * ratio)));
   }
@@ -1217,6 +1249,8 @@ export class LevelGenerator {
   static readonly minFailureProgress = 80;
   static readonly minTrappedPairRate = 60;
   static readonly minReviveRescueRate = 55;
+  /** 贴满压力档终选入围数：48 个候选按残酷度取前 K，再各跑一次玩家风险模拟定胜负。 */
+  private static readonly CHALLENGE_FINALIST_COUNT = 6;
 
   static needsFailFeelGates(
     score: Pick<LevelScore, 'estimatedFailureRate'>,
@@ -1292,6 +1326,12 @@ export class LevelGenerator {
     if (options.fullTrayPressure === true) return 0;
     if (!context.best) return 48;
     this.finalizeBestScore(context.best);
+    // 失败率出带的兜底候选同样值得补跑：fallback 距离排序偶尔找不到进带候选，
+    // 多一轮 attempt 常有救（实测 L11-22 出带 5 个点的 seed 补跑后可收敛）。
+    if (context.best.score.estimatedFailureRate < context.failureRateBand.min
+      || context.best.score.estimatedFailureRate > context.failureRateBand.max) {
+      return 48;
+    }
     if (!LevelGenerator.needsFailFeelGates(
       context.best.score,
       context.role,
@@ -1543,6 +1583,36 @@ export class LevelGenerator {
     return result.solvable;
   }
 
+  /**
+   * 贴满压力档终选：入围候选各跑一次玩家风险模拟，挑模拟失败率最高者
+   * （平手比"死时带对率"）。槽位峰值封顶后区分度不足，真正的难度差异
+   * 只能靠模拟对局暴露；胜者再走 finalizeBestScore 补全风险画像字段。
+   */
+  private finalizeChallenge(context: GenerationContext): LevelDefinition {
+    const pool = context.brutalists.length > 0
+      ? context.brutalists.map(entry => entry.candidate)
+      : context.best
+        ? [context.best]
+        : [];
+    if (pool.length === 0) {
+      throw new Error('[LevelGenerator] Unable to create a solvable level for seed (no challenge finalists)');
+    }
+    let winner = pool[0];
+    let winnerFailureRate = -1;
+    let winnerTrappedPair = -1;
+    for (const candidate of pool) {
+      const risk = this.estimatePlayerRisk(candidate, new TileCoverGraph(candidate));
+      if (risk.estimatedFailureRate > winnerFailureRate
+        || (risk.estimatedFailureRate === winnerFailureRate
+          && risk.trappedPairRate > winnerTrappedPair)) {
+        winner = candidate;
+        winnerFailureRate = risk.estimatedFailureRate;
+        winnerTrappedPair = risk.trappedPairRate;
+      }
+    }
+    return this.finalizeBestScore(winner);
+  }
+
   /** Fill in player-risk fields on the fallback winner that skipped risk scoring. */
   private finalizeBestScore(best: LevelDefinition) {
     const risk = this.estimatePlayerRisk(best, new TileCoverGraph(best));
@@ -1654,11 +1724,22 @@ export class LevelGenerator {
     return normal;
   }
 
-  private static tileCount(level: number, random?: SeededRandom, role: LevelRole = 'normal') {
+  private static tileCount(
+    level: number,
+    random?: SeededRandom,
+    role: LevelRole = 'normal',
+    fullTrayPressure = false,
+  ) {
     if (level <= 1) return 18;
 
     const kindCount = LevelGenerator.kindCount(level);
     const minimum = kindCount * 3;
+
+    // 超萌挑战：牌量顶满 PRD 的 45~60 带上沿（54/57/60 三档），
+    // 15 种 × 每种恰好 3~4 张，容错被压到最低。
+    if (fullTrayPressure) {
+      return 54 + (random ? random.int(0, 2) * 3 : 3);
+    }
 
     // 🆕 优化前 10 关：让每种元素保持在 7-8 张（策略性甜蜜点）
     // 解决"无脑点"问题：6 种 × 9.5 张 → 8 种 × 7.5 张

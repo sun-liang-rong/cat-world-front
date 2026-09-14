@@ -62,6 +62,13 @@ export interface SettlementPopupOptions {
   /** 激励视频完成后补发与基础通关奖励相同数量的金币。 */
   onDoubleReward?: () => void;
   onWatchAd?: () => Promise<RewardedAdResult>;
+  /**
+   * 主线成功态的建设目标提示（小节点机制）：星够时整行可点，作为「去建设」入口；
+   * 文案由 GameScreen 按 PlayerStore.getNextBuildableInfo 组装。
+   */
+  buildTarget?: { text: string; canBuild: boolean };
+  /** 点击建设目标行（canBuild 时才可点）：关闭对局并跳转小镇 */
+  onGoBuild?: () => void;
 }
 
 // —— 结算弹窗套件（assets/resources/popup2/，对齐用户设计稿）——
@@ -296,6 +303,9 @@ export class SettlementPopup extends Component {
     }
     sections.push({ height: 60, build: (parent, y) => this.buildRatingRow(parent, y) });
     sections.push({ height: 60, build: (parent, y) => this.buildRewardRow(parent, y) });
+    if (this.options.buildTarget) {
+      sections.push({ height: 68, build: (parent, y) => this.buildBuildTargetRow(parent, y) });
+    }
     return sections;
   }
 
@@ -490,6 +500,43 @@ export class SettlementPopup extends Component {
     const messageWidth = this.textWidth(messageText, 22);
     const message = this.label(node, messageText, textLeft + messageWidth / 2, -20, 22, new Color(121, 83, 59));
     message.isBold = true;
+  }
+
+  /** 建设目标行（小节点机制）：星够时整行可点，轻触直达小镇点亮下一格 */
+  private buildBuildTargetRow(parent: Node, y: number) {
+    const target = this.options.buildTarget!;
+    const canBuild = !!target.canBuild && !!this.options.onGoBuild;
+    const node = new Node('BuildTargetRow');
+    parent.addChild(node);
+    node.setPosition(0, y);
+    // 视觉胶囊 56 高，热区按规范补足到 88
+    node.addComponent(UITransform).setContentSize(560, 88);
+
+    const pill = new Node('BuildTargetPill');
+    node.addChild(pill);
+    pill.addComponent(UITransform).setContentSize(500, 56);
+    const graphics = pill.addComponent(Graphics);
+    graphics.fillColor = canBuild ? new Color(255, 246, 222) : new Color(247, 240, 228, 220);
+    graphics.strokeColor = canBuild ? new Color(247, 210, 148) : new Color(233, 223, 205);
+    graphics.lineWidth = 3;
+    graphics.roundRect(-250, -28, 500, 56, 28);
+    graphics.fill();
+    graphics.stroke();
+
+    const text = canBuild ? `${target.text}，点击前往 ▸` : target.text;
+    const label = this.label(pill, text, 0, 0, 20, canBuild ? new Color(234, 111, 20) : new Color(121, 83, 59));
+    label.isBold = true;
+    label.overflow = Label.Overflow.SHRINK;
+    label.enableWrapText = false;
+    label.verticalAlign = Label.VerticalAlign.CENTER;
+    label.node.getComponent(UITransform)!.setContentSize(472, 30);
+
+    if (canBuild) {
+      const button = node.addComponent(Button);
+      button.transition = Button.Transition.SCALE;
+      button.zoomScale = 0.96;
+      button.node.on(Button.EventType.CLICK, () => this.options.onGoBuild!());
+    }
   }
 
   /** 次操作：两条独立的浅粉胶囊按钮并排 */

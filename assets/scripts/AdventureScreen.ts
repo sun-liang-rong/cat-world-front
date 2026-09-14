@@ -30,6 +30,12 @@ const CHAPTER_PAGE = 5;
 const SWIPE_THRESHOLD = 60;
 const DRAG_CLAMP = 150;
 const TAP_JITTER = 24;
+// 顶部标题栏（返回 + 标题）与主题横幅中心距屏幕顶边的距离（设计稿像素）。
+// 标题栏为避让微信胶囊下移后，横幅随之让位；地图手势区顶边取横幅底边。
+const HEADER_Y_FROM_TOP = 134;
+const TITLE_Y_FROM_TOP = 136;
+const BANNER_Y_FROM_TOP = 236;
+const BANNER_HEIGHT = 96;
 // 主题（章节）定义同时被首页章节横幅使用：章节号 = 主线关卡所在主题 + 1
 export const THEME_INFO: ThemeInfo[] = [
   { name: '青青草原', tagline: '阳光洒满草原，冒险开始啦！', icon: 'adventure/adventure_theme_icon_1' },
@@ -52,14 +58,16 @@ const THEME_MAX_SCROLL = THEME_CONTENT_W - THEME_VIEW_W;
 // 真机手指通常只需要轻轻一划就应切换主题，不能要求拖过半个芯片间距。
 const THEME_SWIPE_THRESHOLD = 44;
 const THEME_TAP_JITTER = 20;
-// 沿背景石板路自上而下取的 6 个节点位（750×1334 设计稿坐标，屏幕中心为原点）
+// 沿背景石板路自上而下取的 6 个节点位，y 相对地图手势区中心（设计稿像素）。
+// 标题栏下移后地图上部空间变小：顶部节点沿路下收、间距略收紧，底部节点（第 6 位）保持不动；
+// 相邻间距已按节点实际高度留出余量（完成 85 / 旗帜 136 / 锁 92）。
 const MAP_SLOTS: Array<[number, number]> = [
-  [-4, 330],
+  [-4, 310],
   [4, 214],
-  [-62, 98],
-  [13, -18],
-  [-103, -138],
-  [-119, -258],
+  [-62, 96],
+  [13, -24],
+  [-103, -135],
+  [-119, -246],
 ];
 
 const COLORS = {
@@ -83,7 +91,6 @@ const COLORS = {
 export class AdventureScreen {
   private adventureUI: Node | null = null;
   private mapLayer: Node | null = null;
-  private toastY = 0;
   private coinLabel: Label | null = null;
   private themeTitleLabel: Label | null = null;
   private themeTaglineLabel: Label | null = null;
@@ -184,8 +191,8 @@ export class AdventureScreen {
 
     this.image(this.adventureUI, 'adventure/adventure_bg', 0, 0, visibleSize.width, visibleSize.height);
 
-    // 地图手势区域：必须先于箭头/卡片等控件创建，保证后续控件在上层正常接收点击
-    const areaTop = top - 260;
+    // 地图手势区域：顶边贴主题横幅底边；必须先于箭头/卡片等控件创建，保证后续控件在上层正常接收点击
+    const areaTop = top - BANNER_Y_FROM_TOP - BANNER_HEIGHT / 2;
     const areaBottom = bottom + 337;
     this.mapArea = new Node('AdventureMapArea');
     this.adventureUI.addChild(this.mapArea);
@@ -203,12 +210,11 @@ export class AdventureScreen {
     this.buildLevelCard(bottom);
     this.buildThemeBar(bottom);
 
-    this.toastY = bottom + 520;
     this.refresh();
   }
 
   private buildHeader(top: number) {
-    const headerY = top - 94;
+    const headerY = top - HEADER_Y_FROM_TOP;
 
     const back = new Node('AdventureBackButton');
     this.adventureUI!.addChild(back);
@@ -217,7 +223,7 @@ export class AdventureScreen {
     this.image(back, COMMON_UI_ASSETS.backButton, 0, 0, BACK_BUTTON_SIZE.visualWidth, BACK_BUTTON_SIZE.visualHeight);
     this.addButton(back, () => this.options.onReturnHome());
 
-    const title = this.image(this.adventureUI!, 'adventure/adventure_title', -104, top - 96, 260, 77);
+    const title = this.image(this.adventureUI!, 'adventure/adventure_title', -104, top - TITLE_Y_FROM_TOP, 260, 77);
     const titleLabel = this.label(title, '冒险地图', 8, -2, 29, COLORS.title);
     titleLabel.isBold = true;
 
@@ -252,7 +258,7 @@ export class AdventureScreen {
   }
 
   private buildThemeRow(top: number) {
-    const y = top - 212;
+    const y = top - BANNER_Y_FROM_TOP;
     const banner = this.image(this.adventureUI!, 'adventure/adventure_banner', -105, y, 400, 96);
 
     const badge = this.imageFit(banner, THEME_INFO[0].icon, -144, 0, 58);
@@ -281,7 +287,8 @@ export class AdventureScreen {
   }
 
   private buildMapDecoration() {
-    this.image(this.mapLayer!, 'adventure/adventure_signpost', 238, 150, 84, 99);
+    // y 相对地图手势区中心；保持路牌在屏幕上的世界位置不变（区域中心比原来低 12px，局部 y 相应 +12）
+    this.image(this.mapLayer!, 'adventure/adventure_signpost', 238, 162, 84, 99);
   }
 
   private buildChapterArrows(top: number) {
@@ -771,7 +778,7 @@ export class AdventureScreen {
 
   private toast(text: string) {
     if (!this.adventureUI) return;
-    Toast.show(this.adventureUI, text, { y: this.toastY });
+    Toast.show(this.adventureUI, text);
   }
 
   private label(parent: Node, text: string, x: number, y: number, size: number, color: Color) {

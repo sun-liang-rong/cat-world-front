@@ -1,7 +1,7 @@
-import { Color, Graphics, Label, Node, tween, Tween, UIOpacity, UITransform, Vec2, Vec3 } from 'cc';
+import { Color, Graphics, Label, Node, tween, Tween, UIOpacity, UITransform, Vec2, Vec3, view } from 'cc';
 
 export interface ToastOptions {
-  /** 垂直位置（屏幕中心为原点，y 轴向上），默认 -150 */
+  /** 垂直位置（屏幕中心为原点，y 轴向上），默认在顶部安全区/胶囊下方 */
   y?: number;
   /** 停留时长（毫秒），默认 2000 */
   duration?: number;
@@ -26,8 +26,14 @@ const PANEL_HEIGHT = 74;
 const PAD_X = 34;
 const MIN_WIDTH = 220;
 const MAX_WIDTH = 640;
-const DEFAULT_Y = -150;
+// 顶部默认位：避开状态栏 + 微信胶囊（顶部预留 ≥90px），再让出页面顶栏高度
+const TOP_INSET = 200;
 const DEFAULT_DURATION = 2000;
+
+// 提醒统一挂顶部；位置按调用时的可见尺寸现算，适配不同屏幕高度
+function defaultY() {
+  return view.getVisibleSize().height / 2 - TOP_INSET;
+}
 
 // 每个父节点（页面）同时只保留一条 toast，重复 show 时复用节点并重置计时
 const registry = new WeakMap<object, ToastState>();
@@ -43,7 +49,7 @@ export class Toast {
   static show(parent: Node, text: string, options: ToastOptions = {}) {
     if (!parent.isValid || !text) return;
     const state = Toast.acquire(parent);
-    const y = options.y ?? DEFAULT_Y;
+    const y = options.y ?? defaultY();
     const duration = options.duration ?? DEFAULT_DURATION;
 
     state.node.setPosition(0, y);

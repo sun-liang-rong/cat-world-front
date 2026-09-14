@@ -10,7 +10,7 @@ import { PlayerStore } from './PlayerStore';
 import { LEVELS_PER_THEME } from './TownContent';
 import { ShopScreen } from './ShopScreen';
 import { TownScreen } from './TownScreen';
-import { CatId } from './PlayerTypes';
+import { CatId, BuildingId } from './PlayerTypes';
 import { LevelSystem } from './level/LevelSystem';
 import { LevelDefinition } from './level/LevelTypes';
 import { LoadingScreen } from './LoadingScreen';
@@ -82,6 +82,8 @@ export class Main extends Component {
   private readonly loadedScreens = new Set<object>();
   private readonly readyScreens = new Set<object>();
   private readonly screenLoadWaiters = new Map<object, Array<() => void>>();
+  // 结算页「去建设」跳转暂存的目标建筑 id，由 TownScreen.setActive 一次性消费
+  private townFocusBuildingId: BuildingId | null = null;
   // 二级页面的常驻上限与最近使用顺序。超出上限时淘汰最久未用的页面：
   // 释放它加载的图片（AssetStore.releaseOwner）并销毁它的 UI，下次进入时重新加载+重建。
   // 首页始终 pin；后台预载（loadScreen pin）的菜单页面也不进入这个列表、常驻内存；
@@ -141,7 +143,11 @@ export class Main extends Component {
       challengeCoinReward: CHALLENGE_COIN_REWARD,
       isChallengeRewardClaimed: () => this.playerStore.isChallengeRewardClaimed(),
       onOpenTown: () => this.openTown(),
-      shouldShowTownBuildHint: () => this.playerStore.shouldShowTownBuildHint(),
+      // 气泡条件 =「从未建设过」或「星星已够点亮下一格」（小节点机制的建设提醒）
+      shouldShowTownBuildHint: () =>
+        this.playerStore.shouldShowTownBuildHint() || this.playerStore.canLightNextBuildingCell(),
+      shouldShowFirstTownGuide: () => this.playerStore.shouldShowFirstTownGuide(),
+      onFirstTownGuideDone: () => this.playerStore.markFirstTownGuideDone(),
       onOpenCatCollection: () => this.openCatCollection(),
       shouldShowCatEquipHint: () => this.playerStore.shouldShowCatEquipHint(),
       onOpenDailyTasks: () => this.openDailyTasks(),
@@ -151,7 +157,6 @@ export class Main extends Component {
       onOpenAdventure: () => this.openAdventure(),
       getActivity: () => this.playerStore.getActivitySnapshot(),
       onOpenActivity: () => this.openActivity(),
-      getAdFunnelSummary: () => this.playerStore.getAdFunnelSummary(),
       getDailyTaskBadgeCount: () => {
         const tasks = this.playerStore.getTasks();
         const claimable = tasks.filter(task => task.completed && !task.claimed).length;
@@ -185,7 +190,10 @@ export class Main extends Component {
       getStars: () => this.playerStore.getStars(),
       getCoins: () => this.playerStore.getCoins(),
       getBuildings: () => this.playerStore.getBuildingViews(),
-      onBuild: id => this.playerStore.buildBuildingStage(id),
+      onLightCell: id => this.playerStore.lightBuildingCell(id),
+      shouldShowCellGuide: () => this.playerStore.shouldShowTownBuildHint(),
+      onOpenCatCollection: () => this.openCatCollection(),
+      consumeFocusBuilding: () => this.consumeTownFocus(),
       onReturnHome: () => this.returnHome(),
     });
   }
@@ -545,6 +553,16 @@ export class Main extends Component {
     this.hideExtraPages();
     const level = this.playerStore.getLevel();
 
+    // 通关后直接回小镇（不点“下一关”）时，存档关卡已 +1，而 currentLevelDefinition
+    // 还是刚打完的那关：优先顶上预生成的下一关，对不上就作废重生成，
+    // 避免拿旧棋盘重打新关卡号。
+    if (this.currentLevelDefinition && this.currentLevelDefinition.level !== level) {
+      this.currentLevelDefinition = this.nextLevelDefinition?.level === level
+        ? this.nextLevelDefinition
+        : null;
+      this.nextLevelDefinition = null;
+    }
+
     const playPreparedGame = () => {
       if (!this.node.isValid) return;
       if (this.gameScreen?.matchesPreparedLevel(level)) {
@@ -606,6 +624,7 @@ export class Main extends Component {
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(),
+      hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(),
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
       onGamePetPositionChanged: position => this.playerStore.setGamePetPosition(position),
       getCatSkillState: id => this.playerStore.getCatSkillState(id),
@@ -614,6 +633,12 @@ export class Main extends Component {
       onCatSkillItem: id => this.playerStore.addReward({ items: { [id]: 1 } }),
       onPlaySound: effect => this.audio.playEffect(effect),
       onVibrate: () => this.audio.vibrate(),
+      getMusicEnabled: () => this.audio.getMusicEnabled(),
+      getSoundEnabled: () => this.audio.getSoundEnabled(),
+      getVibrationEnabled: () => this.audio.getVibrationEnabled(),
+      onMusicChanged: enabled => this.audio.setMusicEnabled(enabled),
+      onSoundChanged: enabled => this.audio.setSoundEnabled(enabled),
+      onVibrationChanged: enabled => this.audio.setVibrationEnabled(enabled),
       onPerformance: run => {
         const expLevelBefore = this.playerStore.getExperienceInfo().level;
         this.levelSystem.recordPerformance(run);
@@ -627,10 +652,29 @@ export class Main extends Component {
       onNextLevel: () => this.nextLevel(),
       onReturnHome: () => this.returnHomeFromGame(),
       onReplay: () => this.replayLevel(),
+      // 第 1 关对局内新手教学：仅主线第 1 关且未完成时开启（挑战/无尽不传不触发）
+      tutorialEnabled: this.playerStore.getLevel() === 1 && !this.playerStore.isBoardTutorialDone(),
+      onTutorialDone: () => this.playerStore.markBoardTutorialDone(),
+      getBuildTargetInfo: () => this.playerStore.getNextBuildableInfo(),
+      onGoBuild: () => this.goBuildFromGame(),
       onWatchAd: this.buildWatchAdHandler(),
       deferStart,
     });
     this.gameScreen.loadAndCreate(onReady);
+  }
+
+  // 结算页「去建设」：记住目标建筑 → 关闭对局回首页 → 直开小镇并选中该建筑
+  private goBuildFromGame() {
+    const target = this.playerStore.getNextBuildableInfo();
+    this.townFocusBuildingId = target?.buildingId ?? null;
+    this.returnHomeFromGame();
+    this.openTown();
+  }
+
+  private consumeTownFocus(): BuildingId | null {
+    const id = this.townFocusBuildingId;
+    this.townFocusBuildingId = null;
+    return id;
   }
 
   // 超萌挑战：固定高压配置，每次进关换新种子，避免记住卡牌位置。
@@ -753,6 +797,7 @@ export class Main extends Component {
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(),
+      hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(),
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
       onGamePetPositionChanged: position => this.playerStore.setGamePetPosition(position),
       getCatSkillState: id => this.playerStore.getCatSkillState(id),
@@ -761,6 +806,12 @@ export class Main extends Component {
       onCatSkillItem: id => this.playerStore.addReward({ items: { [id]: 1 } }),
       onPlaySound: effect => this.audio.playEffect(effect),
       onVibrate: () => this.audio.vibrate(),
+      getMusicEnabled: () => this.audio.getMusicEnabled(),
+      getSoundEnabled: () => this.audio.getSoundEnabled(),
+      getVibrationEnabled: () => this.audio.getVibrationEnabled(),
+      onMusicChanged: enabled => this.audio.setMusicEnabled(enabled),
+      onSoundChanged: enabled => this.audio.setSoundEnabled(enabled),
+      onVibrationChanged: enabled => this.audio.setVibrationEnabled(enabled),
       onPerformance: () => {},
       onNextLevel: () => this.returnHomeFromGame(),
       onReturnHome: () => this.returnHomeFromGame(),
@@ -807,6 +858,7 @@ export class Main extends Component {
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(),
+      hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(),
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
       onGamePetPositionChanged: position => this.playerStore.setGamePetPosition(position),
       getCatSkillState: id => this.playerStore.getCatSkillState(id),
@@ -815,6 +867,12 @@ export class Main extends Component {
       onCatSkillItem: id => this.playerStore.addReward({ items: { [id]: 1 } }),
       onPlaySound: effect => this.audio.playEffect(effect),
       onVibrate: () => this.audio.vibrate(),
+      getMusicEnabled: () => this.audio.getMusicEnabled(),
+      getSoundEnabled: () => this.audio.getSoundEnabled(),
+      getVibrationEnabled: () => this.audio.getVibrationEnabled(),
+      onMusicChanged: enabled => this.audio.setMusicEnabled(enabled),
+      onSoundChanged: enabled => this.audio.setSoundEnabled(enabled),
+      onVibrationChanged: enabled => this.audio.setVibrationEnabled(enabled),
       onPerformance: () => {},
       onNextLevel: () => this.returnHomeFromGame(),
       onReturnHome: () => this.returnHomeFromGame(),
@@ -1306,10 +1364,12 @@ export class Main extends Component {
       });
     };
 
-    if (this.nextLevelDefinition) {
+    // 只消费与当前存档关卡一致的定义，防止过期的预生成结果把玩家带回旧关卡
+    if (this.nextLevelDefinition?.level === level) {
       playPrepared(this.nextLevelDefinition);
       return;
     }
+    this.nextLevelDefinition = null;
 
     this.prepareNextMainLevel(level, definition => playPrepared(definition), true);
   }

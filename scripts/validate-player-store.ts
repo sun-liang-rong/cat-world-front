@@ -27,16 +27,48 @@ function testDefaultsAndRewards() {
 function testBuildingAndCatUnlock() {
   const store = new PlayerStore('player-store-building');
   store.load();
-  store.addReward({ stars: 15 });
-  assert(store.buildBuildingStage('cat_house').ok, 'first building stage should succeed with granted stars');
-  assert(!store.buildBuildingStage('cat_house').ok, 'building should fail when stars are insufficient');
-  store.addReward({ stars: 45 });
-  assert(store.buildBuildingStage('cat_house').ok, 'second building stage should succeed');
-  assert(store.buildBuildingStage('cat_house').ok, 'third building stage should succeed');
-  assert(store.isBuildingCompleted('cat_house'), 'cat house should be completed');
+  // 小节点机制：20 格 × 3 星 = 60 星建满小屋（5 清理 + 7 修复 + 8 装饰）
+  store.addReward({ stars: 3 });
+  const first = store.lightBuildingCell('cat_house');
+  assert(first.ok, 'lighting the first cell should succeed with 3 stars');
+  assert(!first.stageJustCompleted && !first.buildingCompleted, 'first cell should not complete anything');
+  assert(!store.lightBuildingCell('cat_house').ok, 'lighting should fail when stars are insufficient');
+  assert(store.hasBuiltTown(), 'lighting one cell should count as having built the town');
+  store.addReward({ stars: 57 });
+  for (let index = 0; index < 19; index += 1) {
+    assert(store.lightBuildingCell('cat_house').ok, `cell ${index + 2} should light`);
+  }
+  assert(store.isBuildingCompleted('cat_house'), '20 cells should complete the cat house');
   assert(store.getCat('orange').unlocked, 'completing cat house should unlock orange cat');
-  assert(store.getStars() === 0, 'building should consume exact stage costs');
-  assert(!store.buildBuildingStage('cat_house').ok, 'completed building should reject further upgrades');
+  assert(store.getStars() === 0, 'building should consume exactly 60 stars');
+  assert(!store.lightBuildingCell('cat_house').ok, 'completed building should reject further lighting');
+}
+
+function testBuildTargetsAndGuideFlag() {
+  const store = new PlayerStore('player-store-build-target');
+  store.load();
+  const target = store.getNextBuildableInfo();
+  assert(!!target && target.buildingId === 'cat_house', 'first build target should be the cat house');
+  assert(target!.cellCount === 5 && target!.subProgress === 0, 'clean stage should expose five cells');
+  assert(target!.starsNeeded === 3, 'new player should need three stars for the next cell');
+  assert(!store.canLightNextBuildingCell(), 'zero stars should not be enough to light a cell');
+  // 引导条件要求「至少通过一关」：记录第 1 关星星来模拟 L1 已通
+  store.recordLevelStars(1, 3);
+  assert(store.shouldShowFirstTownGuide(), 'cleared level + unbuilt town should show the first town guide');
+  store.markFirstTownGuideDone();
+  store.markFirstTownGuideDone();
+  assert(!store.shouldShowFirstTownGuide(), 'guide flag should suppress the first town guide');
+
+  store.addReward({ stars: 3 });
+  assert(store.canLightNextBuildingCell(), 'three stars should be enough to light a cell');
+  assert(store.lightBuildingCell('cat_house').ok, 'lighting should succeed');
+  assert(store.getNextBuildableInfo()!.subProgress === 1, 'sub progress should advance after lighting');
+  assert(!store.canLightNextBuildingCell(), 'spending stars should re-lock the next cell');
+
+  // 无尽解锁与星星无关：第 1 关通关即开放（回归旧语义）
+  assert(!store.isEndlessUnlocked(), 'endless stays locked before clearing level 1');
+  store.setLevel(2);
+  assert(store.isEndlessUnlocked(), 'clearing level 1 should unlock endless');
 }
 
 function testShopLimits() {
@@ -74,9 +106,9 @@ function testCatInteractionsAndChallengeReward() {
   const store = new PlayerStore('player-store-cats');
   store.load();
   store.addReward({ stars: 60 });
-  assert(store.buildBuildingStage('cat_house').ok, 'first house stage should succeed');
-  assert(store.buildBuildingStage('cat_house').ok, 'second house stage should succeed');
-  assert(store.buildBuildingStage('cat_house').ok, 'third house stage should succeed');
+  for (let index = 0; index < 20; index += 1) {
+    assert(store.lightBuildingCell('cat_house').ok, `house cell ${index + 1} should light`);
+  }
   assert(store.getCat('orange').unlocked, 'orange cat should be unlocked for interaction tests');
   const beforeCoins = store.getCoins();
   assert(store.interactWithCat('orange', 'pet').ok, 'pet interaction should succeed once per day');
@@ -156,12 +188,52 @@ function testSaveNormalization() {
   assert(store.getCoins() === 100, 'invalid save version should reset to defaults');
 }
 
+function testLegacyBuildingSave() {
+  // 旧档 stage=1（清理已完成）且没有 subProgress：读档后当前阶段从 0 格开始，进度无损
+  const key = 'player-store-building-legacy';
+  sys.localStorage.setItem(key, JSON.stringify({
+    version: 2,
+    buildStage: 1,
+    buildings: { cat_house: { unlocked: true, stage: 1 } },
+  }));
+  const store = new PlayerStore(key);
+  store.load();
+  const house = store.getBuildingViews()[0];
+  assert(house.stage === 1, 'legacy stage should be preserved');
+  assert(house.subProgress === 0 && house.cellCount === 7, 'legacy current stage should start at zero cells');
+  store.addReward({ stars: 3 });
+  const result = store.lightBuildingCell('cat_house');
+  assert(result.ok && !result.stageJustCompleted, 'legacy save should continue lighting the repair stage');
+  assert(store.getBuildingViews()[0].subProgress === 1, 'legacy lighting should advance sub progress');
+}
+
+function testBoardTutorialFlag() {
+  const store = new PlayerStore('player-store-tutorial');
+  store.load();
+  assert(!store.isBoardTutorialDone(), 'board tutorial should be pending for new saves');
+  store.markBoardTutorialDone();
+  store.markBoardTutorialDone();
+  assert(store.isBoardTutorialDone(), 'board tutorial marker should be idempotent');
+  const reloaded = new PlayerStore('player-store-tutorial');
+  reloaded.load();
+  assert(reloaded.isBoardTutorialDone(), 'board tutorial flag should survive reload');
+  // 旧档没有该字段：normalize 补 false（level>1 永不触发，无副作用）
+  const legacyKey = 'player-store-tutorial-legacy';
+  sys.localStorage.setItem(legacyKey, JSON.stringify({ version: 2, level: 4 }));
+  const legacy = new PlayerStore(legacyKey);
+  legacy.load();
+  assert(!legacy.isBoardTutorialDone(), 'legacy saves should default the flag to false');
+}
+
 testDefaultsAndRewards();
 testBuildingAndCatUnlock();
+testBuildTargetsAndGuideFlag();
+testBoardTutorialFlag();
 testShopLimits();
 testDailyTasksAndChest();
 testCatInteractionsAndChallengeReward();
 testEndlessProgress();
 testAdFunnelAndRunFields();
 testSaveNormalization();
-process.stdout.write('PlayerStore validation passed: defaults, rewards, buildings, shop, daily tasks, cats, challenge marker, endless, ad funnel, normalization.\n');
+testLegacyBuildingSave();
+process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, shop, daily tasks, cats, challenge marker, endless, ad funnel, normalization, legacy building save.\n');

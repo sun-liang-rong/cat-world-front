@@ -1,14 +1,15 @@
-import { BlockInputEvents, Button, Color, Graphics, Label, Node, Sprite, SpriteFrame, tween, UIOpacity, UITransform, Vec2, Vec3, view } from 'cc';
+import { BlockInputEvents, Button, Color, Graphics, Label, Node, Sprite, tween, UIOpacity, UITransform, Vec2, Vec3, view } from 'cc';
 import { ActivitySnapshot } from './ActivityContent';
 import { AssetStore, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
+import { SettingsPopup } from './SettingsPopup';
 import { PlayerExperienceInfo } from './PlayerTypes';
 import { Toast } from './Toast';
 import { RewardedAdResult } from './RewardedAdService';
 
 type SettingsFrameKey =
   | 'popupPanel' | 'btnClose' | 'rowCard'
-  | 'iconTile' | 'iconMusic' | 'iconSound' | 'iconVibrate' | 'toggleOff' | 'toggleOn';
+  | 'iconTile' | 'iconMusic' | 'iconSound' | 'iconVibrate';
 
 const SETTINGS_FRAME_FILES: Array<[string, SettingsFrameKey]> = [
   ['popup_panel', 'popupPanel'],
@@ -18,8 +19,6 @@ const SETTINGS_FRAME_FILES: Array<[string, SettingsFrameKey]> = [
   ['icon_music', 'iconMusic'],
   ['icon_sound', 'iconSound'],
   ['icon_vibrate', 'iconVibrate'],
-  ['toggle_off', 'toggleOff'],
-  ['toggle_on', 'toggleOn'],
 ];
 
 // 首页首屏依赖的资源路径；加载页必须在进度条走完前把这份清单和关卡页一起准备好。
@@ -31,14 +30,15 @@ export function buildHomeScreenImagePaths() {
     'nav_adventure', 'nav_rank', 'nav_guide',
   ];
   return [
-    'home/home_bg_river',
-    'home/home_cats_group',
-    'home/house_icon',
-    COMMON_UI_ASSETS.coinIcon,
-    ...cropNames.map(name => `home_crops/${name}`),
-    'home_top_crops/avatar',
-    COMMON_UI_ASSETS.coinHud,
-  ];
+      'home/home_bg_river',
+      'home/home_board_3d',
+      'home/home_cats_group',
+      'home/house_icon',
+      COMMON_UI_ASSETS.coinIcon,
+      ...cropNames.map(name => `home_crops/${name}`),
+      'home_top_crops/avatar',
+      COMMON_UI_ASSETS.coinHud,
+    ];
 }
 
 export function buildGuideImagePaths() {
@@ -93,6 +93,10 @@ export interface HomeScreenOptions {
   isChallengeRewardClaimed: () => boolean;
   onOpenTown: () => void;
   shouldShowTownBuildHint: () => boolean;
+  /** 第 1 关一次性引导：过关且从未点亮过建设格子时，首页弹引导蒙层 */
+  shouldShowFirstTownGuide?: () => boolean;
+  /** 引导里点了「去建设」：写入一次性标记，防止下次回首页再弹 */
+  onFirstTownGuideDone?: () => void;
   onOpenCatCollection: () => void;
   shouldShowCatEquipHint: () => boolean;
   onOpenDailyTasks: () => void;
@@ -103,7 +107,6 @@ export interface HomeScreenOptions {
   getActivity: () => ActivitySnapshot;
   onOpenActivity: () => void;
   getDailyTaskBadgeCount: () => number;
-  getAdFunnelSummary?: () => string;
   getChapterInfo: () => HomeChapterInfo;
   getPlayerName: () => string;
   onWatchAd?: () => Promise<RewardedAdResult>;
@@ -112,18 +115,11 @@ export interface HomeScreenOptions {
 
 export class HomeScreen {
   private homeUI: Node | null = null;
-  private toastY = 0;
   private homeCoinLabel: Label | null = null;
   private homeLevelLabel: Label | null = null;
   private homeNameLabel: Label | null = null;
-  private settingsUI: Node | null = null;
-  private settingsPanel: Node | null = null;
-  private settingsBackdrop: Node | null = null;
-  private readonly settingsFrames: Partial<Record<SettingsFrameKey, SpriteFrame>> = {};
-  private musicToggle: Node | null = null;
-  private soundToggle: Node | null = null;
-  private vibrationToggle: Node | null = null;
-  private adFunnelLabel: Label | null = null;
+  // 设置弹窗抽成了共享组件（SettingsPopup），首页与关卡页共用
+  private settingsPopup: SettingsPopup | null = null;
   private guideUI: Node | null = null;
   private guideTabItems: GuideTabItem[] = [];
   private moreUI: Node | null = null;
@@ -137,10 +133,11 @@ export class HomeScreen {
   private taskBadgeLabel: Label | null = null;
   private townHintBubble: Node | null = null;
   private catEquipHintBubble: Node | null = null;
+  private townGuideUI: Node | null = null;
+  private townEntry: Node | null = null;
   private readonly navSelectedPlates: Node[] = [];
   private selectedNavIndex = -1;
   private guideLoading = false;
-  private settingsLoading = false;
   private coinAdPopup: Node | null = null;
   private adRewardBusy = false;
 
@@ -157,7 +154,8 @@ export class HomeScreen {
     });
   }
 
-  // 设置和玩法介绍不阻塞进首页，但首页亮起后立刻预建，避免第一次点开再拉远程图。
+  // 设置和玩法介绍不阻塞进首页，但首页亮起后立刻预载帧图，避免第一次点开再拉远程图。
+  // 设置弹窗本体已抽为 SettingsPopup，这里只负责把它的帧图预热进全局缓存。
   preloadOverlays(onReady?: () => void) {
     this.assets.loadImages([
       ...buildGuideImagePaths(),
@@ -165,14 +163,7 @@ export class HomeScreen {
       // 金币广告弹窗的按钮底图（复用商店素材），否则没进过商店的用户点开是无底图按钮
       'shop/button_ad',
     ], () => {
-      if (this.homeUI) {
-        SETTINGS_FRAME_FILES.forEach(([file, key]) => {
-          const frame = this.assets.getFrame(`home_settings/${file}`);
-          if (frame) this.settingsFrames[key] = frame;
-        });
-        if (!this.settingsUI) this.buildSettings();
-        if (!this.guideUI) this.buildGuide();
-      }
+      if (this.homeUI && !this.guideUI) this.buildGuide();
       onReady?.();
     });
   }
@@ -180,7 +171,10 @@ export class HomeScreen {
   setActive(active: boolean) {
     if (!this.homeUI) return;
     this.homeUI.active = active;
-    if (!active && this.settingsUI) this.settingsUI.active = false;
+    if (!active && this.settingsPopup) {
+      this.settingsPopup.close();
+      this.settingsPopup = null;
+    }
     if (!active && this.guideUI) this.guideUI.active = false;
     if (!active && this.moreUI) this.moreUI.active = false;
     if (active) {
@@ -196,19 +190,20 @@ export class HomeScreen {
       this.refreshMoreEntries();
       this.refreshTownHintBubble();
       this.refreshCatEquipHintBubble();
+      this.maybeShowFirstTownGuide();
+    } else {
+      this.closeFirstTownGuide();
     }
   }
 
   destroy() {
+    this.settingsPopup?.close();
+    this.settingsPopup = null;
     this.homeUI?.destroy();
     this.homeUI = null;
     this.homeCoinLabel = null;
     this.homeLevelLabel = null;
     this.homeNameLabel = null;
-    this.adFunnelLabel = null;
-    this.settingsUI = null;
-    this.settingsPanel = null;
-    this.settingsBackdrop = null;
     this.guideUI = null;
     this.guideTabItems = [];
     this.moreUI = null;
@@ -222,10 +217,11 @@ export class HomeScreen {
     this.taskBadgeLabel = null;
     this.townHintBubble = null;
     this.catEquipHintBubble = null;
+    this.townGuideUI = null;
+    this.townEntry = null;
     this.navSelectedPlates.length = 0;
     this.selectedNavIndex = -1;
     this.guideLoading = false;
-    this.settingsLoading = false;
   }
 
   private label(parent: Node, text: string, x: number, y: number, size = 24, color = Color.WHITE) {
@@ -379,35 +375,71 @@ export class HomeScreen {
     this.homeUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     this.homeUI.active = false;
     this.image(this.homeUI, 'home/home_bg_river', 0, 0, visibleSize.width, visibleSize.height);
+    this.buildPlazaBoard();
     this.buildPlazaCats();
     this.buildTownEntry();
     this.buildCatSocietyEntry();
     this.buildPlayEntries();
     this.buildTopBar(top);
     this.buildGameTitle(top);
+    this.buildChapterBanner(top);
     this.buildStartCluster(bottom);
     this.buildBottomNav(bottom);
-    this.toastY = bottom + 220;
   }
 
-  // 五只猫咪组图装饰：锚定在 home_bg_river.jpg（864x1536）河岸步道的地面线上，
-  // 用归一化坐标定位，保证不同屏幕比例下都贴着步道不漂移。
+  // 立体厚牌棋盘：叠在标题和开始按钮之间，让首页一眼能看出是收集式三消。
+  // 原生图 900×745；底部停在开始按钮上方，顶部不压标题。
+  private buildPlazaBoard() {
+    const visibleSize = view.getVisibleSize();
+    const boardWidth = Math.min(visibleSize.width * 0.64, 480);
+    const boardHeight = boardWidth * (745 / 900);
+    const centerV = 0.46;
+    const centerY = visibleSize.height / 2 - centerV * visibleSize.height;
+
+    const holder = new Node('PlazaBoard');
+    this.homeUI!.addChild(holder);
+    holder.setPosition(0, centerY);
+    holder.addComponent(UITransform).setContentSize(boardWidth, boardHeight);
+
+    const shadow = new Node('PlazaBoardShadow');
+    holder.addChild(shadow);
+    shadow.setPosition(0, -boardHeight / 2 + 18);
+    shadow.addComponent(UITransform).setContentSize(boardWidth * 0.86, 28);
+    const shadowGraphics = shadow.addComponent(Graphics);
+    shadowGraphics.fillColor = new Color(92, 54, 22, 80);
+    shadowGraphics.ellipse(0, 0, boardWidth * 0.43, 14);
+    shadowGraphics.fill();
+
+    this.image(holder, 'home/home_board_3d', 0, 0, boardWidth, boardHeight);
+
+    holder.setScale(new Vec3(0.82, 0.82, 1));
+    const opacity = holder.addComponent(UIOpacity);
+    opacity.opacity = 0;
+    tween(holder)
+      .delay(0.38)
+      .to(0.34, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .start();
+    tween(opacity).delay(0.38).to(0.22, { opacity: 255 }).start();
+  }
+
+  // 五只立体猫咪：坐在棋盘前排，脚踩河岸步道，点进去猫咪社。
+  // 原生组图 995×400；用归一化脚底坐标，避免不同屏幕比例下漂离地面。
   // 背景纵向结构：桥面约 0.46 / 河面 0.51~0.67 / 石岸 0.67~0.72 / 步道 0.72 以下。
   private buildPlazaCats() {
     const visibleSize = view.getVisibleSize();
-    const catWidth = Math.min(visibleSize.width * 0.74, 560);
-    const catHeight = catWidth * (299 / 938);
-    const feetV = 0.64;
-    const centerY = visibleSize.height / 2 - feetV * visibleSize.height + catHeight / 2;
+    const catWidth = Math.min(visibleSize.width * 0.75, 560);
+    const catHeight = catWidth * (400 / 995);
+    const feetV = 0.66;
+    const centerY = visibleSize.height / 2 - feetV * visibleSize.height + catHeight / 2 - 30;
 
     const holder = new Node('PlazaCats');
     this.homeUI!.addChild(holder);
-    holder.setPosition(8, centerY);
+    holder.setPosition(0, centerY);
     holder.addComponent(UITransform).setContentSize(catWidth, catHeight);
 
     const shadow = new Node('PlazaCatsShadow');
     holder.addChild(shadow);
-    shadow.setPosition(0, -catHeight / 2 + 6);
+    shadow.setPosition(0, -catHeight / 2 + 10);
     shadow.addComponent(UITransform).setContentSize(catWidth * 0.94, 22);
     const shadowGraphics = shadow.addComponent(Graphics);
     shadowGraphics.fillColor = new Color(92, 54, 22, 80);
@@ -426,7 +458,6 @@ export class HomeScreen {
       .start();
     tween(opacity).delay(0.55).to(0.25, { opacity: 255 }).start();
 
-    // 添加猫咪的待机动画：随机的耳朵和尾巴抖动效果
     this.startCatIdleAnimation(holder);
   }
 
@@ -443,7 +474,7 @@ export class HomeScreen {
   }
 
   private sideEntryAnchorY() {
-    return view.getVisibleSize().height / 2 - 0.64 * view.getVisibleSize().height + 134;
+    return view.getVisibleSize().height / 2 - 0.52 * view.getVisibleSize().height + 160;
   }
 
   private buildTownEntry() {
@@ -451,6 +482,7 @@ export class HomeScreen {
     this.homeUI!.addChild(entry);
     entry.setPosition(-304, this.sideEntryAnchorY());
     entry.addComponent(UITransform).setContentSize(124, 148);
+    this.townEntry = entry;
 
     this.image(entry, 'home/house_icon', 0, 18, 84, 80);
     this.sideEntryLabel(entry, '建设小镇', 0, -50);
@@ -511,6 +543,123 @@ export class HomeScreen {
   private refreshCatEquipHintBubble() {
     if (!this.catEquipHintBubble) return;
     this.catEquipHintBubble.active = this.options.shouldShowCatEquipHint();
+  }
+
+  // 第 1 关一次性建设引导：半透明蒙层 + 小镇入口高亮副本 + 脉冲光环 + 指引面板。
+  // 跳过（稍后再说）不置标记，下次回首页会再弹；点亮过任意格子后条件自然消失。
+  private maybeShowFirstTownGuide() {
+    if (!this.options.shouldShowFirstTownGuide?.() || !this.homeUI || this.townGuideUI) return;
+    // 猫探头 / 星星图标可能还没被预热进缓存，这里按需加载一次再画面板（命中缓存即同步回调）
+    this.assets.loadImages(['cats/cat_orange', COMMON_UI_ASSETS.starIcon], () => this.buildFirstTownGuide());
+  }
+
+  private buildFirstTownGuide() {
+    if (!this.homeUI || !this.homeUI.active || this.townGuideUI) return;
+    if (!this.options.shouldShowFirstTownGuide?.()) return;
+    const overlay = new Node('FirstTownGuide');
+    this.homeUI.addChild(overlay);
+    this.townGuideUI = overlay;
+    // 蒙层会压暗整个首页：真实的入口和小气泡先藏起来，入口改由蒙层上的高亮副本呈现
+    if (this.townEntry) this.townEntry.active = false;
+    if (this.townHintBubble) this.townHintBubble.active = false;
+
+    const visibleSize = view.getVisibleSize();
+    const backdrop = new Node('FirstTownGuideMask');
+    overlay.addChild(backdrop);
+    backdrop.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
+    const backdropGraphics = backdrop.addComponent(Graphics);
+    backdropGraphics.fillColor = new Color(22, 18, 13, 190);
+    backdropGraphics.rect(-visibleSize.width / 2, -visibleSize.height / 2, visibleSize.width, visibleSize.height);
+    backdropGraphics.fill();
+    backdrop.addComponent(BlockInputEvents);
+
+    const entryY = this.sideEntryAnchorY();
+    const ring = new Node('FirstTownGuideRing');
+    overlay.addChild(ring);
+    ring.setPosition(-304, entryY);
+    ring.addComponent(UITransform).setContentSize(220, 220);
+    const ringGraphics = ring.addComponent(Graphics);
+    ringGraphics.strokeColor = new Color(255, 224, 108);
+    ringGraphics.lineWidth = 8;
+    ringGraphics.circle(0, 0, 96);
+    ringGraphics.stroke();
+    tween(ring)
+      .repeatForever(
+        tween()
+          .to(0.75, { scale: new Vec3(1.14, 1.14, 1) }, { easing: 'sineInOut' })
+          .to(0.75, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
+
+    // 入口高亮副本：与 buildTownEntry / sideEntryLabel 同款内容，画在蒙层之上保持明亮
+    const entryCopy = new Node('FirstTownGuideEntryCopy');
+    overlay.addChild(entryCopy);
+    entryCopy.setPosition(-304, entryY);
+    entryCopy.addComponent(UITransform).setContentSize(124, 148);
+    this.image(entryCopy, 'home/house_icon', 0, 18, 84, 80);
+    const entryPill = this.creamPanel(
+      entryCopy, 0, -50, 108, 34, 12,
+      new Color(255, 248, 226, 245), new Color(235, 205, 158),
+    );
+    const entryText = this.label(entryPill, '建设小镇', 0, -2, 22, new Color(107, 74, 46));
+    entryText.isBold = true;
+
+    // 面板带投影 + 顶部猫探头，与玩法介绍弹窗同一套视觉语言；
+    // 宽度压在 480 内，左缘不盖住小镇入口的脉冲光环
+    this.roundedShape(
+      overlay, 'FirstTownGuideShadow', 56, entryY - 86, 488, 276, 32,
+      new Color(69, 48, 29, 88), new Color(69, 48, 29, 0), 0,
+    );
+    const panel = this.creamPanel(
+      overlay, 56, entryY - 80, 480, 268, 30,
+      new Color(255, 248, 226), new Color(235, 205, 158),
+    );
+    panel.setScale(new Vec3(0.7, 0.7, 1));
+    tween(panel)
+      .to(0.26, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .start();
+
+    const mascot = this.image(panel, 'cats/cat_orange', 0, 170, 112, 112);
+    tween(mascot)
+      .repeatForever(
+        tween()
+          .to(1, { scale: new Vec3(1.04, 1.04, 1) }, { easing: 'sineInOut' })
+          .to(1, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
+
+    this.image(panel, COMMON_UI_ASSETS.starIcon, -106, 70, 30, 30);
+    const title = this.label(panel, '通关第 1 关啦！', 21, 70, 28, new Color(111, 62, 28));
+    title.isBold = true;
+    const body = this.label(panel, '刚赢的星星可以逐格点亮\n流浪猫小屋，修好它解锁猫咪！', 0, 14, 20, new Color(112, 69, 40));
+
+    // 按钮宽度贴内容：去建设 3 字 ≈78px、稍后再说 4 字 ≈88px，左右各留 ~36/28px 内边距
+    const goButton = this.creamPanel(
+      panel, -85, -76, 152, 88, 44,
+      new Color(255, 224, 108), new Color(201, 148, 47),
+    );
+    const goLabel = this.label(goButton, '去建设', 0, -1, 26, new Color(111, 62, 28));
+    goLabel.isBold = true;
+    this.addTapFeedback(goButton, () => {
+      this.closeFirstTownGuide();
+      this.options.onFirstTownGuideDone?.();
+      this.options.onOpenTown();
+    });
+
+    const skipButton = this.creamPanel(
+      panel, 88, -76, 146, 88, 44,
+      new Color(255, 252, 241), new Color(228, 215, 193),
+    );
+    const skipLabel = this.label(skipButton, '稍后再说', 0, -1, 22, new Color(135, 104, 76));
+    skipLabel.isBold = true;
+    this.addTapFeedback(skipButton, () => this.closeFirstTownGuide(), 0.95);
+  }
+
+  private closeFirstTownGuide() {
+    this.townGuideUI?.destroy();
+    this.townGuideUI = null;
+    if (this.townEntry) this.townEntry.active = true;
+    this.refreshTownHintBubble();
   }
 
   private buildCatSocietyEntry() {
@@ -605,13 +754,25 @@ export class HomeScreen {
     avatar.getComponent(UITransform)!.setContentSize(108, 108);
     this.homeLevelLabel = this.label(avatar, '', 0, -39, 16, new Color(91, 53, 34));
     this.homeLevelLabel.isBold = true;
-    this.homeNameLabel = this.label(avatar, '', 0, -68, 18, new Color(91, 53, 34));
+    // 昵称名牌：奶油胶囊垫底 + 椭圆投影，把名字从天空背景里托出来（与侧边入口胶囊同族样式）
+    const nameShadow = new Node('NameShadow');
+    avatar.addChild(nameShadow);
+    nameShadow.setPosition(0, -90);
+    nameShadow.addComponent(UITransform).setContentSize(124, 10);
+    const nameShadowGraphics = nameShadow.addComponent(Graphics);
+    nameShadowGraphics.fillColor = new Color(92, 54, 22, 80);
+    nameShadowGraphics.ellipse(0, 0, 62, 5);
+    nameShadowGraphics.fill();
+    const namePlate = this.creamPanel(
+      avatar, 0, -70, 136, 34, 12,
+      new Color(255, 248, 226, 245), new Color(235, 205, 158),
+    );
+    this.homeNameLabel = this.label(namePlate, '', 0, 0, 21, new Color(91, 53, 34));
     this.homeNameLabel.isBold = true;
-    this.homeNameLabel.outlineWidth = 4;
-    this.homeNameLabel.outlineColor = new Color(255, 248, 226);
     this.homeNameLabel.overflow = Label.Overflow.SHRINK;
     this.homeNameLabel.enableWrapText = false;
-    this.homeNameLabel.node.getComponent(UITransform)!.setContentSize(132, 28);
+    this.homeNameLabel.verticalAlign = Label.VerticalAlign.CENTER;
+    this.homeNameLabel.node.getComponent(UITransform)!.setContentSize(124, 34);
     this.refreshPlayerName();
     this.addTapFeedback(avatar, () => {
       const exp = this.options.getExperienceInfo();
@@ -673,17 +834,13 @@ export class HomeScreen {
     tween(opacity).delay(0.12).to(0.24, { opacity: 255 }).start();
   }
 
-  private buildStartCluster(bottom: number) {
-    const cluster = new Node('StartCluster');
-    this.homeUI!.addChild(cluster);
-    cluster.setPosition(0, bottom + 380);
-
+  // 关卡条跟标题锚定在屏幕上方，不再跟着底部开始按钮走，避免长屏时掉到猫咪头顶。
+  private buildChapterBanner(top: number) {
     const banner = this.creamPanel(
-      cluster, 0, 468, 360, 52, 26,
+      this.homeUI!, 0, top - 380, 360, 52, 26,
       new Color(255, 248, 226, 246), new Color(235, 205, 158),
     );
 
-    // 添加横幅底部阴影增强对比度
     const bannerShadow = new Node('BannerShadow');
     banner.addChild(bannerShadow);
     bannerShadow.setPosition(0, -32);
@@ -699,7 +856,6 @@ export class HomeScreen {
     this.homeChapterTitleLabel = title;
     this.refreshChapterBanner();
 
-    // 横幅呼吸动画
     tween(banner)
       .delay(2)
       .repeatForever(
@@ -709,6 +865,12 @@ export class HomeScreen {
           .to(0.4, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
       )
       .start();
+  }
+
+  private buildStartCluster(bottom: number) {
+    const cluster = new Node('StartCluster');
+    this.homeUI!.addChild(cluster);
+    cluster.setPosition(0, bottom + 380);
 
     const start = new Node('StartButton');
     cluster.addChild(start);
@@ -1146,8 +1308,8 @@ export class HomeScreen {
 
     const steps: Array<{ title: string; body: string; icon: string }> = [
       { title: '开始闯关', body: '点击首页“开始闯关”挑战当前主线关卡', icon: 'guide/step_play' },
-      { title: '获得星星', body: '通关即得星星，是建设小镇的核心资源', icon: COMMON_UI_ASSETS.starIcon },
-      { title: '建设小镇', body: '前往小镇，用星星清理/修复/装饰建筑', icon: 'home/house_icon' },
+      { title: '获得星星', body: '每关固定得 3 星，3 星正好点亮一格建设', icon: COMMON_UI_ASSETS.starIcon },
+      { title: '建设小镇', body: '用星星逐格点亮建筑，亮满一个大节点就焕然一新', icon: 'home/house_icon' },
       { title: '解锁猫咪', body: '建筑装饰完成后，对应猫咪加入猫咪社', icon: 'guide/step_cat' },
       { title: '升级猫咪', body: '消耗金币升级猫咪，缩短技能冷却', icon: 'guide/step_upgrade' },
       { title: '使用专属技能', body: '装备猫咪闯关，充能满后释放技能', icon: 'guide/step_skill' },
@@ -1308,229 +1470,7 @@ export class HomeScreen {
 
   toast(text: string) {
     if (!this.homeUI) return;
-    Toast.show(this.homeUI, text, { y: this.toastY });
-  }
-
-  private buildSettings() {
-    if (this.settingsUI || !this.homeUI) return;
-    const overlay = new Node('SettingsOverlay');
-    this.homeUI!.addChild(overlay);
-    overlay.active = false;
-    this.settingsUI = overlay;
-
-    const visibleSize = view.getVisibleSize();
-    const backdrop = new Node('SettingsBackdrop');
-    overlay.addChild(backdrop);
-    backdrop.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
-    const backdropGraphics = backdrop.addComponent(Graphics);
-    backdropGraphics.fillColor = new Color(22, 18, 13, 150);
-    backdropGraphics.rect(-visibleSize.width / 2, -visibleSize.height / 2, visibleSize.width, visibleSize.height);
-    backdropGraphics.fill();
-    backdrop.addComponent(BlockInputEvents);
-    backdrop.on(Node.EventType.TOUCH_END, () => this.toggleSettings(false));
-    this.settingsBackdrop = backdrop;
-
-    this.roundedShape(
-      overlay, 'SettingsShadow', 0, 2, 592, 532, 40,
-      new Color(69, 48, 29, 82), new Color(69, 48, 29, 0), 0,
-    );
-    const panel = new Node('SettingsPanel');
-    overlay.addChild(panel);
-    panel.setPosition(0, 26);
-    panel.addComponent(UITransform).setContentSize(580, 520);
-    this.settingsPanel = panel;
-    const panelFrame = this.settingsFrames.popupPanel;
-    if (panelFrame) {
-      this.applySliceInsets(panelFrame, 80, 80);
-      const sprite = panel.addComponent(Sprite);
-      sprite.sizeMode = Sprite.SizeMode.CUSTOM;
-      sprite.type = Sprite.Type.SLICED;
-      sprite.spriteFrame = panelFrame;
-    } else {
-      this.roundedShape(panel, 'SettingsPanelBg', 0, 0, 580, 520, 38, new Color(255, 247, 224), new Color(205, 165, 102), 4);
-    }
-    const panelOpacity = panel.addComponent(UIOpacity);
-    panelOpacity.opacity = 0;
-
-    // 头部收紧：去掉大标题横幅和头像徽章，改居中标题 + 右上角关闭钮
-    const title = this.label(panel, '设置', 0, 222, 30, new Color(100, 69, 43));
-    title.isBold = true;
-    const titleRule = this.label(panel, '小镇偏好', 0, 188, 17, new Color(125, 154, 89));
-    titleRule.isBold = true;
-
-    const close = this.settingsSprite(panel, 'SettingsClose', this.settingsFrames.btnClose, 240, 212, 88, 88);
-    if (!this.settingsFrames.btnClose) {
-      const closeShadow = close.addComponent(Graphics);
-      closeShadow.fillColor = new Color(91, 53, 34, 60);
-      closeShadow.ellipse(2, -4, 38, 38);
-      closeShadow.fill();
-      closeShadow.lineWidth = 3;
-      closeShadow.strokeColor = new Color(255, 250, 229);
-      closeShadow.fillColor = new Color(244, 103, 92);
-      closeShadow.ellipse(0, 2, 38, 38);
-      closeShadow.fill();
-      closeShadow.stroke();
-      closeShadow.lineWidth = 6;
-      closeShadow.strokeColor = new Color(255, 250, 236);
-      closeShadow.moveTo(-15, 16);
-      closeShadow.lineTo(15, -13);
-      closeShadow.moveTo(15, 16);
-      closeShadow.lineTo(-15, -13);
-      closeShadow.stroke();
-    }
-    this.addTapFeedback(close, () => this.toggleSettings(false));
-
-    this.buildSettingRow(panel, '音乐', '背景音乐', this.settingsFrames.iconMusic, 43, 96, 'music');
-    this.buildSettingRow(panel, '音效', '互动音效', this.settingsFrames.iconSound, 44, -26, 'sound');
-    this.buildSettingRow(panel, '震动', '震动反馈', this.settingsFrames.iconVibrate, 44, -132, 'vibration');
-    this.adFunnelLabel = this.label(panel, this.options.getAdFunnelSummary?.() || '', 0, -208, 16, new Color(141, 105, 66));
-    this.adFunnelLabel.overflow = Label.Overflow.SHRINK;
-    this.adFunnelLabel.enableWrapText = false;
-    const funnelTransform = this.adFunnelLabel.node.getComponent(UITransform);
-    funnelTransform?.setContentSize(520, 28);
-    const footerRule = new Node('SettingsFooterRule');
-    panel.addChild(footerRule);
-    footerRule.setPosition(0, -232);
-    const footerGraphics = footerRule.addComponent(Graphics);
-    footerGraphics.lineWidth = 2;
-    footerGraphics.strokeColor = new Color(235, 215, 180, 190);
-    footerGraphics.moveTo(-170, 0);
-    footerGraphics.lineTo(170, 0);
-    footerGraphics.stroke();
-    const footer = this.label(panel, '猫爪星球奇遇记', 0, -240, 17, new Color(181, 147, 96));
-    footer.isBold = true;
-  }
-
-  private buildSettingRow(
-    parent: Node,
-    name: string,
-    caption: string,
-    iconFrame: SpriteFrame | undefined,
-    iconSize: number,
-    y: number,
-    kind: 'music' | 'sound' | 'vibration',
-  ) {
-    const row = this.settingsSprite(parent, `${name}Row`, this.settingsFrames.rowCard, 0, y, 528, 104, 48, 44);
-    if (!this.settingsFrames.rowCard) {
-      this.roundedShape(row, `${name}RowBg`, 0, 0, 528, 104, 25, new Color(255, 252, 241), new Color(239, 215, 175), 3);
-    }
-
-    const tile = this.settingsSprite(row, `${name}IconTile`, this.settingsFrames.iconTile, -208, 0, 72, 72);
-    if (!this.settingsFrames.iconTile) {
-      this.roundedShape(tile, `${name}TileBg`, 0, 0, 72, 72, 18, new Color(255, 237, 204), new Color(241, 202, 145), 2);
-    }
-    if (iconFrame) {
-      this.settingsSprite(tile, `${name}Icon`, iconFrame, 0, 0, iconSize, iconSize);
-    }
-
-    const title = this.label(row, name, -104, 10, 24, new Color(100, 69, 43));
-    title.isBold = true;
-    const captionLabel = this.label(row, caption, -104, -20, 17, new Color(172, 143, 104));
-    captionLabel.isBold = true;
-
-    const toggle = new Node(`${name}Toggle`);
-    row.addChild(toggle);
-    toggle.setPosition(174, 0);
-    toggle.addComponent(UITransform).setContentSize(146, 88);
-    if (this.settingsFrames.toggleOff) {
-      this.settingsSprite(toggle, 'ToggleArt', this.settingsFrames.toggleOff, 0, 0, 146, 88);
-    }
-    const button = toggle.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
-    button.node.on(Button.EventType.CLICK, () => {
-      this.options.onPlaySound('click');
-      if (kind === 'music') this.options.onMusicChanged(!this.options.getMusicEnabled());
-      else if (kind === 'sound') this.options.onSoundChanged(!this.options.getSoundEnabled());
-      else this.options.onVibrationChanged(!this.options.getVibrationEnabled());
-      this.refreshSettingRows();
-      this.popToggle(toggle);
-    });
-    if (kind === 'music') this.musicToggle = toggle;
-    else if (kind === 'sound') this.soundToggle = toggle;
-    else this.vibrationToggle = toggle;
-    this.refreshSettingRows();
-  }
-
-  private refreshSettingRows() {
-    this.refreshToggle(this.musicToggle, this.options.getMusicEnabled());
-    this.refreshToggle(this.soundToggle, this.options.getSoundEnabled());
-    this.refreshToggle(this.vibrationToggle, this.options.getVibrationEnabled());
-  }
-
-  private refreshToggle(toggle: Node | null, enabled: boolean) {
-    if (!toggle) return;
-    const art = toggle.getChildByName('ToggleArt');
-    const sprite = art?.getComponent(Sprite);
-    if (sprite) {
-      sprite.spriteFrame = (enabled ? this.settingsFrames.toggleOn : this.settingsFrames.toggleOff) ?? null;
-      return;
-    }
-    // 图集缺失时的纯 Graphics 兜底开关。
-    toggle.removeAllChildren();
-    const track = new Node('ToggleTrack');
-    toggle.addChild(track);
-    track.addComponent(UITransform).setContentSize(146, 88);
-    const trackGraphics = track.addComponent(Graphics);
-    trackGraphics.lineWidth = 3;
-    trackGraphics.fillColor = enabled ? new Color(143, 190, 79) : new Color(201, 174, 132);
-    trackGraphics.strokeColor = enabled ? new Color(109, 157, 51) : new Color(176, 142, 99);
-    trackGraphics.roundRect(-73, -44, 146, 88, 44);
-    trackGraphics.fill();
-    trackGraphics.stroke();
-    const knob = new Node('ToggleKnob');
-    toggle.addChild(knob);
-    knob.setPosition(enabled ? 42 : -42, 0);
-    knob.addComponent(UITransform).setContentSize(60, 60);
-    const knobGraphics = knob.addComponent(Graphics);
-    knobGraphics.fillColor = new Color(96, 62, 36, 48);
-    knobGraphics.ellipse(2, -3, 28, 28);
-    knobGraphics.fill();
-    knobGraphics.fillColor = new Color(255, 249, 226);
-    knobGraphics.strokeColor = new Color(247, 225, 179);
-    knobGraphics.lineWidth = 2;
-    knobGraphics.ellipse(0, 2, 28, 28);
-    knobGraphics.fill();
-    knobGraphics.stroke();
-  }
-
-  private popToggle(toggle: Node) {
-    const art = toggle.getChildByName('ToggleArt');
-    if (!art) return;
-    art.setScale(new Vec3(1.14, 1.14, 1));
-    tween(art).to(0.14, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' }).start();
-  }
-
-  private settingsSprite(
-    parent: Node,
-    name: string,
-    frame: SpriteFrame | undefined,
-    x: number,
-    y: number,
-    width: number,
-    height: number,
-    sliceHorizontal = 0,
-    sliceVertical = sliceHorizontal,
-  ) {
-    const node = new Node(name);
-    parent.addChild(node);
-    node.setPosition(x, y);
-    node.addComponent(UITransform).setContentSize(width, height);
-    if (frame) {
-      if (sliceHorizontal > 0) this.applySliceInsets(frame, sliceHorizontal, sliceVertical);
-      const sprite = node.addComponent(Sprite);
-      sprite.sizeMode = Sprite.SizeMode.CUSTOM;
-      sprite.type = sliceHorizontal > 0 ? Sprite.Type.SLICED : Sprite.Type.SIMPLE;
-      sprite.spriteFrame = frame;
-    }
-    return node;
-  }
-
-  private applySliceInsets(frame: SpriteFrame, horizontal: number, vertical: number) {
-    frame.insetLeft = horizontal;
-    frame.insetRight = horizontal;
-    frame.insetTop = vertical;
-    frame.insetBottom = vertical;
+    Toast.show(this.homeUI, text);
   }
 
   private toggleCoinAdPopup(active = !this.coinAdPopup?.active) {
@@ -1652,44 +1592,23 @@ export class HomeScreen {
     this.toggleCoinAdPopup(false);
   }
 
-  private toggleSettings(active = !this.settingsUI?.active) {
-    if (!active) {
-      if (this.settingsUI) this.settingsUI.active = false;
+  private toggleSettings(open = !this.settingsPopup) {
+    if (!open) {
+      this.settingsPopup?.close();
+      this.settingsPopup = null;
       return;
     }
-    if (!this.settingsUI) {
-      if (this.settingsLoading || !this.homeUI) return;
-      this.settingsLoading = true;
-      this.assets.loadImages(buildSettingsImagePaths(), () => {
-        this.settingsLoading = false;
-        if (!this.homeUI || !this.homeUI.active) return;
-        SETTINGS_FRAME_FILES.forEach(([file, key]) => {
-          const frame = this.assets.getFrame(`home_settings/${file}`);
-          if (frame) this.settingsFrames[key] = frame;
-        });
-        if (!this.settingsUI) this.buildSettings();
-        this.toggleSettings(true);
-      });
-      return;
-    }
-    this.settingsUI.active = true;
-    this.refreshSettingRows();
-    if (this.adFunnelLabel) this.adFunnelLabel.string = this.options.getAdFunnelSummary?.() || '';
-    if (this.settingsPanel) {
-      const opacity = this.settingsPanel.getComponent(UIOpacity);
-      if (opacity) {
-        opacity.opacity = 0;
-        tween(opacity).to(0.22, { opacity: 255 }).start();
-      }
-      this.settingsPanel.setScale(new Vec3(0.9, 0.9, 1));
-      tween(this.settingsPanel)
-        .to(0.32, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
-        .start();
-    }
-    if (this.settingsBackdrop) {
-      const opacity = this.settingsBackdrop.getComponent(UIOpacity) || this.settingsBackdrop.addComponent(UIOpacity);
-      opacity.opacity = 0;
-      tween(opacity).to(0.2, { opacity: 255 }).start();
-    }
+    if (this.settingsPopup || !this.homeUI) return;
+    this.settingsPopup = SettingsPopup.open(this.homeUI, this.assets, {
+      getMusicEnabled: () => this.options.getMusicEnabled(),
+      getSoundEnabled: () => this.options.getSoundEnabled(),
+      getVibrationEnabled: () => this.options.getVibrationEnabled(),
+      onMusicChanged: enabled => this.options.onMusicChanged(enabled),
+      onSoundChanged: enabled => this.options.onSoundChanged(enabled),
+      onVibrationChanged: enabled => this.options.onVibrationChanged(enabled),
+      onPlaySound: effect => this.options.onPlaySound(effect),
+      // 弹窗自毁（点遮罩/关闭钮）时同步清引用，避免残留已销毁组件
+      onClose: () => { this.settingsPopup = null; },
+    });
   }
 }

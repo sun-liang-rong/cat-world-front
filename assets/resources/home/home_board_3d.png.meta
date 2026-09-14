@@ -2,7 +2,7 @@
   "ver": "1.0.27",
   "importer": "image",
   "imported": true,
-  "uuid": "ca7076cc-5bf7-4d56-a9dc-e97d7144cb99",
+  "uuid": "ff44e94a-e535-4f75-95d1-f4d8ebe23dfe",
   "files": [
     ".json",
     ".png"
@@ -10,8 +10,8 @@
   "subMetas": {
     "6c48a": {
       "importer": "texture",
-      "uuid": "ca7076cc-5bf7-4d56-a9dc-e97d7144cb99@6c48a",
-      "displayName": "paw_gold",
+      "uuid": "ff44e94a-e535-4f75-95d1-f4d8ebe23dfe@6c48a",
+      "displayName": "home_board_3d",
       "id": "6c48a",
       "name": "texture",
       "userData": {
@@ -22,7 +22,7 @@
         "mipfilter": "none",
         "anisotropy": 0,
         "isUuid": true,
-        "imageUuidOrDatabaseUri": "ca7076cc-5bf7-4d56-a9dc-e97d7144cb99",
+        "imageUuidOrDatabaseUri": "ff44e94a-e535-4f75-95d1-f4d8ebe23dfe",
         "visible": false
       },
       "ver": "1.0.22",
@@ -37,6 +37,6 @@
     "type": "texture",
     "fixAlphaTransparencyArtifacts": false,
     "hasAlpha": true,
-    "redirect": "ca7076cc-5bf7-4d56-a9dc-e97d7144cb99@6c48a"
+    "redirect": "ff44e94a-e535-4f75-95d1-f4d8ebe23dfe@6c48a"
   }
 }

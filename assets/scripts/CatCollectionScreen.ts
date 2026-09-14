@@ -122,7 +122,6 @@ const SHELF_TIERS: ShelfTier[] = [
 
 export class CatCollectionScreen {
   private collectionUI: Node | null = null;
-  private toastY = -150;
   private countLabel: Label | null = null;
   private readonly slotViews: CatSlotView[] = [];
   private readonly sparkleNodes: Node[] = [];
@@ -198,8 +197,10 @@ export class CatCollectionScreen {
     // 标题徽标夹在返回键与收集进度之间，窄屏也不会互相压到。
     this.image(this.collectionUI!, 'cat_she/title_logo', 0, headerY, 260, 79);
 
-    const chip = this.image(this.collectionUI!, 'cat_she/progress_panel', 250, belowWeChatCapsule(top, 68), 200, 68);
-    this.countLabel = this.label(chip, '', 30, 0, 21, COLORS.orange);
+    // 收集进度胶囊：素材原始比例 240×116，按等比缩放展示（189×91），
+    // 之前的 200×68 会把爪印竖向压扁。文字随胶囊缩小到 18px，仍在规范下限之上。
+    const chip = this.image(this.collectionUI!, 'cat_she/progress_panel', 252, belowWeChatCapsule(top, 91), 189, 91);
+    this.countLabel = this.label(chip, '', 32, 0, 18, COLORS.orange);
     this.countLabel.isBold = true;
   }
 
@@ -282,17 +283,24 @@ export class CatCollectionScreen {
     // 名牌嵌在台面前板上（台面顶部往下 26px 起），所以木头在名牌上下都能露出来。
     const plaqueY = tier.boardTop - 26 - PLAQUE_HEIGHT / 2;
 
+    // 按钮热区必须罩住"猫 + 名牌"的实际画面：槽位锚在内容中心而非展台中心，
+    // 否则上排猫点不到、上下两排热区在展台中部互相叠压，会出现点 A 却 B 播按压动画。
+    const contentTop = catBottom + tier.catBox.height;
+    const contentBottom = plaqueY - PLAQUE_HEIGHT / 2;
+    const contentCenterY = (contentTop + contentBottom) / 2;
+    const contentWidth = Math.max(tier.catBox.width, tier.plaqueWidth);
+
     const slot = new Node(`CatSlot_${definition.id}`);
     parent.addChild(slot);
-    slot.setPosition(slotX, 0);
-    slot.addComponent(UITransform).setContentSize(tier.catBox.width, tier.catBox.height);
+    slot.setPosition(slotX, contentCenterY);
+    slot.addComponent(UITransform).setContentSize(contentWidth, contentTop - contentBottom);
 
-    const portrait = this.imageFit(slot, 'cat_she/cat_locked', 0, catCenterY, tier.catBox);
+    const portrait = this.imageFit(slot, 'cat_she/cat_locked', 0, catCenterY - contentCenterY, tier.catBox);
     portrait.addComponent(UIOpacity);
 
     const plaqueNode = new Node('Plaque');
     slot.addChild(plaqueNode);
-    plaqueNode.setPosition(0, plaqueY);
+    plaqueNode.setPosition(0, plaqueY - contentCenterY);
     plaqueNode.addComponent(UITransform).setContentSize(tier.plaqueWidth, PLAQUE_HEIGHT);
     const plaque = plaqueNode.addComponent(Graphics);
 
@@ -516,6 +524,6 @@ export class CatCollectionScreen {
 
   private toast(text: string) {
     if (!this.collectionUI) return;
-    Toast.show(this.collectionUI, text, { y: this.toastY });
+    Toast.show(this.collectionUI, text);
   }
 }

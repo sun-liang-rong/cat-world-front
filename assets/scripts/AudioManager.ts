@@ -100,8 +100,10 @@ export class AudioManager {
 
   playEffect(effect: AudioEffect) {
     if (!this.soundEnabled) return;
-    const clipName = effect === 'click' ? 'click' : effect;
-    const clip = this.clips[clipName];
+    // 产品决定：按钮点击不发声，只保留玩法音效（收卡/三消/胜负）。
+    // 各页面 onPlaySound('click') 调用点保留不动，在这里统一静音。
+    if (effect === 'click') return;
+    const clip = this.clips[effect];
     if (clip) this.effectSource.playOneShot(clip);
   }
 

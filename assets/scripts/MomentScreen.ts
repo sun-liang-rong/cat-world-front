@@ -148,7 +148,6 @@ export class MomentScreen {
   private detailMeta: Label | null = null;
   private detailDescription: Label | null = null;
   private detailHint: Label | null = null;
-  private toastY = 0;
   private progressFill: Graphics | null = null;
   private progressLabel: Label | null = null;
   private dotsContainer: Node | null = null;
@@ -226,7 +225,6 @@ export class MomentScreen {
     this.buildTabs(top);
     this.buildCards(top, bottom);
     this.buildPageControls(bottom);
-    this.toastY = bottom + 262;
     this.buildDetailOverlay(visibleSize);
     this.refresh();
   }
@@ -820,6 +818,6 @@ export class MomentScreen {
 
   private toast(text: string) {
     if (!this.momentUI) return;
-    Toast.show(this.momentUI, text, { y: this.toastY });
+    Toast.show(this.momentUI, text);
   }
 }

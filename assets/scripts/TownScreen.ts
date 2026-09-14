@@ -1,4 +1,5 @@
 import {
+  BlockInputEvents,
   Button,
   Color,
   Graphics,
@@ -6,6 +7,7 @@ import {
   Node,
   Sprite,
   tween,
+  Tween,
   UIOpacity,
   UITransform,
   Vec2,
@@ -15,7 +17,7 @@ import {
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { getCatDefinition } from './GameContent';
-import { BuildingView } from './TownContent';
+import { BuildCellResult, BuildingView, CELL_STAR_COST } from './TownContent';
 import { Toast } from './Toast';
 
 export interface TownScreenOptions {
@@ -23,7 +25,14 @@ export interface TownScreenOptions {
   getStars: () => number;
   getCoins: () => number;
   getBuildings: () => BuildingView[];
-  onBuild: (id: BuildingView['id']) => { ok: boolean; message: string };
+  /** 点亮当前大节点的下一格（小节点机制：每格 3 星） */
+  onLightCell: (id: BuildingView['id']) => BuildCellResult;
+  /** 第 1 关一次性引导：从未点亮过格子时，小镇页高亮「点亮」按钮并给指引文案 */
+  shouldShowCellGuide?: () => boolean;
+  /** 建成庆祝弹窗的「去装备」入口：跳猫咪社 */
+  onOpenCatCollection?: () => void;
+  /** 一次性读取 Main 暂存的目标建筑 id（结算页「去建设」跳转用），读后即清 */
+  consumeFocusBuilding?: () => BuildingView['id'] | null;
   onReturnHome: () => void;
 }
 
@@ -61,9 +70,6 @@ export class TownScreen {
   private titleLabel: Label | null = null;
   private subtitleLabel: Label | null = null;
   private conditionLabel: Label | null = null;
-  private requirementBox: Node | null = null;
-  private requirementIcon: Node | null = null;
-  private requirementLabel: Label | null = null;
   private actionNode: Node | null = null;
   private actionButton: Button | null = null;
   private actionLabel: Label | null = null;
@@ -72,13 +78,18 @@ export class TownScreen {
   private coinLabel: Label | null = null;
   private stageRow: Node | null = null;
   private readonly stageViews: StageView[] = [];
+  // 小节点格子行：每大节点拆成 BUILDING_STAGE_CELLS[stage] 格，1 格 = 3 星 = 1 关
+  private cellRow: Node | null = null;
+  private readonly cellNodes: Node[] = [];
+  private cellHit: Node | null = null;
+  private cellsKey = '';
+  private actionGuideRing: Node | null = null;
+  private celebrationNode: Node | null = null;
   private readonly slotViews: SlotView[] = [];
   private selectedBuilding = 0;
   private selectedStage = 0;
   private stagedBuilding = -1;
   private constructionFx: Node | null = null;
-  private constructionTimer: ReturnType<typeof setTimeout> | null = null;
-  private isConstructing = false;
   private active = false;
 
   constructor(
@@ -135,25 +146,30 @@ export class TownScreen {
     if (!this.townUI) return;
     this.townUI.active = active;
     if (active) {
+      // 从结算页「去建设」跳转过来时，Main 会塞入目标建筑 id（一次性读取）
+      const focusId = this.options.consumeFocusBuilding?.();
+      if (focusId) this.selectBuildingById(focusId);
       this.focusBuildableStage();
       this.refresh();
     } else {
-      // 页面藏起时收掉施工定时器：否则 900ms 后的 refresh/完成 toast 会打到隐藏页面上。
-      // 施工结果在 onBuild 时已写入存档，下次打开 setActive(true) 的 refresh 会呈现正确状态。
-      this.cancelConstructionTimer();
+      this.celebrationNode?.destroy();
+      this.celebrationNode = null;
     }
   }
 
   destroy() {
-    this.cancelConstructionTimer();
     this.townUI?.destroy();
     this.townUI = null;
   }
 
-  private cancelConstructionTimer() {
-    if (this.constructionTimer) clearTimeout(this.constructionTimer);
-    this.constructionTimer = null;
-    this.isConstructing = false;
+  // 供 Main 在「结算 → 去建设」链路中定位目标建筑；找不到时保持当前选择
+  private selectBuildingById(id: BuildingView['id']) {
+    const index = this.buildings.findIndex(building => building.id === id);
+    if (index >= 0) {
+      this.selectedBuilding = index;
+      this.stagedBuilding = -1;
+      this.cellsKey = '';
+    }
   }
 
   private get buildings(): BuildingView[] {
@@ -412,26 +428,17 @@ export class TownScreen {
 
     this.stageRow = new Node('StageRow');
     this.townPanel.addChild(this.stageRow);
-    this.stageRow.setPosition(0, 58);
+    this.stageRow.setPosition(0, 70);
 
-    this.conditionLabel = this.label(this.townPanel, '', 0, -20, 21, new Color(112, 69, 40));
+    // 小节点格子行：点击「下一格」与主按钮行为一致，都是点亮一格
+    this.cellRow = new Node('CellRow');
+    this.townPanel.addChild(this.cellRow);
+    this.cellRow.setPosition(0, -18);
+
+    this.conditionLabel = this.label(this.townPanel, '', 0, -64, 20, new Color(112, 69, 40));
     this.conditionLabel.isBold = true;
 
-    this.requirementBox = this.roundPanel(
-      this.townPanel,
-      0,
-      -68,
-      460,
-      52,
-      21,
-      new Color(255, 246, 222, 155),
-      new Color(247, 210, 148),
-    );
-    this.requirementIcon = this.image(this.requirementBox, COMMON_UI_ASSETS.starIcon, -36, 0, 40, 40);
-    this.requirementLabel = this.label(this.requirementBox, '', 40, -1, 25, new Color(112, 69, 40));
-    this.requirementLabel.isBold = true;
-
-    this.actionNode = this.image(this.townPanel, 'town/button_action', 0, -140, 450, 74);
+    this.actionNode = this.image(this.townPanel, 'town/button_action', 0, -132, 450, 74);
     this.actionLabel = this.label(this.actionNode, '', -10, 0, 33, new Color(255, 251, 238));
     this.actionLabel.isBold = true;
     this.actionLabel.outlineWidth = 4;
@@ -444,8 +451,36 @@ export class TownScreen {
     this.actionButton.zoomScale = 0.93;
     this.actionButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
-      this.onActionTap();
+      this.lightCell();
     });
+
+    // 首次建设引导：围绕「点亮」按钮的脉冲光环（文案由 conditionLabel 承担）
+    this.actionGuideRing = new Node('ActionGuideRing');
+    this.actionNode.addChild(this.actionGuideRing);
+    this.actionGuideRing.addComponent(UITransform).setContentSize(478, 102);
+    this.actionGuideRing.setPosition(0, 0);
+    const ringGraphics = this.actionGuideRing.addComponent(Graphics);
+    ringGraphics.strokeColor = new Color(255, 224, 108);
+    ringGraphics.lineWidth = 6;
+    ringGraphics.roundRect(-235, -43, 470, 86, 34);
+    ringGraphics.stroke();
+    this.actionGuideRing.active = false;
+    const ringOpacity = this.actionGuideRing.addComponent(UIOpacity);
+    ringOpacity.opacity = 200;
+    tween(ringOpacity)
+      .repeatForever(
+        tween()
+          .to(0.75, { opacity: 255 }, { easing: 'sineInOut' })
+          .to(0.75, { opacity: 140 }, { easing: 'sineInOut' }),
+      )
+      .start();
+    tween(this.actionGuideRing)
+      .repeatForever(
+        tween()
+          .to(0.75, { scale: new Vec3(1.04, 1.1, 1) }, { easing: 'sineInOut' })
+          .to(0.75, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
 
     this.rewardLabel = this.label(this.townPanel, '', 0, -192, 18, new Color(136, 94, 63));
     this.rewardLabel.isBold = true;
@@ -455,7 +490,9 @@ export class TownScreen {
     if (!this.townUI) return;
     const building = this.selected;
     const maxSelectable = Math.max(0, building.maxStage - 1);
-    this.selectedStage = Math.max(0, Math.min(this.selectedStage, Math.min(building.stage, maxSelectable)));
+    // 面板内容（进度/按钮/格子行）只展示当前施工阶段，高亮框必须同步跟随，
+    // 否则大节点完成后内容已切到下一阶段，黄框还留在已完成节点上
+    this.selectedStage = Math.min(building.stage, maxSelectable);
 
     if (this.starLabel) this.starLabel.string = '' + this.options.getStars();
     if (this.coinLabel) this.coinLabel.string = '' + this.options.getCoins();
@@ -488,7 +525,7 @@ export class TownScreen {
       );
       this.displayImage.name = 'BuildingArtwork';
       this.displayKey = key;
-      if (this.active && !this.isConstructing) {
+      if (this.active) {
         this.displayImage.setScale(new Vec3(0.96, 0.96, 1));
         tween(this.displayImage)
           .to(0.32, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
@@ -570,26 +607,19 @@ export class TownScreen {
     if (this.subtitleLabel) this.subtitleLabel.string = building.flavor;
     this.renderStatus(building);
     this.renderStageRow(building);
+    this.renderCellRow(building);
 
-    const completed = building.completed;
+    const stageName = building.stageNames[Math.min(building.stage, building.maxStage - 1)] ?? '';
+    const guideCell = this.options.shouldShowCellGuide?.() === true
+      && building.unlocked && !building.completed && building.subProgress === 0;
     if (this.conditionLabel) {
       this.conditionLabel.string = !building.unlocked
         ? '解锁条件'
-        : completed
+        : building.completed
           ? this.completedConditionText(building)
-          : this.isStageDone(building, this.selectedStage)
-            ? '本阶段建设完成'
-            : '本阶段建设条件';
-    }
-    const showCost = building.unlocked && !completed && !this.isStageDone(building, this.selectedStage);
-    if (this.requirementBox) this.requirementBox.active = showCost || completed;
-    if (this.requirementIcon) this.requirementIcon.active = showCost;
-    if (this.requirementLabel) {
-      this.requirementLabel.string = showCost
-        ? '× ' + building.stageCosts[this.selectedStage]
-        : completed
-          ? this.completedRequirementText(building)
-          : '已完成';
+          : guideCell
+            ? '用 3 颗星星点亮第一格吧！'
+            : `${stageName} ${building.subProgress}/${building.cellCount} · 每格 ${building.cellCost} 颗星星`;
     }
     if (this.rewardLabel) this.rewardLabel.string = building.reward;
     this.renderAction(building);
@@ -714,6 +744,112 @@ export class TownScreen {
     return stage < building.stage || building.completed;
   }
 
+  /** 小节点格子行：亮格 / 下一格（可点）/ 未点亮 三种状态 */
+  private renderCellRow(building: BuildingView) {
+    if (!this.cellRow) return;
+    this.cellRow.active = building.unlocked;
+    if (!building.unlocked) {
+      if (this.cellHit) this.cellHit.active = false;
+      return;
+    }
+    const key = building.id + ':' + building.stage + ':' + building.cellCount;
+    if (this.cellsKey !== key) {
+      this.rebuildCellNodes(building.cellCount);
+      this.cellsKey = key;
+    }
+    const nextIndex = building.completed ? -1 : building.subProgress;
+    this.cellNodes.forEach((cell, index) => {
+      const lit = index < building.subProgress || building.completed;
+      const isNext = index === nextIndex;
+      Tween.stopAllByTarget(cell);
+      cell.setScale(new Vec3(1, 1, 1));
+      const graphics = cell.getComponent(Graphics)!;
+      graphics.clear();
+      graphics.lineWidth = lit || isNext ? 4 : 3;
+      graphics.fillColor = lit
+        ? new Color(255, 224, 108)
+        : isNext
+          ? new Color(255, 239, 178)
+          : new Color(255, 248, 226);
+      graphics.strokeColor = lit || isNext
+        ? new Color(184, 119, 36)
+        : new Color(235, 205, 158);
+      graphics.roundRect(-22, -22, 44, 44, 12);
+      graphics.fill();
+      graphics.stroke();
+      if (lit) {
+        graphics.strokeColor = Color.WHITE;
+        graphics.lineWidth = 4;
+        graphics.moveTo(-9, 0);
+        graphics.lineTo(-2, -7);
+        graphics.lineTo(10, 8);
+        graphics.stroke();
+      } else if (isNext) {
+        graphics.strokeColor = new Color(150, 96, 40);
+        graphics.lineWidth = 4;
+        graphics.moveTo(-7, 0);
+        graphics.lineTo(7, 0);
+        graphics.moveTo(0, -7);
+        graphics.lineTo(0, 7);
+        graphics.stroke();
+        // 下一格待点亮：轻微呼吸提醒可点（点亮推进后由上面的 stopAllByTarget 挪到新格子）
+        tween(cell)
+          .repeatForever(
+            tween()
+              .to(0.75, { scale: new Vec3(1.1, 1.1, 1) }, { easing: 'sineInOut' })
+              .to(0.75, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+          )
+          .start();
+      }
+    });
+    this.refreshCellHit(building, nextIndex);
+  }
+
+  private rebuildCellNodes(count: number) {
+    this.cellNodes.forEach(cell => cell.destroy());
+    this.cellNodes.length = 0;
+    this.cellHit?.destroy();
+    this.cellHit = null;
+    if (!this.cellRow) return;
+    const step = 52; // 44px 格子 + 8px 间距
+    for (let index = 0; index < count; index += 1) {
+      const cell = new Node('BuildCell_' + index);
+      this.cellRow.addChild(cell);
+      cell.setPosition((index - (count - 1) / 2) * step, 0);
+      cell.addComponent(UITransform).setContentSize(44, 44);
+      cell.addComponent(Graphics);
+      this.cellNodes.push(cell);
+    }
+    // 下一格的命中区：44px 视觉外扩到 88px 热区（规范要求），只挂一个节点避免相邻热区重叠
+    const hit = new Node('CellHit');
+    this.cellRow.addChild(hit);
+    hit.addComponent(UITransform).setContentSize(88, 88);
+    const button = hit.addComponent(Button);
+    button.transition = Button.Transition.NONE;
+    button.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      this.lightCell();
+    });
+    this.cellHit = hit;
+  }
+
+  private refreshCellHit(building: BuildingView, nextIndex: number) {
+    if (!this.cellHit) return;
+    const actionable = building.unlocked && !building.completed && nextIndex >= 0;
+    this.cellHit.active = actionable;
+    if (!actionable) return;
+    this.cellHit.setPosition((nextIndex - (building.cellCount - 1) / 2) * 52, 0);
+  }
+
+  private popCell(index: number) {
+    const cell = this.cellNodes[index];
+    if (!cell || !cell.isValid) return;
+    cell.setScale(new Vec3(1.45, 1.45, 1));
+    tween(cell)
+      .to(0.25, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .start();
+  }
+
   private focusBuildableStage(building = this.selected) {
     if (!building) return;
     this.selectedStage = Math.min(building.stage, Math.max(0, building.maxStage - 1));
@@ -723,29 +859,27 @@ export class TownScreen {
     return `${getCatDefinition(building.catId).name}已入住`;
   }
 
-  private completedRequirementText(building: BuildingView) {
-    return getCatDefinition(building.catId).name + '已加入你的猫咪团队';
-  }
-
   private renderAction(building: BuildingView) {
     if (!this.actionLabel || !this.actionButton) return;
     this.actionLabel.string = this.actionText(building);
-    this.actionButton.interactable = !this.isConstructing && building.unlocked;
-    this.actionLabel.color = building.unlocked
+    const canAct = building.unlocked && !building.completed;
+    this.actionButton.interactable = canAct;
+    this.actionLabel.color = canAct
       ? new Color(255, 251, 238)
       : new Color(235, 225, 208);
+    if (this.actionGuideRing) {
+      // 首次建设引导：只对小屋、当前大节点一格未亮时出现
+      this.actionGuideRing.active = canAct
+        && this.options.shouldShowCellGuide?.() === true
+        && building.subProgress === 0;
+    }
   }
 
   private actionText(building: BuildingView) {
-    if (this.isConstructing) return '施工中...';
     if (!building.unlocked) return '未解锁';
-    if (!building.completed) {
-      const stageName = building.stageNames[building.stage] ?? '';
-      return this.isStageDone(building, building.stage)
-        ? '已完成'
-        : '开始' + stageName;
-    }
-    return '已建成';
+    if (building.completed) return '已建成';
+    const stageName = building.stageNames[building.stage] ?? '';
+    return `点亮「${stageName}」一格`;
   }
 
   private selectBuilding(index: number) {
@@ -767,12 +901,16 @@ export class TownScreen {
       this.toast('完成' + previousName + '后解锁');
       return;
     }
-    this.selectedStage = index;
+    if (index < building.stage) {
+      this.toast(`「${building.stageNames[index] ?? ''}」已完成`);
+      return;
+    }
     this.refresh();
   }
 
-  private onActionTap() {
-    if (this.isConstructing) return;
+  // 点亮当前大节点的下一格（与格子行命中区同一入口）：
+  // 普通点亮只弹格动画；亮满大节点补施工特效 + Toast；建成弹猫咪解锁庆祝。
+  private lightCell() {
     const building = this.selected;
     if (!building.unlocked) {
       this.toast(building.unlockHint);
@@ -783,30 +921,112 @@ export class TownScreen {
       this.toast(`${building.name}建设完成，「${catName}」已入住小镇`);
       return;
     }
-
-    const currentStage = building.stage;
-    if (this.selectedStage !== currentStage) {
-      this.selectedStage = currentStage;
-      this.refresh();
-      return;
-    }
-    const result = this.options.onBuild(building.id);
+    const litIndex = building.subProgress;
+    const result = this.options.onLightCell(building.id);
     if (!result.ok) {
       this.toast(result.message);
       return;
     }
-    this.isConstructing = true;
-    this.selectedStage = Math.min(currentStage + 1, building.maxStage - 1);
     this.refresh();
-    this.playConstructionFx();
+    if (result.buildingCompleted) {
+      this.playConstructionFx();
+      this.showCatUnlockCelebration();
+    } else if (result.stageJustCompleted) {
+      this.playConstructionFx();
+      this.toast(result.message);
+    } else {
+      this.popCell(litIndex);
+    }
+  }
 
-    this.constructionTimer = setTimeout(() => {
-      this.constructionTimer = null;
-      this.isConstructing = false;
-      this.refresh();
-      const fresh = this.buildings[this.selectedBuilding];
-      this.toast(fresh.completed ? building.name + '建设完成！' + fresh.reward : result.message);
-    }, 900);
+  /** 建成庆祝：全屏遮罩 + 建筑完成外观 + 猫咪头像弹入 + 去装备入口 */
+  private showCatUnlockCelebration() {
+    const building = this.selected;
+    if (!this.townUI) return;
+    this.closeCelebration();
+    const overlay = new Node('CatUnlockCelebration');
+    this.townUI.addChild(overlay);
+    this.celebrationNode = overlay;
+
+    const size = view.getVisibleSize();
+    const backdrop = new Node('CelebrationBackdrop');
+    overlay.addChild(backdrop);
+    backdrop.addComponent(UITransform).setContentSize(size.width, size.height);
+    const backdropGraphics = backdrop.addComponent(Graphics);
+    backdropGraphics.fillColor = new Color(22, 18, 13, 190);
+    backdropGraphics.rect(-size.width / 2, -size.height / 2, size.width, size.height);
+    backdropGraphics.fill();
+    backdrop.addComponent(BlockInputEvents);
+
+    const panel = this.roundPanel(
+      overlay, 0, 0, 580, 620, 34,
+      new Color(255, 248, 226), new Color(235, 205, 158),
+    );
+    panel.setScale(new Vec3(0.8, 0.8, 1));
+    tween(panel)
+      .to(0.28, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .start();
+
+    this.image(panel, 'town/' + building.artPrefix + '_stage_' + building.maxStage, 0, 170, 300, 220);
+    const title = this.label(panel, `${building.name}建成！`, 0, 24, 30, new Color(111, 62, 28));
+    title.isBold = true;
+
+    const catDefinition = getCatDefinition(building.catId);
+    const catNode = new Node('CelebrationCat');
+    panel.addChild(catNode);
+    catNode.setPosition(0, -70);
+    catNode.addComponent(UITransform).setContentSize(132, 132);
+    const catSprite = catNode.addComponent(Sprite);
+    catSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+    const catFrame = this.assets.getFrame(catDefinition.portraitPath);
+    if (catFrame) catSprite.spriteFrame = catFrame;
+    catNode.setScale(new Vec3(0, 0, 1));
+    tween(catNode)
+      .delay(0.16)
+      .to(0.26, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .start();
+    // 小镇页不预载猫咪头像：弹窗内兜底加载，落盘后补图
+    this.assets.loadImagesFor(this, [catDefinition.portraitPath], () => {
+      const frame = this.assets.getFrame(catDefinition.portraitPath);
+      if (frame && catNode.isValid) catSprite.spriteFrame = frame;
+    });
+
+    const catLabel = this.label(panel, `「${catDefinition.name}」加入了你的小镇！`, 0, -158, 22, new Color(136, 94, 63));
+    catLabel.isBold = true;
+
+    const primary = this.roundPanel(
+      panel, -95, -232, 250, 76, 38,
+      new Color(255, 224, 108), new Color(201, 148, 47),
+    );
+    const primaryLabel = this.label(primary, '去装备', 0, -1, 27, new Color(111, 62, 28));
+    primaryLabel.isBold = true;
+    const primaryButton = primary.addComponent(Button);
+    primaryButton.transition = Button.Transition.SCALE;
+    primaryButton.zoomScale = 0.93;
+    primaryButton.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      this.closeCelebration();
+      this.options.onOpenCatCollection?.();
+    });
+
+    const secondary = this.roundPanel(
+      panel, 125, -232, 190, 76, 38,
+      new Color(255, 252, 241), new Color(228, 215, 193),
+    );
+    const secondaryLabel = this.label(secondary, '留在这里', 0, -1, 24, new Color(135, 104, 76));
+    secondaryLabel.isBold = true;
+    const secondaryButton = secondary.addComponent(Button);
+    secondaryButton.transition = Button.Transition.SCALE;
+    secondaryButton.zoomScale = 0.95;
+    secondaryButton.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      this.closeCelebration();
+    });
+  }
+
+  private closeCelebration() {
+    this.celebrationNode?.destroy();
+    this.celebrationNode = null;
   }
 
   private playConstructionFx() {
@@ -950,6 +1170,6 @@ export class TownScreen {
 
   private toast(text: string) {
     if (!this.townUI) return;
-    Toast.show(this.townUI, text, { y: -520 });
+    Toast.show(this.townUI, text);
   }
 }

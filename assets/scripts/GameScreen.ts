@@ -16,6 +16,7 @@ import {
 } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
+import { BoardTutorial } from './BoardTutorial';
 import { ComboTracker } from './ComboTracker';
 import { getCatDefinition, getCatSkillConfig } from './GameContent';
 import { SettlementPopup } from './SettlementPopup';
@@ -25,7 +26,8 @@ import { EndlessDirector } from './level/EndlessDirector';
 import { LevelRules } from './level/LevelSolver';
 import { LevelDefinition, PlayerRun, TileDefinition, TileGeometry } from './level/LevelTypes';
 import { CatId, GamePetPosition, ItemId } from './PlayerTypes';
-import { LEVELS_PER_THEME } from './TownContent';
+import { SettingsPopup } from './SettingsPopup';
+import { BuildTargetInfo, LEVELS_PER_THEME } from './TownContent';
 import { PerformanceManager } from './PerformanceManager';
 
 type Tile = {
@@ -51,7 +53,7 @@ type Tile = {
   geometry: TileGeometry;
 };
 
-type ActiveTool = 'hammer' | null;
+type ActiveTool = 'hammer' | 'cat_skill' | null;
 
 type ToolButtonView = {
   node: Node;
@@ -71,6 +73,7 @@ type CatSkillPanelView = {
   node: Node;
   button: Button;
   portrait: Node;
+  lockMark: Node;
   cooldownOverlay: Node;
   speechBubble: Node;
   speechBubbleGraphics: Graphics;
@@ -137,6 +140,8 @@ export function buildGameScreenImagePaths(level: number, theme?: number) {
   );
   return [
     'home/home_bg',
+    // 对局内设置入口复用首页齿轮图标
+    'home_crops/hud_settings',
     'game/combo_x2',
     'game/combo_x3',
     'game/combo_x4',
@@ -179,6 +184,15 @@ export interface GameScreenOptions {
   getItemCount: (id: ItemId) => number;
   onConsumeItem: (id: ItemId) => boolean;
   getEquippedCat: () => CatId | null;
+  /** 是否至少解锁了一只猫咪：宠物浮窗区分「去装备」和「先解锁建筑」两种提示 */
+  hasAnyUnlockedCat?: () => boolean;
+  /** 对局内设置弹窗的音频开关（Main 注入 AudioManager；缺省时弹窗按开启兜底） */
+  getMusicEnabled?: () => boolean;
+  getSoundEnabled?: () => boolean;
+  getVibrationEnabled?: () => boolean;
+  onMusicChanged?: (enabled: boolean) => void;
+  onSoundChanged?: (enabled: boolean) => void;
+  onVibrationChanged?: (enabled: boolean) => void;
   getGamePetPosition: () => GamePetPosition;
   onGamePetPositionChanged: (position: GamePetPosition) => void;
   getCatSkillState: (id: CatId) => CatSkillState;
@@ -201,6 +215,17 @@ export interface GameScreenOptions {
   onNextLevel: () => void;
   onReturnHome: () => void;
   onReplay: () => void;
+  /**
+   * 第 1 关对局内新手教学开关：由 Main 按主线 level===1 且未完成计算；
+   * 超萌挑战/无尽不传。教学在棋盘入场动画结束后开始，第一次三消时完成。
+   */
+  tutorialEnabled?: boolean;
+  /** 教学完成（第一次三消）时写存档标记 */
+  onTutorialDone?: () => void;
+  /** 主线成功结算的建设目标提示（小节点机制）；星够时结算页出现「去建设」入口。超萌挑战/无尽不传 */
+  getBuildTargetInfo?: () => BuildTargetInfo | null;
+  /** 点击「去建设」：关闭对局并跳转小镇 */
+  onGoBuild?: () => void;
   onWatchAd?: () => Promise<RewardedAdResult>;
   /**
    * 启动预创建：只搭好关卡 UI，等 startPlay() 再开始计时和显示。
@@ -288,12 +313,16 @@ export class GameScreen {
   private catSkillBubbleTimer: ReturnType<typeof setInterval> | null = null;
   private catSkillBubbleVisible = true;
   private catSkillUsed = false;
+  // 棋盘清除类技能处于选择模式时剩余的可选目标数（大橘/白猫 1 个，极光猫 2 个）
+  private catSkillPicksLeft = 0;
   private catSkillDockSide: 'left' | 'right' = 'right';
   private catSkillDragActive = false;
   private catSkillDragMoved = false;
   private catSkillDragOffset = new Vec3();
   private catSkillSuppressClick = false;
   private settlementPopup: SettlementPopup | null = null;
+  private boardTutorial: BoardTutorial | null = null;
+  private settingsPopup: SettingsPopup | null = null;
   private endlessRecorded = false;
 
   constructor(root: Node, assets: AssetStore, options: GameScreenOptions) {
@@ -429,6 +458,21 @@ export class GameScreen {
       this.requestLeave();
     });
 
+    // 右上角设置入口：与首页设置按钮同一条微信胶囊避让线（belowWeChatCapsule），
+    // 图标复用 home_crops/hud_settings；打开的是共享 SettingsPopup。
+    const settingsEntry = new Node('GameSettingsButton');
+    this.gameUI.addChild(settingsEntry);
+    settingsEntry.setPosition(312, belowWeChatCapsule(visibleSize.height / 2, 88));
+    settingsEntry.addComponent(UITransform).setContentSize(88, 88);
+    this.image(settingsEntry, 'home_crops/hud_settings', 0, 0, 72, 72);
+    const settingsButton = settingsEntry.addComponent(Button);
+    settingsButton.transition = Button.Transition.SCALE;
+    settingsButton.zoomScale = 0.93;
+    settingsButton.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      this.openSettings();
+    });
+
     const levelBanner = this.image(this.gameUI, this.gamePath(3), -86, headerY, 260, 80);
     const levelTitle = this.label(
       levelBanner,
@@ -541,11 +585,30 @@ export class GameScreen {
     this.endlessHudLabel = null;
     this.leaveConfirmNode = null;
     this.endlessDirector = null;
+    this.boardTutorial?.destroy();
+    this.boardTutorial = null;
+    this.settingsPopup = null;
     if (this.catSkillPanel) Tween.stopAllByTarget(this.catSkillPanel.node);
     this.catSkillPanel = null;
     this.settlementPopup = null;
     this.toolButtonViews.clear();
     if (this.gameUI.isValid) this.gameUI.destroy();
+  }
+
+  // 对局内设置：打开共享 SettingsPopup（遮罩自带 BlockInputEvents 挡住棋盘误触；
+  // 无尽模式计时不暂停——回合制玩法无时限压力，开设置由玩家自己权衡）。
+  private openSettings() {
+    this.settingsPopup?.close();
+    this.settingsPopup = SettingsPopup.open(this.gameUI, this.assets, {
+      getMusicEnabled: () => this.options.getMusicEnabled?.() ?? true,
+      getSoundEnabled: () => this.options.getSoundEnabled?.() ?? true,
+      getVibrationEnabled: () => this.options.getVibrationEnabled?.() ?? true,
+      onMusicChanged: enabled => this.options.onMusicChanged?.(enabled),
+      onSoundChanged: enabled => this.options.onSoundChanged?.(enabled),
+      onVibrationChanged: enabled => this.options.onVibrationChanged?.(enabled),
+      onPlaySound: effect => this.options.onPlaySound(effect),
+      onClose: () => { this.settingsPopup = null; },
+    });
   }
 
   private addPanel(name: string, x: number, y: number, w: number, h: number, color: Color, parent: Node) {
@@ -588,6 +651,30 @@ export class GameScreen {
     return node;
   }
 
+  // 宠物位锁标：一只猫咪都没解锁时显示，传达「还不可用」，配合点击的教学提醒
+  private buildCatLockMark(parent: Node) {
+    const node = new Node('CatSkillLockMark');
+    parent.addChild(node);
+    node.setPosition(-44, 42);
+    node.addComponent(UITransform).setContentSize(40, 44);
+    const graphics = node.addComponent(Graphics);
+    graphics.fillColor = new Color(120, 120, 120);
+    graphics.strokeColor = new Color(255, 248, 226);
+    graphics.lineWidth = 3;
+    graphics.roundRect(-13, -12, 26, 23, 5);
+    graphics.fill();
+    graphics.stroke();
+    graphics.strokeColor = new Color(120, 120, 120);
+    graphics.lineWidth = 5;
+    graphics.arc(0, 5, 10, Math.PI, 0, false);
+    graphics.stroke();
+    graphics.fillColor = new Color(255, 229, 145);
+    graphics.circle(0, -3, 3);
+    graphics.fill();
+    node.active = false;
+    return node;
+  }
+
   private buildCatSkillPanel(x: number, y: number) {
     const panel = new Node('CatSkillPanel');
     this.gameUI.addChild(panel);
@@ -625,6 +712,7 @@ export class GameScreen {
       // 未装备时保留猫咪轮廓，但以中性灰色显示，和已装备状态形成明确区分。
       portraitSprite.color = new Color(154, 154, 154, 255);
     }
+    const lockMark = this.buildCatLockMark(panel);
     const skillIcon = this.image(panel, 'game/cat_skill_badge', 45, 42, 30, 30);
     const skillSprite = skillIcon.getComponent(Sprite);
     if (skillSprite) skillSprite.color = new Color(255, 189, 42, 255);
@@ -762,6 +850,7 @@ export class GameScreen {
       node: panel,
       button,
       portrait,
+      lockMark,
       cooldownOverlay,
       speechBubble,
       speechBubbleGraphics: bubbleGraphics,
@@ -837,11 +926,17 @@ export class GameScreen {
     const portraitFrame = this.assets.getFrame(portraitPath);
     if (portraitSprite && portraitFrame) portraitSprite.spriteFrame = portraitFrame;
     if (!catId || !skill || !config) {
+      // 两种「没有出战宠物」的状态分开提示：
+      // 一只都没解锁 → 教学（装饰建筑解锁猫咪）；有解锁未装备 → 指引去猫咪社。
+      const anyUnlocked = this.options.hasAnyUnlockedCat?.() ?? false;
       panel.portrait.active = true;
       if (portraitSprite) portraitSprite.color = new Color(154, 154, 154, 255);
+      panel.lockMark.active = !anyUnlocked;
       panel.nameLabel.string = '宠物位';
       panel.cooldownLabel.string = '';
-      panel.descriptionLabel.string = '还没有宠物\n去猫咪社装备一只吧';
+      panel.descriptionLabel.string = anyUnlocked
+        ? '还没装备宠物\n去猫咪社上阵一只吧'
+        : '装饰完成小镇建筑\n解锁猫咪出战';
       panel.chargeLabel.string = '';
       panel.statusLabel.string = '去上阵';
       panel.cooldownOverlay.active = false;
@@ -849,6 +944,7 @@ export class GameScreen {
       panel.chargeFill.clear();
       return;
     }
+    panel.lockMark.active = false;
 
     const definition = getCatDefinition(catId);
     if (portraitSprite) portraitSprite.color = Color.WHITE;
@@ -864,28 +960,33 @@ export class GameScreen {
 
     panel.portrait.active = true;
     panel.nameLabel.string = definition.name;
-    panel.descriptionLabel.string = cooldownRemaining > 0
-      ? `技能冷却中\n${this.formatCatSkillRemaining(cooldownRemaining)}`
-      : this.catSkillUsed
-        ? '本局技能已使用'
-        : canFire
-          ? '点击我使用技能！'
-          : `技能充能 ${charge}/${required}`;
+    panel.descriptionLabel.string = this.activeTool === 'cat_skill'
+      ? `点选要清除的元素${this.catSkillPicksLeft > 1 ? `（可选 ${this.catSkillPicksLeft} 个）` : ''}`
+      : cooldownRemaining > 0
+        ? `技能冷却中\n${this.formatCatSkillRemaining(cooldownRemaining)}`
+        : this.catSkillUsed
+          ? '本局技能已使用'
+          : canFire
+            ? '点击我使用技能！'
+            : `技能充能 ${charge}/${required}`;
     panel.cooldownLabel.string = cooldownRemaining > 0
       ? this.formatCatSkillRemaining(cooldownRemaining)
       : '';
     panel.chargeLabel.string = `充能 ${charge}/${required}`;
-    panel.statusLabel.string = this.catSkillUsed
-      ? '本局已发动'
-      : canFire
-        ? '点击发动'
-        : chargeReady
-          ? '等待冷却'
-          : '充能中';
-    panel.statusLabel.color = canFire
+    panel.statusLabel.string = this.activeTool === 'cat_skill'
+      ? '选择目标'
+      : this.catSkillUsed
+        ? '本局已发动'
+        : canFire
+          ? '点击发动'
+          : chargeReady
+            ? '等待冷却'
+            : '充能中';
+    panel.statusLabel.color = canFire || this.activeTool === 'cat_skill'
       ? new Color(190, 59, 51)
       : new Color(177, 106, 43);
-    panel.button.interactable = !this.gameOver && !this.catSkillUsed && !this.boardIntroActive;
+    panel.button.interactable = this.activeTool === 'cat_skill'
+      || (!this.gameOver && !this.catSkillUsed && !this.boardIntroActive);
     panel.cooldownOverlay.active = cooldownRemaining > 0;
 
     panel.chargeFill.clear();
@@ -1193,6 +1294,26 @@ export class GameScreen {
     this.refreshToolButtons();
     this.refreshCatSkillPanel();
     this.updateTargetLabel();
+    this.maybeBeginBoardTutorial();
+  }
+
+  // 第 1 关新手教学：主线第 1 关且未完成时，在棋盘入场动画结束后开始。
+  // tutorialEnabled 由 Main 计算（level===1 && !boardTutorialDone），挑战/无尽不传。
+  private maybeBeginBoardTutorial() {
+    if (!this.options.tutorialEnabled || this.boardTutorial) return;
+    if (this.options.endless || this.options.challenge) return;
+    const visibleSize = view.getVisibleSize();
+    const headerY = Math.min(590, visibleSize.height / 2 - 145);
+    this.boardTutorial = new BoardTutorial({
+      uiRoot: this.gameUI,
+      bannerY: headerY - 225,
+      celebrateY: -70,
+      getExposedTiles: () => this.boardTiles
+        .filter(tile => tile.active && !tile.inTray && tile.node.isValid && this.isTopTile(tile))
+        .map(tile => ({ node: tile.node, kind: tile.kind })),
+      onDone: () => this.options.onTutorialDone?.(),
+    });
+    this.boardTutorial.begin();
   }
 
   private rand(min: number, max: number) {
@@ -1281,8 +1402,10 @@ export class GameScreen {
       }
       const top = this.isTopTile(tile);
       tile.blockedOverlay.active = !top;
-      tile.targetOverlay.active = this.activeTool === 'hammer' && top;
+      tile.targetOverlay.active = (this.activeTool === 'hammer' || this.activeTool === 'cat_skill') && top;
     });
+    // 教学高亮是「当前暴露牌」的纯函数，棋盘任何变化（收集/道具/放回/补波）都在这里汇聚重算
+    this.boardTutorial?.refreshHighlight();
   }
 
   private onTileTap(tile: Tile) {
@@ -1294,6 +1417,10 @@ export class GameScreen {
     if (!tile.active) return;
     if (this.activeTool === 'hammer') {
       this.selectHammerTile(tile);
+      return;
+    }
+    if (this.activeTool === 'cat_skill') {
+      this.selectCatSkillTile(tile);
       return;
     }
     if (!this.isTopTile(tile)) {
@@ -1321,6 +1448,11 @@ export class GameScreen {
     if (this.activeTool === 'hammer') {
       this.options.onPlaySound('click');
       this.toast('锤子只能移除棋盘上的元素');
+      return;
+    }
+    if (this.activeTool === 'cat_skill') {
+      this.options.onPlaySound('click');
+      this.toast('宠物技能只能清除棋盘上的元素');
       return;
     }
   }
@@ -1366,6 +1498,7 @@ export class GameScreen {
     this.collectedTotal++;
     this.updateTargetLabel();
     this.registerCatProgress('collect');
+    this.boardTutorial?.notifyTileCollected(tile.kind);
     this.animateTileToTray(tile, startPosition, targetPosition, startAngle);
   }
 
@@ -1448,7 +1581,14 @@ export class GameScreen {
       })
       .call(() => {
         this.tweenTargets.delete(motion);
-        if (this.destroyed || !tile.node.isValid) return;
+        if (this.destroyed) return;
+        if (!tile.node.isValid) {
+          // 牌被技能等外部路径提前销毁：计数仍要回减并触发结算，
+          // 否则 pendingTrayAnimations 卡死，三消与槽满判负从此失效。
+          this.pendingTrayAnimations = Math.max(0, this.pendingTrayAnimations - 1);
+          this.resolveTrayMatches();
+          return;
+        }
         tile.node.removeFromParent();
         this.trayLayer.addChild(tile.node);
         tile.node.setPosition(targetPosition);
@@ -1516,6 +1656,7 @@ export class GameScreen {
       const removed = group.slice(0, 3);
       this.trayTiles = this.trayTiles.filter(tile => removed.indexOf(tile) === -1);
       this.matchCount += 1;
+      this.boardTutorial?.notifyMatch();
       const combo = this.comboTracker.registerMatch();
       if (combo >= 2) this.showComboFeedback(combo);
       this.addCoins(6);
@@ -2002,7 +2143,7 @@ export class GameScreen {
       this.openEndlessSettlement();
       return;
     }
-    // 过关固定奖励 3 星：每主题 20 关 × 3 星 = 60 星，正好覆盖建筑三阶段（15/20/25）的星星消耗；
+    // 过关固定奖励 3 星：每主题 20 关 × 3 星 = 60 星，正好点亮对应建筑 20 个小节点（每格 3 星）；
     // 超萌挑战不计入关卡进度，改发大额金币。
     const challenge = this.options.challenge;
     const starReward = win && !challenge ? 3 : 0;
@@ -2044,7 +2185,25 @@ export class GameScreen {
       freeRevive: !win && !this.reviveUsed && this.options.levelDefinition?.freeRevive === true,
       hadTrayPair: !win ? failHadPair : undefined,
       onDoubleReward: win ? () => this.doubleRewardFromAd() : undefined,
+      buildTarget: win && !challenge ? this.composeBuildTarget() : undefined,
+      onGoBuild: () => {
+        this.options.onPlaySound('click');
+        this.options.onGoBuild?.();
+      },
     });
+  }
+
+  /** 主线成功结算的建设目标行：星够给「点击前往」入口，不够给差值文案；无可建建筑返回空 */
+  private composeBuildTarget() {
+    const target = this.options.getBuildTargetInfo?.();
+    if (!target) return undefined;
+    const label = `「${target.buildingName}·${target.stageName}」`;
+    return {
+      text: target.starsNeeded === 0
+        ? `已够点亮${label}下一格`
+        : `再赢 ${target.starsNeeded} 星点亮${label}下一格`,
+      canBuild: target.starsNeeded === 0,
+    };
   }
 
   private recordEndlessIfNeeded() {
@@ -2438,7 +2597,21 @@ export class GameScreen {
   private onCatSkillTap() {
     if (this.gameOver || this.boardIntroActive) return;
     if (!this.equippedCatId || !this.catSkill || !this.catSkillConfig) {
-      this.toast('还没有上阵宠物，去首页猫咪社装备一只吧');
+      // 一只都没解锁时把玩法链条讲清楚：装饰建筑 → 解锁猫咪 → 装备出战；
+      // 建筑名取下一格待建目标（第一个未建成建筑），没有快照时用通用说法兜底。
+      const anyUnlocked = this.options.hasAnyUnlockedCat?.() ?? false;
+      this.toast(anyUnlocked
+        ? '还没有上阵宠物，去首页猫咪社装备一只吧'
+        : `装饰完成「${this.options.getBuildTargetInfo?.()?.buildingName ?? '小镇建筑'}」解锁猫咪，装备后技能帮你闯关`);
+      return;
+    }
+    // 选择目标阶段再点一次宠物 = 取消；已确认过目标则结束选择、放弃剩余次数
+    if (this.activeTool === 'cat_skill') {
+      const consumed = this.catSkillUsed;
+      this.clearToolMode();
+      this.catSkillPicksLeft = 0;
+      this.refreshCatSkillPanel();
+      this.toast(consumed ? '已结束宠物技能选择' : '已取消宠物技能选择');
       return;
     }
     if (this.catSkillUsed) {
@@ -2453,6 +2626,21 @@ export class GameScreen {
       this.toast(`技能还在冷却中，请等待 ${this.formatCatSkillRemaining(this.catSkill.readyAt - Date.now())}`);
       return;
     }
+    // 清除棋盘元素的技能和锤子一样由玩家自选目标，确认第一个目标时才结算充能与冷却
+    if (this.catSkillConfig.effect === 'clear_board' || this.catSkillConfig.effect === 'clear_board_double') {
+      const hasTarget = this.boardTiles.some(tile => tile.active && !tile.inTray && this.isTopTile(tile));
+      if (!hasTarget) {
+        this.toast(`${getCatDefinition(this.equippedCatId).name}想帮忙，但棋盘上没有能清除的元素啦`);
+        return;
+      }
+      this.clearToolMode();
+      this.activeTool = 'cat_skill';
+      this.catSkillPicksLeft = this.catSkillConfig.effect === 'clear_board_double' ? 2 : 1;
+      this.refreshBoardTileStates();
+      this.refreshCatSkillPanel();
+      this.toast('请选择要清除的元素');
+      return;
+    }
     this.clearToolMode();
     this.catSkillUsed = true;
     this.catSkill.charge = 0;
@@ -2460,6 +2648,7 @@ export class GameScreen {
     this.refreshCatSkillPanel();
   }
 
+  // 只负责非选择类技能（槽位移除 / 送道具）；清除棋盘类走 selectCatSkillTile 的点选流程
   private fireCatSkill() {
     const catId = this.equippedCatId;
     const config = this.catSkillConfig;
@@ -2468,12 +2657,6 @@ export class GameScreen {
     const catName = getCatDefinition(catId).name;
     this.options.onPlaySound('match');
     switch (config.effect) {
-      case 'clear_board':
-        this.catClearBoardTiles(1, catName);
-        break;
-      case 'clear_board_double':
-        this.catClearBoardTiles(2, catName);
-        break;
       case 'clear_tray':
         this.catClearTrayTile(catName);
         break;
@@ -2483,36 +2666,70 @@ export class GameScreen {
     }
   }
 
-  private catClearBoardTiles(count: number, catName: string) {
-    const candidates = this.boardTiles.filter(tile => tile.active && !tile.inTray && this.isTopTile(tile));
-    if (candidates.length === 0) {
-      this.toast(`${catName}想帮忙，但棋盘上没有能清除的元素啦`);
+  // 清除棋盘类技能的目标确认：和锤子一样只允许点未被遮挡的元素，
+  // 第一个目标确认时才扣充能、进入冷却，中途取消不浪费技能。
+  private selectCatSkillTile(tile: Tile) {
+    const catId = this.equippedCatId;
+    const skill = this.catSkill;
+    if (!catId || !skill || this.catSkillPicksLeft <= 0) return;
+    if (!this.isTopTile(tile)) {
+      this.options.onPlaySound('click');
+      this.toast('请选择未被遮挡的元素');
+      this.shakeTile(tile);
       return;
     }
-    const picked = candidates.sort(() => Math.random() - 0.5).slice(0, Math.min(count, candidates.length));
-    this.addEliminated(picked.length);
-    picked.forEach(tile => {
-      tile.active = false;
-      tile.inTray = false;
-      this.collectedTotal++;
-      Tween.stopAllByTarget(tile.node);
-      tween(tile.node)
-        .to(0.16, { scale: new Vec3(0.1, 0.1, 1) }, { easing: 'quadIn' })
-        .call(() => {
-          if (tile.node.isValid) tile.node.destroy();
-          if (this.destroyed || this.gameOver) return;
-          this.refillEndlessBoard();
-          if (this.boardIntroActive) return;
-          if (!this.boardTiles.some(candidate => candidate.active)) {
-            if (this.options.endless) this.refillEndlessBoard(true);
-            else this.finish(true);
-          }
-        })
-        .start();
-    });
+    const catName = getCatDefinition(catId).name;
+    const firstPick = !this.catSkillUsed;
+    if (firstPick) {
+      this.catSkillUsed = true;
+      skill.charge = 0;
+      skill.readyAt = this.options.onCatSkillFired(catId);
+      this.options.onPlaySound('match');
+    }
+    this.catSkillPicksLeft -= 1;
+    this.catClearBoardTile(tile);
+    this.toast(firstPick
+      ? `🐱${catName}发动技能，清除了 1 个${this.itemNames[tile.kind]}！`
+      : `🐱${catName}又清除了 1 个${this.itemNames[tile.kind]}！`);
+    if (this.catSkillPicksLeft > 0
+      && !this.boardTiles.some(candidate => candidate.active && !candidate.inTray && this.isTopTile(candidate))) {
+      // 没有可继续选择的目标时提前收尾，不让选择模式空挂着
+      this.catSkillPicksLeft = 0;
+    }
+    if (this.catSkillPicksLeft <= 0) this.clearToolMode();
+    this.refreshCatSkillPanel();
+  }
+
+  private catClearBoardTile(tile: Tile) {
+    tile.active = false;
+    tile.inTray = false;
+    this.collectedTotal++;
+    this.addEliminated(1);
+    Tween.stopAllByTarget(tile.node);
+    tween(tile.node)
+      .to(0.16, { scale: new Vec3(0.1, 0.1, 1) }, { easing: 'quadIn' })
+      .call(() => {
+        if (tile.node.isValid) tile.node.destroy();
+        if (this.destroyed || this.gameOver) return;
+        this.settleClearedBoardTile();
+      })
+      .start();
     this.refreshBoardTileStates();
     this.updateTargetLabel();
-    this.toast(`🐱${catName}发动技能，清除了 ${picked.length} 个元素！`);
+  }
+
+  // 非收集路径（锤子/猫咪技能）移除棋盘牌后的统一收尾：
+  // 清空即胜；其余情况补一次槽位结算，槽满且无三连时按规则判负，
+  // 避免槽满状态下清板后既赢不了也判不出输的死角。
+  private settleClearedBoardTile() {
+    this.refillEndlessBoard();
+    if (this.boardIntroActive) return;
+    if (!this.boardTiles.some(candidate => candidate.active)) {
+      if (this.options.endless) this.refillEndlessBoard(true);
+      else this.finish(true);
+      return;
+    }
+    this.resolveTrayMatches();
   }
 
   private catClearTrayTile(catName: string, retried = 0) {
@@ -2533,6 +2750,11 @@ export class GameScreen {
     this.trayTiles = this.trayTiles.filter(candidate => candidate !== tile);
     this.addEliminated(1);
     tile.active = false;
+    if (tile.node.parent === this.trayFlightLayer) {
+      // 牌还在飞行途中：落地回调被中断后不会再回减计数，这里必须补扣，
+      // 否则 pendingTrayAnimations 永远 >0，三消与槽满判负全部卡死。
+      this.pendingTrayAnimations = Math.max(0, this.pendingTrayAnimations - 1);
+    }
     Tween.stopAllByTarget(tile.node);
     tween(tile.node)
       .to(0.16, { scale: new Vec3(0.1, 0.1, 1) }, { easing: 'quadIn' })
@@ -2541,6 +2763,7 @@ export class GameScreen {
       })
       .start();
     this.reflowTray();
+    this.resolveTrayMatches();
     this.toast(`🐱${catName}发动技能，从收集槽带走了 1 个元素！`);
   }
 
@@ -2613,12 +2836,7 @@ export class GameScreen {
       .call(() => {
         if (tile.node.isValid) tile.node.destroy();
         if (this.destroyed || this.gameOver) return;
-        this.refillEndlessBoard();
-        if (this.boardIntroActive) return;
-        if (!this.boardTiles.some(candidate => candidate.active)) {
-          if (this.options.endless) this.refillEndlessBoard(true);
-          else this.finish(true);
-        }
+        this.settleClearedBoardTile();
       })
       .start();
   }
@@ -2759,6 +2977,6 @@ export class GameScreen {
 
   private toast(text: string) {
     if (!this.gameUI) return;
-    Toast.show(this.gameUI, text, { y: -235 });
+    Toast.show(this.gameUI, text);
   }
 }

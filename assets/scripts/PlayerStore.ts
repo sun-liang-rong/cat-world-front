@@ -37,8 +37,12 @@ import {
 } from './PlayerTypes';
 import { AdFunnelBand, AdFunnelBandStats, AdFunnelState, PlayerRun } from './level/LevelTypes';
 import {
+  BuildCellResult,
+  BuildTargetInfo,
   BuildingView,
   BUILDING_DEFINITIONS,
+  BUILDING_STAGE_CELLS,
+  CELL_STAR_COST,
   getBuildingDefinition,
   LEVELS_PER_THEME,
 } from './TownContent';
@@ -184,10 +188,13 @@ export class PlayerStore {
     return Object.keys(this.state.levelStars).some(key => (this.state.levelStars[Number(key)] ?? 0) > 0);
   }
 
-  // 任意一栋建筑推进过至少一个阶段，即视为建设过小镇
+  // 任意一栋建筑推进过至少一个阶段（或点亮过任意一格），即视为建设过小镇
   hasBuiltTown() {
     if (this.state.buildStage > 0) return true;
-    return BUILDING_DEFINITIONS.some(definition => this.getBuildingStage(definition.id) > 0);
+    return BUILDING_DEFINITIONS.some(definition => {
+      const building = this.state.buildings[definition.id];
+      return this.getBuildingStage(definition.id) > 0 || (building?.subProgress ?? 0) > 0;
+    });
   }
 
   shouldShowTownBuildHint() {
@@ -258,41 +265,123 @@ export class PlayerStore {
       const stage = this.getBuildingStage(definition.id);
       const maxStage = definition.stageNames.length;
       const building = this.state.buildings[definition.id];
+      const completed = stage >= maxStage;
+      // 已建成建筑展示最后一个大节点的满格；进行中建筑展示当前大节点的格子
+      const cellCount = BUILDING_STAGE_CELLS[Math.min(stage, maxStage - 1)] ?? 0;
+      const subProgress = completed
+        ? cellCount
+        : Math.max(0, Math.min(cellCount, building?.subProgress ?? 0));
       return {
         ...definition,
         stage,
         maxStage,
+        subProgress,
+        cellCount,
+        cellCost: CELL_STAR_COST,
         unlocked: definition.id === 'cat_house' ? true : !!building?.unlocked,
-        completed: stage >= maxStage,
+        completed,
       };
     });
   }
 
-  // 建设下一阶段：校验解锁与星星，扣星推进并联动猫咪解锁
-  buildBuildingStage(id: BuildingId): { ok: boolean; message: string } {
+  // 当前大节点内已点亮的格数（按 stage 语义与格子数收敛，坏值不外溢）
+  private getBuildingSubProgress(id: BuildingId) {
+    const stage = this.getBuildingStage(id);
+    const cellCount = BUILDING_STAGE_CELLS[Math.min(stage, BUILDING_STAGE_CELLS.length - 1)] ?? 0;
+    const saved = this.state.buildings[id]?.subProgress ?? 0;
+    return Math.max(0, Math.min(cellCount, Math.floor(saved)));
+  }
+
+  // 下一格建设目标：第一个已解锁、未建成的建筑（按主题顺序）。
+  // 结算弹窗文案与首页气泡共用，starsNeeded 为 0 表示星已够点亮。
+  getNextBuildableInfo(): BuildTargetInfo | null {
+    this.resetDailyState();
+    for (const definition of BUILDING_DEFINITIONS) {
+      const stage = this.getBuildingStage(definition.id);
+      if (stage >= definition.stageNames.length) continue;
+      if (!this.isBuildingUnlocked(definition.id)) continue;
+      const cellCount = BUILDING_STAGE_CELLS[Math.min(stage, BUILDING_STAGE_CELLS.length - 1)] ?? 0;
+      return {
+        buildingId: definition.id,
+        buildingName: definition.name,
+        stageName: definition.stageNames[stage] ?? '',
+        subProgress: this.getBuildingSubProgress(definition.id),
+        cellCount,
+        starsNeeded: this.state.stars >= CELL_STAR_COST ? 0 : CELL_STAR_COST - this.state.stars,
+      };
+    }
+    return null;
+  }
+
+  canLightNextBuildingCell() {
+    const target = this.getNextBuildableInfo();
+    return !!target && target.starsNeeded === 0;
+  }
+
+  // 点亮一格（小节点机制）：每格固定 3 星，亮满当前大节点自动进入下一阶段；
+  // 三个大节点全亮即建成并联动猫咪解锁（syncUnlocks）。
+  lightBuildingCell(id: BuildingId): BuildCellResult {
     const definition = getBuildingDefinition(id);
+    if (!this.isBuildingUnlocked(id)) {
+      return { ok: false, message: definition.unlockHint };
+    }
     const stage = this.getBuildingStage(id);
     if (stage >= definition.stageNames.length) {
       return { ok: false, message: `${definition.name}已经建设完成` };
     }
-    if (!this.isBuildingUnlocked(id)) {
-      return { ok: false, message: definition.unlockHint };
+    if (this.state.stars < CELL_STAR_COST) {
+      return { ok: false, message: `还差 ${CELL_STAR_COST - this.state.stars} 颗星星，去闯关赢星星吧` };
     }
-    const cost = definition.stageCosts[stage] ?? 0;
-    if (this.state.stars < cost) {
-      return { ok: false, message: `还需要 ${cost - this.state.stars} 颗星星` };
+    const cellCount = BUILDING_STAGE_CELLS[Math.min(stage, BUILDING_STAGE_CELLS.length - 1)] ?? 0;
+    if (cellCount <= 0) {
+      return { ok: false, message: '建设配置异常' };
     }
-    this.state.stars -= cost;
-    const nextStage = stage + 1;
+    this.state.stars -= CELL_STAR_COST;
+    const nextSub = this.getBuildingSubProgress(id) + 1;
+    const stageJustCompleted = nextSub >= cellCount;
+    const buildingCompleted = stageJustCompleted && stage + 1 >= definition.stageNames.length;
+    this.state.buildings[id].subProgress = stageJustCompleted ? 0 : nextSub;
     if (id === 'cat_house') {
-      this.state.buildStage = nextStage;
-    } else {
-      this.state.buildings[id].stage = nextStage;
+      // 流浪猫小屋的阶段沿用全局 buildStage 镜像（老存档与回忆页依赖它）
+      if (stageJustCompleted) this.state.buildStage = stage + 1;
+    } else if (stageJustCompleted) {
+      this.state.buildings[id].stage = stage + 1;
     }
     this.syncUnlocks(false);
     this.save();
-    const completed = nextStage >= definition.stageNames.length;
-    return { ok: true, message: completed ? '建设完成' : `${definition.stageNames[stage]}阶段完成` };
+    const stageName = definition.stageNames[stage] ?? '';
+    return {
+      ok: true,
+      message: stageJustCompleted
+        ? buildingCompleted ? `${definition.name}建设完成！` : `${stageName}完成！`
+        : `${stageName}进度 ${nextSub}/${cellCount}`,
+      stageJustCompleted,
+      buildingCompleted,
+    };
+  }
+
+  // —— 第 1 关一次性建设引导 ——
+  // 过关且从未点亮过任何格子时弹引导；跳过不置标记，点亮过则永不再弹。
+  shouldShowFirstTownGuide() {
+    return this.hasClearedAnyLevel() && !this.state.firstTownGuideDone && !this.hasBuiltTown();
+  }
+
+  markFirstTownGuideDone() {
+    if (this.state.firstTownGuideDone) return;
+    this.state.firstTownGuideDone = true;
+    this.save();
+  }
+
+  // —— 第 1 关对局内新手教学 ——
+  // 第一次三消时写入；失败重试不重放（教学三步演示完即算学会）。
+  isBoardTutorialDone() {
+    return this.state.boardTutorialDone;
+  }
+
+  markBoardTutorialDone() {
+    if (this.state.boardTutorialDone) return;
+    this.state.boardTutorialDone = true;
+    this.save();
   }
 
   getRecentRuns(): PlayerRun[] {
@@ -302,6 +391,11 @@ export class PlayerStore {
   getEquippedCat() {
     this.resetDailyState();
     return this.state.equippedCat;
+  }
+
+  // 是否至少解锁了一只猫咪：宠物浮窗用它区分「去装备」和「先解锁建筑」两种提示
+  hasAnyUnlockedCat() {
+    return (Object.keys(this.state.cats) as CatId[]).some(id => this.state.cats[id].unlocked);
   }
 
   getGamePetPosition(): GamePetPosition {
@@ -791,6 +885,8 @@ export class PlayerStore {
       recentRuns: [],
       adFunnel: this.createAdFunnel(),
       endless: this.createEndlessProgress(),
+      firstTownGuideDone: false,
+      boardTutorialDone: false,
     };
   }
 
@@ -875,7 +971,7 @@ export class PlayerStore {
   private createBuildingStates(): Record<BuildingId, BuildingProgress> {
     const buildings = {} as Record<BuildingId, BuildingProgress>;
     BUILDING_DEFINITIONS.forEach(definition => {
-      buildings[definition.id] = { unlocked: definition.id === 'cat_house', stage: 0 };
+      buildings[definition.id] = { unlocked: definition.id === 'cat_house', stage: 0, subProgress: 0 };
     });
     return buildings;
   }
@@ -937,6 +1033,8 @@ export class PlayerStore {
       state.buildings[definition.id] = {
         unlocked: saved.unlocked === true || state.buildings[definition.id].unlocked,
         stage: Math.max(0, Math.floor(this.safeNumber(saved.stage, 0))),
+        // 旧档没有 subProgress：stage 语义是「已完成大节点数」，当前阶段从 0 格开始
+        subProgress: Math.max(0, Math.floor(this.safeNumber(saved.subProgress, 0))),
       };
     });
     if (Array.isArray(value.recentRuns)) {
@@ -1064,6 +1162,8 @@ export class PlayerStore {
           : '',
       };
     }
+    state.firstTownGuideDone = value.firstTownGuideDone === true;
+    state.boardTutorialDone = value.boardTutorialDone === true;
     return state;
   }
 

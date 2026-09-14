@@ -45,7 +45,6 @@ export class RankScreen {
   private currentTab: LeaderboardTab = 'level';
   private loadToken = 0;
   private listViewHeight = 0;
-  private toastY = 0;
   private active = false;
 
   constructor(
@@ -109,7 +108,6 @@ export class RankScreen {
     this.root.addChild(this.rankUI);
     this.rankUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     this.rankUI.active = this.active;
-    this.toastY = bottom + 420;
 
     this.image(this.rankUI, 'home/home_bg', 0, 0, visibleSize.width, visibleSize.height);
     this.addWarmVeil(visibleSize.width, visibleSize.height);
@@ -533,6 +531,6 @@ export class RankScreen {
 
   private toast(text: string) {
     if (!this.rankUI) return;
-    Toast.show(this.rankUI, text, { y: this.toastY });
+    Toast.show(this.rankUI, text);
   }
 }

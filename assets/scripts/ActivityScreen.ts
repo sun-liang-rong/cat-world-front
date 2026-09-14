@@ -823,7 +823,7 @@ export class ActivityScreen {
 
   private toast(text: string) {
     if (!this.contentUI) return;
-    Toast.show(this.contentUI, text, { y: -612 });
+    Toast.show(this.contentUI, text);
   }
 
   private statusText(activity: ActivitySnapshot) {

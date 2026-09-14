@@ -578,6 +578,6 @@ export class CatDetailScreen {
 
   private toast(text: string) {
     if (!this.detailUI) return;
-    Toast.show(this.detailUI, text, { y: -640 });
+    Toast.show(this.detailUI, text);
   }
 }

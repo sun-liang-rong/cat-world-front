@@ -75,7 +75,13 @@ export interface ActivityState {
 
 export interface BuildingProgress {
   unlocked: boolean;
+  /** 已完成的大节点数 0~3（清理/修复/装饰），语义不变；cat_house 镜像全局 buildStage */
   stage: number;
+  /**
+   * 当前大节点内已点亮的小格数（小节点机制：1 格 = 3 星 = 1 关）。
+   * 旧档缺省为 0——stage 语义就是「已完成大节点数」，已完成阶段无需补格。
+   */
+  subProgress: number;
 }
 
 export interface EndlessProgress {
@@ -125,6 +131,16 @@ export interface PlayerState {
   adFunnel: AdFunnelState;
   /** 无尽模式本地纪录，不上报排行榜 */
   endless: EndlessProgress;
+  /**
+   * 第 1 关一次性「去建设小镇」引导是否已完成。
+   * 跳过引导不置标记（下次回首页可再触发）；点亮过任意一格后也不再弹。
+   */
+  firstTownGuideDone: boolean;
+  /**
+   * 第 1 关对局内新手教学是否已完成（第一次三消时写入）。
+   * 仅主线 level===1 且该标记为 false 时触发；失败重试不重放。
+   */
+  boardTutorialDone: boolean;
 }
 
 export interface PlayerExperienceInfo {

@@ -428,6 +428,6 @@ export class DailyTaskScreen {
 
   private toast(text: string) {
     if (!this.taskUI) return;
-    Toast.show(this.taskUI, text, { y: -610 });
+    Toast.show(this.taskUI, text);
   }
 }
