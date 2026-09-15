@@ -69,7 +69,8 @@ export class Main extends Component {
   private nextLevelDefinition: LevelDefinition | null = null;
   private nextLevelPrepareToken = 0;
   private nextLevelPreparing = false;
-  private readonly nextLevelReadyWaiters: Array<(definition: LevelDefinition) => void> = [];
+  // definition 为 null 表示生成失败，等待方据此复位 startingGame 等进关状态
+  private readonly nextLevelReadyWaiters: Array<(definition: LevelDefinition | null) => void> = [];
   private challengeLevelDefinition: LevelDefinition | null = null;
   private challengePrepareToken = 0;
   private challengePreparing = false;
@@ -78,6 +79,9 @@ export class Main extends Component {
   private challengeSpareDefinition: LevelDefinition | null = null;
   private challengeSpareToken = 0;
   private challengeSparePreparing = false;
+  // 本轮挑战关卡生成已失败。生成失败时没有可交付的 definition，
+  // startChallenge 的 checkReady 轮询靠它退出并复位 startingGame，避免无限等待。
+  private challengePrepareFailed = false;
   private startingGame = false;
   private readonly loadedScreens = new Set<object>();
   private readonly readyScreens = new Set<object>();
@@ -698,6 +702,15 @@ export class Main extends Component {
               this.startingGame = false;
             });
           });
+        } else if (this.challengePrepareFailed) {
+          // 生成失败：退出轮询并复位进关状态。首次从首页进入时 gameScreen
+          // 为 null、首页仍处于激活状态，无需恢复页面，只需收掉加载动画。
+          this.startingGame = false;
+          this.loadingOverlay?.hide(() => {
+            this.loadingOverlay = null;
+            this.homeScreen.setActive(true);
+            Toast.show(this.root, '超萌挑战准备失败，请稍后再试');
+          });
         } else {
           setTimeout(checkReady, 100);
         }
@@ -734,6 +747,7 @@ export class Main extends Component {
   private prepareChallengeLevel(seed = this.nextChallengeSeed()) {
     const token = ++this.challengePrepareToken;
     this.challengePreparing = true;
+    this.challengePrepareFailed = false;
     this.levelSystem.generator.generateAsync(this.challengeGenerationOptions(seed)).then(definition => {
       if (!this.node.isValid || token !== this.challengePrepareToken) return;
       this.challengePreparing = false;
@@ -747,6 +761,7 @@ export class Main extends Component {
       console.error('[CatWorld] Failed to prepare challenge level', error);
       if (!this.node.isValid || token !== this.challengePrepareToken) return;
       this.challengePreparing = false;
+      this.challengePrepareFailed = true;
       if (this.gameScreen && !this.challengeLevelDefinition) {
         this.returnHomeFromGame();
         Toast.show(this.root, '超萌挑战准备失败，请稍后再试');
@@ -1355,8 +1370,15 @@ export class Main extends Component {
     this.startingGame = true;
     this.pauseChallengePreparation();
     const level = this.playerStore.getLevel();
-    const playPrepared = (definition: LevelDefinition) => {
+    const playPrepared = (definition: LevelDefinition | null) => {
       if (!this.node.isValid || !this.startingGame) return;
+      if (!definition) {
+        // 「下一关」只在结算弹窗触发：保持弹窗现场，玩家可重试/返回，
+        // toast 挂在 root 上（首页此时隐藏，挂 homeUI 会看不见）。
+        this.startingGame = false;
+        Toast.show(this.root, '下一关准备失败，请稍后再试');
+        return;
+      }
       this.currentLevelDefinition = definition;
       this.nextLevelDefinition = null;
       this.openGame(() => {
@@ -1371,7 +1393,7 @@ export class Main extends Component {
     }
     this.nextLevelDefinition = null;
 
-    this.prepareNextMainLevel(level, definition => playPrepared(definition), true);
+    this.prepareNextMainLevel(level, definition => playPrepared(definition));
   }
 
   private advanceMainLevelAfterWin() {
@@ -1383,8 +1405,7 @@ export class Main extends Component {
 
   private prepareNextMainLevel(
     level: number,
-    onReady?: (definition: LevelDefinition) => void,
-    showFailureToast = false,
+    onReady?: (definition: LevelDefinition | null) => void,
   ) {
     if (this.nextLevelPreparing) {
       if (onReady) this.nextLevelReadyWaiters.push(onReady);
@@ -1405,11 +1426,11 @@ export class Main extends Component {
       if (!this.node.isValid || token !== this.nextLevelPrepareToken) return;
       this.nextLevelPreparing = false;
       this.nextLevelDefinition = null;
-      this.nextLevelReadyWaiters.length = 0;
-      if (onReady) {
-        this.startingGame = false;
-        if (showFailureToast) Toast.show(this.root, '下一关准备失败，请稍后再试');
-      }
+      // 排队的等待方与本次 onReady 一样收到 null：它们各自复位
+      // startingGame 等状态并提示玩家，不能直接清空否则调用方永远锁在进关中。
+      const waiters = this.nextLevelReadyWaiters.splice(0);
+      onReady?.(null);
+      waiters.forEach(waiter => waiter(null));
     });
   }
 

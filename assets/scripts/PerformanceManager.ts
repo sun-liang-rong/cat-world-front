@@ -53,10 +53,20 @@ export class PerformanceManager {
 
     // 微信小游戏环境
     if (platform === sys.Platform.WECHAT_GAME) {
-      const systemInfo = (sys as any).wx?.getSystemInfoSync?.();
+      // sys 是 Cocos 的系统信息模块而非运行时全局，取 wx 必须走 globalThis
+      // （与 ApiClient / AudioManager 的环境探测保持一致）
+      const wxApi = (globalThis as any).wx;
+      const systemInfo = wxApi?.getSystemInfoSync?.();
       if (systemInfo) {
-        const { model, platform: wechatPlatform } = systemInfo;
-        // 根据机型判断
+        const { model, platform: wechatPlatform, benchmarkLevel } = systemInfo;
+        // 微信官方机型跑分分档（仅 Android 提供，iOS / 无法评估时为 -1），
+        // 优先于字符串匹配：<=10 低端，11~20 中端，>=21 高端。
+        if (typeof benchmarkLevel === 'number' && benchmarkLevel >= 0) {
+          if (benchmarkLevel <= 10) return this.getLowEndConfig();
+          if (benchmarkLevel <= 20) return this.getMediumEndConfig();
+          return this.getHighEndConfig();
+        }
+        // 根据机型判断（iOS 无 benchmarkLevel，走这里）
         if (this.isLowEndDevice(model, wechatPlatform)) {
           return this.getLowEndConfig();
         } else if (this.isHighEndDevice(model, wechatPlatform)) {
@@ -82,12 +92,12 @@ export class PerformanceManager {
   }
 
   private isLowEndDevice(model: string, platform: string): boolean {
+    // 注意 model 是机型名（如 "iPhone 7"），不含系统版本；Android 端优先走 benchmarkLevel
     const lowEndKeywords = [
       'redmi 4', 'redmi 5', 'redmi 6',
       'mi a1', 'mi a2',
       'iphone 6', 'iphone 7',
       'oppo a', 'vivo y',
-      'android 6', 'android 7',
     ];
     const modelLower = model.toLowerCase();
     return lowEndKeywords.some(keyword => modelLower.includes(keyword));
