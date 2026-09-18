@@ -505,13 +505,13 @@ export class LevelGenerator {
     const tileCount = archetype === 'rescue'
       ? LevelGenerator.rescueTileCount(level, random)
       : LevelGenerator.tileCount(level, random, role, fullTrayPressure);
-    const kindCount = LevelGenerator.kindCount(level, role);
+    const kindCount = LevelGenerator.kindCount(level, role, fullTrayPressure);
     const layerCount = archetype === 'rescue'
       ? Math.max(2, this.layerCount(level) - 3)
       : fullTrayPressure
-        // 超萌挑战顶满 PRD 的层数上限（6~7 层取 7）：60 张配 7 层 ≈ 每层 8.6 张，
-        // 再叠全叠柱，可见牌常年只有 3~5 张。
-        ? 7
+        // 超萌挑战：固定 8 层深堆（顶格压力），可见牌常年只有 3~5 张，
+        // 配合 15 种图案 + 5 槽 + 69 张牌，形成"羊了个羊第二关"级别的地狱难度。
+        ? 8
         : this.layerCount(level);
     const tiles = this.createLayout(tileCount, layerCount, archetype, random, 'cone', fullTrayPressure);
     const order = this.createRemovalOrder(tiles, archetype, random);
@@ -1697,7 +1697,12 @@ export class LevelGenerator {
     return Math.min(9, 5 + Math.floor((level - 2) / 4));
   }
 
-  private static kindCount(level: number, role: LevelRole = 'normal') {
+  private static kindCount(level: number, role: LevelRole = 'normal', fullTrayPressure = false) {
+    // 超萌挑战：固定 15 种图案（满额压力），同种元素极度分散，
+    // 配对难度拉满；15 种 × 5 槽是极限配置。
+    if (fullTrayPressure) {
+      return 15;
+    }
     // 优先级2：延缓种类数增长 - 拉长难度曲线，给玩家更长的学习期
     // 🆕 再次优化：进一步增加前期种类数，解决"还是太简单"问题
     // 新曲线：L2=8种 → L3=9种 → L5=10种 → L10=11种 → L20=13种 → L35=15种
@@ -1732,13 +1737,13 @@ export class LevelGenerator {
   ) {
     if (level <= 1) return 18;
 
-    const kindCount = LevelGenerator.kindCount(level);
+    const kindCount = LevelGenerator.kindCount(level, role, fullTrayPressure);
     const minimum = kindCount * 3;
 
-    // 超萌挑战：牌量顶满 PRD 的 45~60 带上沿（54/57/60 三档），
-    // 15 种 × 每种恰好 3~4 张，容错被压到最低。
+    // 超萌挑战：固定 69 张牌（15 种 × 平均 4.6 张），
+    // 容错压到极限，配合 8 层深堆和 5 槽，形成地狱难度。
     if (fullTrayPressure) {
-      return 54 + (random ? random.int(0, 2) * 3 : 3);
+      return 69;
     }
 
     // 🆕 优化前 10 关：让每种元素保持在 7-8 张（策略性甜蜜点）

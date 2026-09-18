@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+
+  <title>Cocos Creator | <%= projectName %></title>
+
+  <!--http://www.html5rocks.com/en/mobile/mobifying/-->
+  <meta name="viewport"
+        content="width=device-width,user-scalable=no,initial-scale=1,minimum-scale=1,maximum-scale=1,minimal-ui=true"/>
+
+  <!--https://developer.apple.com/library/safari/documentation/AppleApplications/Reference/SafariHTMLRef/Articles/MetaTags.html-->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="theme-color" content="#FFF7D8">
+
+  <!-- force webkit on 360 -->
+  <meta name="renderer" content="webkit"/>
+  <meta name="force-rendering" content="webkit"/>
+  <!-- force edge on IE -->
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1"/>
+  <meta name="msapplication-tap-highlight" content="no">
+
+  <!-- force full screen on some browser -->
+  <meta name="full-screen" content="yes"/>
+  <meta name="x5-fullscreen" content="true"/>
+  <meta name="360-fullscreen" content="true"/>
+
+  <!--fix fireball/issues/3568 -->
+  <!--<meta name="browsermode" content="application">-->
+  <meta name="x5-page-mode" content="app">
+
+  <!--<link rel="apple-touch-icon" href=".png" />-->
+  <!--<link rel="apple-touch-icon-precomposed" href=".png" />-->
+
+  <link rel="stylesheet" type="text/css" href="<%= cssUrl %>"/>
+  <style>
+    /* 内联首屏底色：CSS 文件未到之前也不能露出黑屏 */
+    html, body {
+      background: #FFF7D8 !important;
+    }
+    #boot-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(180deg, #FCC996 0%, #FFF7D8 72%);
+      color: #6F3E1C;
+      font-family: "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+      pointer-events: none;
+      transition: opacity 0.28s ease;
+    }
+    #boot-splash.boot-splash--hide {
+      opacity: 0;
+    }
+    .boot-stage {
+      position: relative;
+      width: 180px;
+      height: 150px;
+      margin-bottom: 18px;
+    }
+    .boot-yarn {
+      position: absolute;
+      left: 50%;
+      bottom: 18px;
+      width: 68px;
+      height: 68px;
+      margin-left: -34px;
+      border-radius: 50%;
+      background:
+        repeating-conic-gradient(from 20deg, #FFE06C 0 14deg, #FFB347 14deg 28deg);
+      box-shadow:
+        inset -10px -12px 0 rgba(92, 54, 22, 0.12),
+        0 10px 0 rgba(92, 54, 22, 0.16);
+      animation: boot-yarn-roll 1.35s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+    }
+    .boot-yarn::after {
+      content: "";
+      position: absolute;
+      inset: 18px;
+      border-radius: 50%;
+      border: 3px solid rgba(111, 62, 28, 0.28);
+      border-left-color: transparent;
+      border-bottom-color: transparent;
+    }
+    .boot-paw {
+      position: absolute;
+      right: 10px;
+      top: 8px;
+      width: 54px;
+      height: 48px;
+      transform-origin: 70% 10%;
+      animation: boot-paw-bat 1.35s ease-in-out infinite;
+    }
+    .boot-paw .pad {
+      position: absolute;
+      left: 12px;
+      bottom: 0;
+      width: 30px;
+      height: 24px;
+      background: #FFE06C;
+      border: 3px solid #EBCD9E;
+      border-radius: 16px 16px 18px 18px;
+      box-sizing: border-box;
+    }
+    .boot-paw .toe {
+      position: absolute;
+      width: 14px;
+      height: 16px;
+      background: #FFE06C;
+      border: 3px solid #EBCD9E;
+      border-radius: 50%;
+      box-sizing: border-box;
+    }
+    .boot-paw .toe-1 { left: 2px; top: 10px; }
+    .boot-paw .toe-2 { left: 16px; top: 0; }
+    .boot-paw .toe-3 { left: 32px; top: 8px; }
+    .boot-prints {
+      display: flex;
+      gap: 16px;
+      margin-top: 6px;
+    }
+    .boot-print {
+      width: 10px;
+      height: 12px;
+      border-radius: 50% 50% 45% 45%;
+      background: #EBCD9E;
+      opacity: 0.25;
+      animation: boot-print-pop 1.35s ease-in-out infinite;
+    }
+    .boot-print:nth-child(2) { animation-delay: 0.18s; }
+    .boot-print:nth-child(3) { animation-delay: 0.36s; }
+    .boot-title {
+      margin-top: 18px;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-shadow: 0 3px 0 rgba(90, 61, 38, 0.18);
+    }
+    .boot-hint {
+      margin-top: 10px;
+      font-size: 15px;
+      color: #704528;
+      opacity: 0.85;
+    }
+    @keyframes boot-yarn-roll {
+      0%, 100% { transform: translateX(-36px) rotate(-18deg) scale(1); }
+      45% { transform: translateX(30px) rotate(210deg) scale(1); }
+      52% { transform: translateX(34px) rotate(220deg) scale(0.86, 1.12); }
+      62% { transform: translateX(28px) rotate(200deg) scale(1); }
+    }
+    @keyframes boot-paw-bat {
+      0%, 58%, 100% { transform: rotate(-18deg) translateY(0); }
+      68% { transform: rotate(22deg) translateY(18px); }
+      78% { transform: rotate(-8deg) translateY(4px); }
+    }
+    @keyframes boot-print-pop {
+      0%, 40%, 100% { opacity: 0.2; transform: translateY(0) scale(0.9); }
+      55% { opacity: 0.9; transform: translateY(-4px) scale(1.15); }
+    }
+  </style>
+</head>
+<body>
+  <div id="boot-splash" aria-live="polite">
+    <div class="boot-stage">
+      <div class="boot-yarn"></div>
+      <div class="boot-paw">
+        <span class="toe toe-1"></span>
+        <span class="toe toe-2"></span>
+        <span class="toe toe-3"></span>
+        <span class="pad"></span>
+      </div>
+    </div>
+    <div class="boot-prints">
+      <span class="boot-print"></span>
+      <span class="boot-print"></span>
+      <span class="boot-print"></span>
+    </div>
+    <div class="boot-title">猫爪星球奇遇记</div>
+    <div class="boot-hint">正在唤醒小猫咪…</div>
+  </div>
+  <div id="GameDiv" cc_exact_fit_screen="true">
+      <div id="Cocos3dGameContainer">
+        <canvas id="GameCanvas" oncontextmenu="event.preventDefault()" tabindex="99"></canvas>
+      </div>
+    </div>
+  <script>
+    (function () {
+      var splash = document.getElementById('boot-splash');
+      var hiding = false;
+      window.__catWorldHideBootSplash = function () {
+        if (hiding) return;
+        hiding = true;
+        if (!splash) return;
+        splash.classList.add('boot-splash--hide');
+        setTimeout(function () {
+          if (splash && splash.parentNode) splash.parentNode.removeChild(splash);
+        }, 320);
+      };
+      // 游戏内加载页未回调时（旧包 / 启动失败）最多盖 12 秒，避免一直挡住画面
+      setTimeout(function () {
+        if (typeof window.__catWorldHideBootSplash === 'function') {
+          window.__catWorldHideBootSplash();
+        }
+      }, 12000);
+    })();
+  </script>
+  <%- include(cocosTemplate, {}) %>
+</body>
+</html>

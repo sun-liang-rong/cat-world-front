@@ -20,15 +20,19 @@ export interface BoardTutorialHost {
   onDone: () => void;
 }
 
-const STEP_TEXT_COLLECT = '点击亮起的卡片，收到底部槽位';
-const STEP_TEXT_MATCH = '再收集相同的卡片，凑齐 3 个';
-const TEXT_CELEBRATE = '三个相同，自动消除！';
-const TEXT_FINAL = '清空所有卡片即可通关';
+const STEP_TEXT_COLLECT = '👆 点击任意亮起的卡片';
+const STEP_TEXT_MATCH = '✨ 继续点击相同的卡片凑齐3个';
+const TEXT_CELEBRATE = '🎉 太棒了！三消成功！';
+const TEXT_FINAL = '💪 继续加油，清空所有卡片通关';
 
-const RING_COLOR = new Color(255, 224, 108);
-const PANEL_FILL = new Color(255, 248, 226, 242);
-const PANEL_STROKE = new Color(235, 205, 158);
-const TEXT_COLOR = new Color(112, 69, 40);
+// 升级配色：更鲜艳的强调色 + 柔和阴影
+const RING_COLOR = new Color(255, 200, 80);        // 更亮的金黄
+const RING_GLOW = new Color(255, 240, 180, 100);   // 外发光
+const PANEL_FILL = new Color(255, 248, 226);       // 奶油底
+const PANEL_STROKE = new Color(235, 205, 158);     // 描边
+const PANEL_SHADOW = new Color(92, 54, 22, 120);   // 投影
+const TEXT_COLOR = new Color(111, 62, 28);         // 深棕标题色
+const CELEBRATE_COLOR = new Color(255, 140, 60);   // 庆祝橙色
 
 /** 单屏高亮环上限：目标种类暴露牌再多也不铺满屏 */
 const MAX_RINGS = 6;
@@ -87,8 +91,12 @@ export class BoardTutorial {
   refreshHighlight() {
     if (!this.started || this.destroyed) return;
     this.clearRings();
+
+    // 新逻辑：只在 collect 阶段高亮所有同类卡牌，match 阶段不高亮
+    if (this.step !== 'collect') return;
+
     const exposed = this.host.getExposedTiles();
-    const focusKind = this.step === 'match' ? this.lastCollectedKind : this.targetKind;
+    const focusKind = this.targetKind;
     const sameKind = focusKind === null
       ? []
       : exposed.filter(tile => tile.kind === focusKind);
@@ -133,27 +141,42 @@ export class BoardTutorial {
     return best;
   }
 
-  /** 高亮环挂在牌节点下：牌被收走时环跟随飞行动画，牌销毁时环随之销毁 */
+  /** 高亮环挂在牌节点下：卡牌边缘紧贴一圈明显的金色亮光 */
   private buildRing(tile: Node) {
     if (!tile.isValid) return null;
     const transform = tile.getComponent(UITransform);
-    const width = (transform?.width ?? 104) + 24;
-    const height = (transform?.height ?? 107) + 24;
+    const width = transform?.width ?? 104;
+    const height = transform?.height ?? 107;
     const ring = new Node('TutorialRing');
     tile.addChild(ring);
     ring.addComponent(UITransform).setContentSize(width, height);
-    const graphics = ring.addComponent(Graphics);
-    graphics.strokeColor = RING_COLOR;
-    graphics.lineWidth = 6;
-    graphics.roundRect(-width / 2, -height / 2, width, height, 16);
+
+    // 外层柔和发光（造成立体感）
+    const glow = new Node('Glow');
+    ring.addChild(glow);
+    glow.addComponent(UITransform).setContentSize(width + 8, height + 8);
+    const glowGraphics = glow.addComponent(Graphics);
+    glowGraphics.strokeColor = new Color(255, 220, 120, 180);  // 半透明金黄
+    glowGraphics.lineWidth = 4;
+    glowGraphics.roundRect(-(width + 8) / 2, -(height + 8) / 2, width + 8, height + 8, 14);
+    glowGraphics.stroke();
+
+    // 内层鲜艳金色边框（主视觉）
+    const border = new Node('Border');
+    ring.addChild(border);
+    border.addComponent(UITransform).setContentSize(width, height);
+    const graphics = border.addComponent(Graphics);
+    graphics.strokeColor = new Color(255, 215, 0);  // 更亮的金黄
+    graphics.lineWidth = 8;
+    graphics.roundRect(-width / 2, -height / 2, width, height, 12);
     graphics.stroke();
-    const opacity = ring.addComponent(UIOpacity);
-    opacity.opacity = 235;
+
+    // 呼吸动画：透明度 + 缩放
     tween(ring)
       .repeatForever(
         tween()
-          .to(0.75, { scale: new Vec3(1.06, 1.06, 1) }, { easing: 'sineInOut' })
-          .to(0.75, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+          .to(0.5, { scale: new Vec3(1.03, 1.03, 1) }, { easing: 'sineInOut' })
+          .to(0.5, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
       )
       .start();
     return ring;
@@ -172,26 +195,58 @@ export class BoardTutorial {
     const banner = new Node('TutorialBanner');
     this.host.uiRoot.addChild(banner);
     banner.setPosition(0, this.host.bannerY);
-    banner.addComponent(UITransform).setContentSize(440, 64);
-    const graphics = banner.addComponent(Graphics);
+    banner.addComponent(UITransform).setContentSize(480, 80);
+
+    // 投影层（模拟立体感）
+    const shadow = new Node('Shadow');
+    banner.addChild(shadow);
+    shadow.setPosition(0, -6);
+    shadow.addComponent(UITransform).setContentSize(480, 80);
+    const shadowGraphics = shadow.addComponent(Graphics);
+    shadowGraphics.fillColor = PANEL_SHADOW;
+    shadowGraphics.roundRect(-240, -40, 480, 80, 32);
+    shadowGraphics.fill();
+
+    // 主面板
+    const panel = new Node('Panel');
+    banner.addChild(panel);
+    panel.addComponent(UITransform).setContentSize(480, 80);
+    const graphics = panel.addComponent(Graphics);
     graphics.fillColor = PANEL_FILL;
     graphics.strokeColor = PANEL_STROKE;
-    graphics.lineWidth = 3;
-    graphics.roundRect(-220, -32, 440, 64, 24);
+    graphics.lineWidth = 4;
+    graphics.roundRect(-240, -40, 480, 80, 32);
     graphics.fill();
     graphics.stroke();
 
-    const label = this.label(banner, text, 0, 0, 22, TEXT_COLOR);
+    // 内层装饰高光（顶部浅色条）
+    const highlight = new Node('Highlight');
+    panel.addChild(highlight);
+    highlight.setPosition(0, 18);
+    highlight.addComponent(UITransform).setContentSize(440, 8);
+    const hlGraphics = highlight.addComponent(Graphics);
+    hlGraphics.fillColor = new Color(255, 255, 255, 60);
+    hlGraphics.roundRect(-220, -4, 440, 8, 4);
+    hlGraphics.fill();
+
+    const label = this.label(panel, text, 0, 0, 24, TEXT_COLOR);
     label.isBold = true;
     label.overflow = Label.Overflow.SHRINK;
     label.enableWrapText = false;
     label.verticalAlign = Label.VerticalAlign.CENTER;
-    label.node.getComponent(UITransform)!.setContentSize(412, 32);
+    label.node.getComponent(UITransform)!.setContentSize(440, 50);
     this.bannerLabel = label;
 
-    banner.setScale(new Vec3(0.8, 0.8, 1));
+    // 更弹性的入场动画
+    banner.setScale(new Vec3(0.75, 0.75, 1));
+    const opacity = banner.addComponent(UIOpacity);
+    opacity.opacity = 0;
     tween(banner)
-      .to(0.2, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .to(0.25, { scale: new Vec3(1.05, 1.05, 1) }, { easing: 'backOut' })
+      .to(0.08, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
+      .start();
+    tween(opacity)
+      .to(0.2, { opacity: 255 })
       .start();
     return banner;
   }
@@ -199,11 +254,12 @@ export class BoardTutorial {
   private setBannerText(text: string) {
     if (!this.bannerLabel || !this.banner?.isValid) return;
     this.bannerLabel.string = text;
-    // 步骤切换时轻缩放提醒一次
+    // 步骤切换时更明显的脉冲动画
     Tween.stopAllByTarget(this.banner);
-    this.banner.setScale(new Vec3(0.94, 0.94, 1));
+    this.banner.setScale(new Vec3(0.92, 0.92, 1));
     tween(this.banner)
-      .to(0.16, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .to(0.12, { scale: new Vec3(1.04, 1.04, 1) }, { easing: 'quadOut' })
+      .to(0.12, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
       .start();
   }
 
@@ -211,23 +267,29 @@ export class BoardTutorial {
     const node = new Node('TutorialCelebrate');
     this.host.uiRoot.addChild(node);
     node.setPosition(0, this.host.celebrateY);
-    node.addComponent(UITransform).setContentSize(560, 120);
-    const label = this.label(node, TEXT_CELEBRATE, 0, 0, 34, RING_COLOR);
+    node.addComponent(UITransform).setContentSize(600, 140);
+
+    // 庆祝文字带多层效果：外发光 + 描边 + 阴影
+    const label = this.label(node, TEXT_CELEBRATE, 0, 0, 40, CELEBRATE_COLOR);
     label.isBold = true;
-    label.outlineWidth = 4;
+    label.outlineWidth = 5;
     label.outlineColor = new Color(90, 61, 38);
     label.enableShadow = true;
-    label.shadowColor = new Color(60, 40, 24, 140);
-    label.shadowOffset = new Vec2(0, -4);
+    label.shadowColor = new Color(60, 40, 24, 180);
+    label.shadowOffset = new Vec2(0, -6);
+
     const opacity = node.addComponent(UIOpacity);
-    node.setScale(new Vec3(0.6, 0.6, 1));
+    node.setScale(new Vec3(0.5, 0.5, 1));
     this.celebrateNode = node;
+
+    // 更夸张的庆祝弹出动画
     tween(node)
-      .to(0.22, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .to(0.28, { scale: new Vec3(1.15, 1.15, 1) }, { easing: 'backOut' })
+      .to(0.12, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' })
       .start();
     tween(opacity)
-      .delay(1.0)
-      .to(0.3, { opacity: 0 })
+      .delay(1.2)
+      .to(0.35, { opacity: 0 }, { easing: 'sineIn' })
       .call(() => this.playFinalTip())
       .start();
   }

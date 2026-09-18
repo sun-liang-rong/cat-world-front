@@ -403,13 +403,16 @@ export class PlayerStore {
   }
 
   setGamePetPosition(position: GamePetPosition) {
-    const side = position.side === 'left' ? 'left' : 'right';
-    const y = Math.max(
-      -600,
-      Math.min(600, Math.floor(Number.isFinite(position.y) ? position.y : 220)),
+    const x = Math.max(
+      -330,
+      Math.min(330, Math.floor(Number.isFinite(position.x) ? position.x : 0)),
     );
-    if (this.state.gamePetPosition.side === side && this.state.gamePetPosition.y === y) return;
-    this.state.gamePetPosition = { side, y };
+    const y = Math.max(
+      -580,
+      Math.min(580, Math.floor(Number.isFinite(position.y) ? position.y : -120)),
+    );
+    if (this.state.gamePetPosition.x === x && this.state.gamePetPosition.y === y) return;
+    this.state.gamePetPosition = { x, y };
     this.save();
   }
 
@@ -876,7 +879,7 @@ export class PlayerStore {
       buildStage: 0,
       cats,
       equippedCat: null,
-      gamePetPosition: { side: 'right', y: 220 },
+      gamePetPosition: { x: -330, y: 460 },
       inventory: { hammer: 0, glove: 0, dice: 0, extra_slot: 0 },
       buildings: this.createBuildingStates(),
       daily: this.createDailyState(this.todayKey()),
@@ -1072,10 +1075,13 @@ export class PlayerStore {
     const savedPetPosition = value.gamePetPosition;
     if (savedPetPosition && typeof savedPetPosition === 'object') {
       state.gamePetPosition = {
-        side: savedPetPosition.side === 'left' ? 'left' : 'right',
+        x: Math.max(
+          -330,
+          Math.min(330, Math.floor(this.safeNumber(savedPetPosition.x, state.gamePetPosition.x))),
+        ),
         y: Math.max(
-          -600,
-          Math.min(600, Math.floor(this.safeNumber(savedPetPosition.y, state.gamePetPosition.y))),
+          -580,
+          Math.min(580, Math.floor(this.safeNumber(savedPetPosition.y, state.gamePetPosition.y))),
         ),
       };
     }

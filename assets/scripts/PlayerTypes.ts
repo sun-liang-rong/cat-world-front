@@ -95,7 +95,7 @@ export interface EndlessProgress {
 }
 
 export interface GamePetPosition {
-  side: 'left' | 'right';
+  x: number;
   y: number;
 }
 

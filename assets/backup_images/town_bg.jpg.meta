@@ -2,16 +2,16 @@
   "ver": "1.0.27",
   "importer": "image",
   "imported": true,
-  "uuid": "3dc77ee6-dc6e-4dea-80bb-f85366c54327",
+  "uuid": "f6743d29-9d50-4aa2-acbe-f4638fe73590",
   "files": [
-    ".json",
-    ".png"
+    ".jpg",
+    ".json"
   ],
   "subMetas": {
     "6c48a": {
       "importer": "texture",
-      "uuid": "3dc77ee6-dc6e-4dea-80bb-f85366c54327@6c48a",
-      "displayName": "item_glove",
+      "uuid": "f6743d29-9d50-4aa2-acbe-f4638fe73590@6c48a",
+      "displayName": "town_bg",
       "id": "6c48a",
       "name": "texture",
       "userData": {
@@ -22,7 +22,7 @@
         "mipfilter": "none",
         "anisotropy": 0,
         "isUuid": true,
-        "imageUuidOrDatabaseUri": "3dc77ee6-dc6e-4dea-80bb-f85366c54327",
+        "imageUuidOrDatabaseUri": "f6743d29-9d50-4aa2-acbe-f4638fe73590",
         "visible": false
       },
       "ver": "1.0.22",
@@ -36,7 +36,7 @@
   "userData": {
     "type": "texture",
     "fixAlphaTransparencyArtifacts": false,
-    "hasAlpha": true,
-    "redirect": "3dc77ee6-dc6e-4dea-80bb-f85366c54327@6c48a"
+    "hasAlpha": false,
+    "redirect": "f6743d29-9d50-4aa2-acbe-f4638fe73590@6c48a"
   }
 }

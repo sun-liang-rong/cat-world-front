@@ -136,7 +136,7 @@ export const ITEM_DEFINITIONS: ItemDefinition[] = [
     name: '锤子',
     description: '直接移除一个可收集元素。',
     price: 30,
-    iconPath: 'shop/item_hammer',
+    iconPath: 'shop/icon_hammer',
     purchasable: true,
   },
   {
@@ -152,7 +152,7 @@ export const ITEM_DEFINITIONS: ItemDefinition[] = [
     name: '增加槽位',
     description: '本局临时增加 1 个收集槽位。',
     price: 60,
-    iconPath: 'shop/item_extra_slot',
+    iconPath: 'shop/icon_extra_slot',
     purchasable: true,
   },
   {
@@ -160,7 +160,7 @@ export const ITEM_DEFINITIONS: ItemDefinition[] = [
     name: '手套',
     description: '交换两个槽位元素，或将一个元素放回棋盘。',
     price: 40,
-    iconPath: 'shop/item_glove',
+    iconPath: 'shop/icon_glove',
     purchasable: true,
   },
 ];

@@ -35,8 +35,8 @@ const { ccclass, property } = _decorator;
 const CHALLENGE_LEVEL_NUMBER = 100;
 const CHALLENGE_TARGET_DIFFICULTY = 100;
 const CHALLENGE_TRAY_SLOTS = 5;
-const CHALLENGE_COIN_REWARD = 2000;
-const CHALLENGE_REPEAT_COIN_REWARD = 50;
+const CHALLENGE_COIN_REWARD = 3000;
+const CHALLENGE_REPEAT_COIN_REWARD = 80;
 
 @ccclass('Main')
 export class Main extends Component {

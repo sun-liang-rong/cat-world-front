@@ -535,19 +535,15 @@ export class GameScreen {
     this.gameUI.addChild(this.trayFlightLayer);
     this.trayFlightLayer.setPosition(this.trayLayer.position);
 
-    // 宠物是棋盘上的悬浮助手，贴在右侧安全边缘，不再占用顶部目标栏的横向空间。
-    const savedPetPosition = this.options.getGamePetPosition();
-    this.catSkillDockSide = savedPetPosition.side === 'left' ? 'left' : 'right';
-    const petX = this.catSkillDockSide === 'left'
-      ? -visibleSize.width / 2 + 78
-      : visibleSize.width / 2 - 78;
-    const minPetY = -visibleSize.height / 2 + 88;
-    const maxPetY = belowWeChatCapsule(visibleSize.height / 2, 156);
-    const defaultPetY = Math.max(220, headerY - 300);
-    const petY = Math.max(
-      minPetY,
-      Math.min(maxPetY, Number.isFinite(savedPetPosition.y) ? savedPetPosition.y : defaultPetY),
-    );
+    // 宠物支持在整个屏幕范围内拖动
+    this.catSkillDockSide = 'left';
+    const savedPosition = this.options.getGamePetPosition();
+    const petX = savedPosition
+      ? savedPosition.x
+      : -visibleSize.width / 2 + 78;  // 默认：左上角
+    const petY = savedPosition
+      ? savedPosition.y
+      : visibleSize.height / 2 - 240;  // 默认：下移 120px
     this.buildCatSkillPanel(petX, petY);
     this.gameUI.active = false;
     this.created = true;
@@ -676,6 +672,7 @@ export class GameScreen {
   }
 
   private buildCatSkillPanel(x: number, y: number) {
+    const visibleSize = view.getVisibleSize();
     const panel = new Node('CatSkillPanel');
     this.gameUI.addChild(panel);
     panel.setPosition(x, y);
@@ -791,60 +788,49 @@ export class GameScreen {
       this.onCatSkillTap();
     });
 
+    // 宠物支持在整个屏幕范围内拖动
     panel.on(Node.EventType.TOUCH_START, (event: EventTouch) => {
-      const touchPosition = this.getCatSkillTouchPosition(event);
       this.catSkillDragActive = true;
       this.catSkillDragMoved = false;
-      this.catSkillDragOffset.set(
-        panel.position.x - touchPosition.x,
-        panel.position.y - touchPosition.y,
-        0,
-      );
+      this.catSkillDragOffset.set(panel.position);
+      event.propagationStopped = true;
     });
+
     panel.on(Node.EventType.TOUCH_MOVE, (event: EventTouch) => {
       if (!this.catSkillDragActive) return;
-      const touchPosition = this.getCatSkillTouchPosition(event);
-      const distanceX = touchPosition.x + this.catSkillDragOffset.x - panel.position.x;
-      const distanceY = touchPosition.y + this.catSkillDragOffset.y - panel.position.y;
-      if (!this.catSkillDragMoved && Math.hypot(distanceX, distanceY) < 8) return;
+      const delta = event.getUIDelta();
+      this.catSkillDragOffset.x += delta.x;
+      this.catSkillDragOffset.y += delta.y;
+      // 限制范围：x 轴 ±330（屏幕宽度 750 / 2 - 宠物半径 45），y 轴 ±580（屏幕高度 1334 / 2 - 宠物半径 34）
+      const clampedX = Math.max(-330, Math.min(330, this.catSkillDragOffset.x));
+      const clampedY = Math.max(-580, Math.min(580, this.catSkillDragOffset.y));
+      panel.setPosition(clampedX, clampedY);
       this.catSkillDragMoved = true;
-      const visibleSize = view.getVisibleSize();
-      const halfWidth = 78;
-      const nextX = touchPosition.x + this.catSkillDragOffset.x;
-      const nextY = touchPosition.y + this.catSkillDragOffset.y;
-      panel.setPosition(
-        Math.max(-visibleSize.width / 2 + halfWidth, Math.min(visibleSize.width / 2 - halfWidth, nextX)),
-        Math.max(-visibleSize.height / 2 + 88, Math.min(visibleSize.height / 2 - 118, nextY)),
-      );
-      const nextSide = panel.position.x < 0 ? 'left' : 'right';
-      if (nextSide !== this.catSkillDockSide) this.updateCatSkillBubbleSide(nextSide);
+      event.propagationStopped = true;
     });
-    const finishCatSkillDrag = () => {
-      if (!this.catSkillDragActive) return;
+
+    panel.on(Node.EventType.TOUCH_END, () => {
+      if (this.catSkillDragActive && this.catSkillDragMoved) {
+        // 吸附到左右边缘
+        const targetX = panel.position.x < 0 ? -330 : 330;
+        const targetY = panel.position.y;
+        tween(panel)
+          .to(0.2, { position: new Vec3(targetX, targetY, 0) }, { easing: 'cubicOut' })
+          .call(() => {
+            // 动画完成后保存位置
+            this.options.onGamePetPositionChanged({
+              x: Math.round(panel.position.x),
+              y: Math.round(panel.position.y),
+            });
+          })
+          .start();
+        // 根据吸边后的位置动态调整气泡显示在左侧还是右侧
+        const bubbleSide = targetX < 0 ? 'right' : 'left';
+        this.updateCatSkillBubbleSide(bubbleSide);
+      }
       this.catSkillDragActive = false;
-      if (!this.catSkillDragMoved) return;
-      this.catSkillSuppressClick = true;
-      const visibleSize = view.getVisibleSize();
-      const halfWidth = 78;
-      const rightX = visibleSize.width / 2 - halfWidth;
-      const leftX = -visibleSize.width / 2 + halfWidth;
-      const targetSide = panel.position.x < 0 ? 'left' : 'right';
-      const targetX = targetSide === 'left' ? leftX : rightX;
-      this.updateCatSkillBubbleSide(targetSide);
-      this.options.onGamePetPositionChanged({ side: targetSide, y: panel.position.y });
-      Tween.stopAllByTarget(panel);
-      tween(panel)
-        .to(0.18, { position: new Vec3(targetX, panel.position.y, 0) }, { easing: 'backOut' })
-        .start();
-      const resetTimer = setTimeout(() => {
-        this.timers.delete(resetTimer);
-        this.catSkillDragMoved = false;
-        this.catSkillSuppressClick = false;
-      }, 0);
-      this.timers.add(resetTimer);
-    };
-    panel.on(Node.EventType.TOUCH_END, finishCatSkillDrag);
-    panel.on(Node.EventType.TOUCH_CANCEL, finishCatSkillDrag);
+      this.catSkillDragMoved = false;
+    });
 
     this.catSkillPanel = {
       node: panel,
@@ -861,16 +847,10 @@ export class GameScreen {
       statusLabel,
       chargeFill,
     };
-    this.updateCatSkillBubbleSide('right');
+    // 宠物支持全屏拖动，气泡位置根据宠物 x 坐标动态调整
+    const initialBubbleSide = x < 0 ? 'right' : 'left';
+    this.updateCatSkillBubbleSide(initialBubbleSide);
     this.refreshCatSkillPanel();
-  }
-
-  private getCatSkillTouchPosition(event: EventTouch) {
-    const location = event.getUILocation();
-    const transform = this.gameUI.getComponent(UITransform);
-    return transform
-      ? transform.convertToNodeSpaceAR(new Vec3(location.x, location.y, 0))
-      : new Vec3(location.x, location.y, 0);
   }
 
   private updateCatSkillBubbleSide(side: 'left' | 'right') {
