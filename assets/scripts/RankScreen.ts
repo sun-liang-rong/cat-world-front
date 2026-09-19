@@ -38,6 +38,7 @@ export class RankScreen {
   private emptyState: Node | null = null;
   private mockCaption: Label | null = null;
   private selfRankLabel: Label | null = null;
+  private selfRankBadge: Node | null = null;
   private selfStarsLabel: Label | null = null;
   private selfCaptionLabel: Label | null = null;
   private selfNameLabel: Label | null = null;
@@ -93,6 +94,7 @@ export class RankScreen {
     this.emptyState = null;
     this.mockCaption = null;
     this.selfRankLabel = null;
+    this.selfRankBadge = null;
     this.selfStarsLabel = null;
     this.selfCaptionLabel = null;
     this.selfNameLabel = null;
@@ -221,6 +223,8 @@ export class RankScreen {
   private reloadList() {
     if (!this.listContent || !this.scrollView || !this.rankUI) return;
     const token = ++this.loadToken;
+    // 重进页面或切换页签时先回到顶部，避免拉取期间停留在上次的滚动位置
+    this.scrollView.scrollToTop(0, false);
     this.mockCaption!.string = '正在拉取排行榜...';
     this.mockCaption!.node.active = true;
     this.options.fetchEntries(this.currentTab).then(data => {
@@ -256,17 +260,10 @@ export class RankScreen {
     contentTransform.setContentSize(680, contentHeight);
     this.listContent.setPosition(0, viewHeight / 2);
 
-    let selfIndex = -1;
+    // 每次渲染都从头显示：自己的名次已由底部常驻卡片展示，列表定位到自己的行会挡住榜首
     data.entries.forEach((entry, index) => {
-      if (entry.isSelf) selfIndex = index;
       this.buildRow(data.tab, entry, index, -LIST_TOP_PAD - ROW_HEIGHT / 2 - index * ROW_STEP);
     });
-
-    if (selfIndex >= 0 && contentHeight > viewHeight) {
-      const rowCenter = LIST_TOP_PAD + selfIndex * ROW_STEP + ROW_HEIGHT / 2;
-      const percent = Math.min(1, Math.max(0, (rowCenter - viewHeight / 2) / (contentHeight - viewHeight)));
-      this.scrollView.scrollToPercentVertical(percent, 0, false);
-    }
     this.refreshSelfCard(data.tab, data.entries);
   }
 
@@ -277,12 +274,12 @@ export class RankScreen {
     row.addComponent(UITransform).setContentSize(ROW_WIDTH, ROW_HEIGHT);
     this.drawRowCard(row, entry.isSelf);
 
-    if (index < 3) {
-      const medalPath = index === 0 ? 'rank/medal_gold' : index === 1 ? 'rank/medal_silver' : 'rank/medal_bronze';
-      this.image(row, medalPath, RANK_MEDAL_X, 2, 96, 95);
+    const rank = entry.rank || index + 1;
+    if (rank <= 3) {
+      this.image(row, this.medalPathForRank(rank), RANK_MEDAL_X, 2, 96, 95);
     } else {
       this.image(row, 'rank/badge_wood', RANK_MEDAL_X, 2, 78, 79);
-      const rankText = this.label(row, `${entry.rank || index + 1}`, RANK_MEDAL_X, 2, 24, new Color(255, 248, 226));
+      const rankText = this.label(row, `${rank}`, RANK_MEDAL_X, 2, 24, new Color(255, 248, 226));
       rankText.isBold = true;
     }
 
@@ -367,7 +364,10 @@ export class RankScreen {
     this.selfCaptionLabel.overflow = Label.Overflow.CLAMP;
     this.selfCaptionLabel.node.getComponent(UITransform)!.setContentSize(330, 24);
 
-    this.image(panel, 'rank/badge_wood', -180, -46, 52, 52);
+    this.selfRankBadge = new Node('SelfRankBadge');
+    panel.addChild(this.selfRankBadge);
+    this.selfRankBadge.setPosition(-180, -46);
+    this.selfRankBadge.addComponent(UITransform).setContentSize(56, 56);
     this.selfRankLabel = this.label(panel, '', -96, -46, 20, new Color(112, 69, 40));
     this.selfRankLabel.isBold = true;
     this.selfRankLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
@@ -418,12 +418,14 @@ export class RankScreen {
     }
     if (!self) {
       this.selfRankLabel.string = '未上榜';
+      this.setSelfRankBadge(0);
       this.selfStarsLabel.string = tab === 'challenge' ? '--' : '0';
       this.selfCaptionLabel.string = this.emptyCaption(tab);
       return;
     }
     const rank = self.rank || entries.indexOf(self) + 1;
     this.selfRankLabel.string = `第${rank}名`;
+    this.setSelfRankBadge(rank);
     this.selfStarsLabel.string = self.scoreLabel;
     if (rank === 1) {
       this.selfCaptionLabel.string = '已是榜首，继续保持！';
@@ -431,6 +433,26 @@ export class RankScreen {
     }
     const ahead = entries[Math.max(0, entries.indexOf(self) - 1)];
     this.selfCaptionLabel.string = this.gapCaption(tab, ahead, self);
+  }
+
+  private medalPathForRank(rank: number) {
+    if (rank === 1) return 'rank/medal_gold';
+    if (rank === 2) return 'rank/medal_silver';
+    if (rank === 3) return 'rank/medal_bronze';
+    return 'rank/badge_wood';
+  }
+
+  private setSelfRankBadge(rank: number) {
+    if (!this.selfRankBadge?.isValid) return;
+    this.selfRankBadge.removeAllChildren();
+    const path = this.medalPathForRank(rank);
+    const size = rank >= 1 && rank <= 3 ? 56 : 52;
+    this.image(this.selfRankBadge, path, 0, 0, size, size);
+    // 前三名奖牌自带名次样式，第 4 名起才需要在木圈上标数字（同列表行 buildRow）
+    if (rank > 3) {
+      const rankText = this.label(this.selfRankBadge, `${rank}`, 0, 0, 20, new Color(255, 248, 226));
+      rankText.isBold = true;
+    }
   }
 
   private emptyCaption(tab: LeaderboardTab) {

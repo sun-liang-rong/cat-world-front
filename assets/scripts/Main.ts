@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, ResolutionPolicy, UITransform, view } from 'cc';
+import { _decorator, Camera, Color, Component, Node, ResolutionPolicy, UITransform, view } from 'cc';
 import { ActivityScreen } from './ActivityScreen';
 import { AssetStore } from './AssetStore';
 import { CatCollectionScreen } from './CatCollectionScreen';
@@ -7,7 +7,7 @@ import { DailyTaskScreen } from './DailyTaskScreen';
 import { GameScreen, buildGameScreenImagePaths } from './GameScreen';
 import { HomeScreen, buildHomeScreenImagePaths } from './HomeScreen';
 import { PlayerStore } from './PlayerStore';
-import { LEVELS_PER_THEME } from './TownContent';
+import { isCampaignComplete, LEVELS_PER_THEME, MAX_MAIN_LEVEL, themeIndexForLevel } from './TownContent';
 import { ShopScreen } from './ShopScreen';
 import { TownScreen } from './TownScreen';
 import { CatId, BuildingId } from './PlayerTypes';
@@ -26,17 +26,17 @@ import { LoadingOverlay } from './LoadingOverlay';
 const { ccclass, property } = _decorator;
 
 // 超萌挑战：首页入口的固定单关，对标"羊了个羊第二关"——
-// spike 压力原型把牌量压到普通关一半左右（约 45~55 张）配满额 15 种元素、6～7 层深堆，
-// 收集槽缩到 5 格（额外槽位道具可 +1）；fullTrayPressure 贴满压力规划：
-// 最优路径长期骑在 4/5 满槽边缘、无放松段，并按残酷度挑选候选；
-// 每日首次通关发大额金币，同日重复通关只发普通过关金币；
+// 固定 69 张 / 15 种 / 8 层深堆，收集槽缩到 5 格（额外槽位道具可 +1）；
+// fullTrayPressure 贴满压力规划：最优路径长期骑在 4/5 满槽边缘、无放松段，
+// 同种牌按层距打散，并按残酷度挑选候选；
+// 每日首次通关发大额金币，同日重复通关只发少量金币；
 // 不发星星、不写入难度自适应（避免挑战连败触发普通关的救援难度）；
 // 每次进关换新种子，只保持高压配置，避免记住卡牌位置。
-const CHALLENGE_LEVEL_NUMBER = 100;
+const CHALLENGE_GENERATOR_LEVEL = 100;
 const CHALLENGE_TARGET_DIFFICULTY = 100;
 const CHALLENGE_TRAY_SLOTS = 5;
-const CHALLENGE_COIN_REWARD = 2000;
-const CHALLENGE_REPEAT_COIN_REWARD = 50;
+const CHALLENGE_COIN_REWARD = 3000;
+const CHALLENGE_REPEAT_COIN_REWARD = 80;
 
 @ccclass('Main')
 export class Main extends Component {
@@ -105,6 +105,10 @@ export class Main extends Component {
     this.node.addChild(this.root);
     const rootSize = view.getVisibleSize();
     this.root.addComponent(UITransform).setContentSize(rootSize.width, rootSize.height);
+    // 相机清屏色对齐启动屏奶油底色：HTML 启动屏撤掉后、加载页画出前的任何一帧
+    // 都显示品牌暖色，弱网下不会闪黑屏（默认清屏色是黑色）。
+    const camera = this.node.getChildByName('Camera')?.getComponent(Camera);
+    if (camera) camera.clearColor = new Color(255, 247, 216, 255);
     this.audio = new AudioManager(this.node);
     // 音频延迟加载，不阻塞首屏
     // this.audio.load();
@@ -166,17 +170,19 @@ export class Main extends Component {
       // 首页章节横幅：关卡号与主题内通关数实时取主线进度（每通一关都会变化），
       // 主题名按关卡所在冒险主题（每 20 关一章）；回首页 setActive 时统一刷新
       getChapterInfo: () => {
-        const level = this.playerStore.getLevel();
-        const index = Math.min(THEME_INFO.length - 1, Math.floor((level - 1) / LEVELS_PER_THEME));
-        const clearedInTheme = Math.max(
-          0,
-          Math.min(LEVELS_PER_THEME, level - 1 - index * LEVELS_PER_THEME),
-        );
+        const rawLevel = this.playerStore.getLevel();
+        const complete = isCampaignComplete(rawLevel);
+        const index = themeIndexForLevel(rawLevel, THEME_INFO.length);
+        const displayLevel = complete ? MAX_MAIN_LEVEL : rawLevel;
+        const clearedInTheme = complete
+          ? LEVELS_PER_THEME
+          : Math.max(0, Math.min(LEVELS_PER_THEME, displayLevel - 1 - index * LEVELS_PER_THEME));
         return {
-          level,
+          level: displayLevel,
           name: THEME_INFO[index].name,
           clearedInTheme,
           levelsPerTheme: LEVELS_PER_THEME,
+          campaignComplete: complete,
         };
       },
     });
@@ -419,6 +425,7 @@ export class Main extends Component {
   // 延迟准备当前关卡
   private prepareCurrentLevel() {
     if (this.currentLevelDefinition || this.preparingLevel) return;
+    if (isCampaignComplete(this.playerStore.getLevel())) return;
 
     this.preparingLevel = true;
     const level = this.playerStore.getLevel();
@@ -549,6 +556,10 @@ export class Main extends Component {
 
   private startGame() {
     if (this.startingGame) return;
+    if (isCampaignComplete(this.playerStore.getLevel())) {
+      Toast.show(this.root, '新主题即将到来');
+      return;
+    }
     this.startingGame = true;
     this.hideExtraPages();
     const level = this.playerStore.getLevel();
@@ -655,6 +666,8 @@ export class Main extends Component {
       // 第 1 关对局内新手教学：仅主线第 1 关且未完成时开启（挑战/无尽不传不触发）
       tutorialEnabled: this.playerStore.getLevel() === 1 && !this.playerStore.isBoardTutorialDone(),
       onTutorialDone: () => this.playerStore.markBoardTutorialDone(),
+      shouldShowCollectGoalHint: () => !this.playerStore.isCollectGoalHintDone(),
+      onCollectGoalHintShown: () => this.playerStore.markCollectGoalHintDone(),
       getBuildTargetInfo: () => this.playerStore.getNextBuildableInfo(),
       onGoBuild: () => this.goBuildFromGame(),
       onWatchAd: this.buildWatchAdHandler(),
@@ -722,7 +735,7 @@ export class Main extends Component {
 
   private challengeGenerationOptions(seed: number) {
     return {
-      level: CHALLENGE_LEVEL_NUMBER,
+      level: CHALLENGE_GENERATOR_LEVEL,
       seed,
       targetDifficulty: CHALLENGE_TARGET_DIFFICULTY,
       role: 'spike' as const,
@@ -781,7 +794,7 @@ export class Main extends Component {
       ? CHALLENGE_REPEAT_COIN_REWARD
       : CHALLENGE_COIN_REWARD;
     this.gameScreen = new GameScreen(this.root, this.assets, {
-      level: CHALLENGE_LEVEL_NUMBER,
+      level: CHALLENGE_GENERATOR_LEVEL,
       // 超萌挑战不属于任何主题，强制使用通用元素皮肤
       theme: -1,
       levelDefinition: this.challengeLevelDefinition || undefined,
@@ -1352,6 +1365,11 @@ export class Main extends Component {
 
   private nextLevel() {
     if (this.startingGame) return;
+    if (isCampaignComplete(this.playerStore.getLevel())) {
+      this.returnHomeFromGame();
+      Toast.show(this.root, '新主题即将到来');
+      return;
+    }
     this.startingGame = true;
     this.pauseChallengePreparation();
     const level = this.playerStore.getLevel();
@@ -1378,7 +1396,9 @@ export class Main extends Component {
     const clearedLevel = this.playerStore.getLevel();
     this.playerStore.setLevel(clearedLevel + 1);
     this.submitLevelRank();
-    this.prepareNextMainLevel(this.playerStore.getLevel());
+    if (!isCampaignComplete(this.playerStore.getLevel())) {
+      this.prepareNextMainLevel(this.playerStore.getLevel());
+    }
   }
 
   private prepareNextMainLevel(
@@ -1386,6 +1406,10 @@ export class Main extends Component {
     onReady?: (definition: LevelDefinition) => void,
     showFailureToast = false,
   ) {
+    if (isCampaignComplete(level)) {
+      this.nextLevelDefinition = null;
+      return;
+    }
     if (this.nextLevelPreparing) {
       if (onReady) this.nextLevelReadyWaiters.push(onReady);
       return;

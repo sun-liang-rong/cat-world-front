@@ -59,6 +59,9 @@ export interface SettlementPopupOptions {
   freeRevive?: boolean;
   /** 失败时槽内是否已有听牌对子，用于「就差一对」文案。 */
   hadTrayPair?: boolean;
+  /** 覆盖失败信息卡标题 / 正文（收集关目标不足等） */
+  failTitle?: string;
+  failMessage?: string;
   /** 激励视频完成后补发与基础通关奖励相同数量的金币。 */
   onDoubleReward?: () => void;
   onWatchAd?: () => Promise<RewardedAdResult>;
@@ -490,13 +493,15 @@ export class SettlementPopup extends Component {
     this.image(node, 'Toolbox', this.frames.toolbox, -CARD_WIDTH / 2 + 24 + iconSize / 2, 0, iconSize, iconSize);
 
     const textLeft = -CARD_WIDTH / 2 + 24 + iconSize + 22;
-    const titleText = this.options.hadTrayPair ? '就差一对' : '收集槽位已满';
+    const titleText = this.options.failTitle
+      || (this.options.hadTrayPair ? '就差一对' : '收集槽位已满');
     const titleWidth = this.textWidth(titleText, 30);
     const title = this.label(node, titleText, textLeft + titleWidth / 2, 20, 30, new Color(233, 64, 57));
     title.isBold = true;
-    const messageText = this.options.hadTrayPair
-      ? '看广告清出这对，下一手就能消'
-      : '再挑战一次，完成本关目标吧!';
+    const messageText = this.options.failMessage
+      || (this.options.hadTrayPair
+        ? '看广告清出这对，下一手就能消'
+        : '再挑战一次，完成本关目标吧!');
     const messageWidth = this.textWidth(messageText, 22);
     const message = this.label(node, messageText, textLeft + messageWidth / 2, -20, 22, new Color(121, 83, 59));
     message.isBold = true;

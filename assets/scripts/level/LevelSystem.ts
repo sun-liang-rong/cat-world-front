@@ -89,6 +89,7 @@ export class LevelSystem {
       role: plan.role,
       recentFingerprints: this.recentLevels.map(item => item.fingerprint),
       recentArchetypes: this.recentLevels.map(item => item.archetype),
+      preserveGoal: level.goal,
     }).then(generated => {
       if (plan.freeRevive) generated.freeRevive = true;
       return generated;

@@ -384,6 +384,16 @@ export class PlayerStore {
     this.save();
   }
 
+  isCollectGoalHintDone() {
+    return this.state.collectGoalHintDone;
+  }
+
+  markCollectGoalHintDone() {
+    if (this.state.collectGoalHintDone) return;
+    this.state.collectGoalHintDone = true;
+    this.save();
+  }
+
   getRecentRuns(): PlayerRun[] {
     return this.clone(this.state.recentRuns);
   }
@@ -766,7 +776,7 @@ export class PlayerStore {
 
   setLevel(level: number) {
     this.state.level = Math.max(1, Math.floor(Number.isFinite(level) ? level : this.state.level));
-    // 闯到新主题会解锁对应建筑
+    // 闯到主题 1–5 会解锁对应建筑；主题 6+ 不再对应新建筑
     this.applyBuildingUnlocks();
     this.save();
   }
@@ -887,6 +897,7 @@ export class PlayerStore {
       endless: this.createEndlessProgress(),
       firstTownGuideDone: false,
       boardTutorialDone: false,
+      collectGoalHintDone: false,
     };
   }
 
@@ -976,8 +987,8 @@ export class PlayerStore {
     return buildings;
   }
 
-  // 建筑随主题解锁：第 N 栋建筑在玩家闯到第 N 个主题（level >= 20*(N-1)+1）后开放，
-  // 主题产出的星星正好够建满对应建筑
+  // 建筑随主题解锁：第 N 栋建筑在玩家闯到第 N 个主题（level >= 20*(N-1)+1）后开放。
+  // 只遍历现有 5 栋，主题 6+ 不会越界解锁不存在的建筑。
   private applyBuildingUnlocks() {
     BUILDING_DEFINITIONS.forEach((definition, index) => {
       if (definition.id === 'cat_house') return;
@@ -1164,6 +1175,7 @@ export class PlayerStore {
     }
     state.firstTownGuideDone = value.firstTownGuideDone === true;
     state.boardTutorialDone = value.boardTutorialDone === true;
+    state.collectGoalHintDone = value.collectGoalHintDone === true;
     return state;
   }
 

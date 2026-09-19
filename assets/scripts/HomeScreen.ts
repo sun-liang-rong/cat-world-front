@@ -73,6 +73,8 @@ export interface HomeChapterInfo {
   name: string;
   clearedInTheme: number;
   levelsPerTheme: number;
+  /** 主线 160 关全部打完，横幅改显示已通关 */
+  campaignComplete?: boolean;
 }
 
 export interface HomeScreenOptions {
@@ -957,7 +959,9 @@ export class HomeScreen {
   private refreshChapterBanner() {
     const info = this.options.getChapterInfo();
     if (this.homeChapterTitleLabel) {
-      this.homeChapterTitleLabel.string = `第 ${info.level} 关 · ${info.name}`;
+      this.homeChapterTitleLabel.string = info.campaignComplete
+        ? `${info.name} · 已通关`
+        : `第 ${info.level} 关 · ${info.name}`;
     }
   }
 

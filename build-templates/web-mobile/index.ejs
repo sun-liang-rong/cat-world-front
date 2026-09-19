@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+
+  <title>Cocos Creator | <%= projectName %></title>
+
+  <!--http://www.html5rocks.com/en/mobile/mobifying/-->
+  <meta name="viewport"
+        content="width=device-width,user-scalable=no,initial-scale=1,minimum-scale=1,maximum-scale=1,minimal-ui=true"/>
+
+  <!--https://developer.apple.com/library/safari/documentation/AppleApplications/Reference/SafariHTMLRef/Articles/MetaTags.html-->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="theme-color" content="#FFF7D8">
+
+  <!-- force webkit on 360 -->
+  <meta name="renderer" content="webkit"/>
+  <meta name="force-rendering" content="webkit"/>
+  <!-- force edge on IE -->
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1"/>
+  <meta name="msapplication-tap-highlight" content="no">
+
+  <!-- force full screen on some browser -->
+  <meta name="full-screen" content="yes"/>
+  <meta name="x5-fullscreen" content="true"/>
+  <meta name="360-fullscreen" content="true"/>
+
+  <!--fix fireball/issues/3568 -->
+  <!--<meta name="browsermode" content="application">-->
+  <meta name="x5-page-mode" content="app">
+
+  <!--<link rel="apple-touch-icon" href=".png" />-->
+  <!--<link rel="apple-touch-icon-precomposed" href=".png" />-->
+
+  <link rel="stylesheet" type="text/css" href="<%= cssUrl %>"/>
+  <style>
+    /* 内联首屏底色：CSS 文件未到之前也不能露出黑屏 */
+    html, body {
+      background: #FFF7D8 !important;
+    }
+    #boot-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(180deg, #FCC996 0%, #FFF7D8 72%);
+      color: #6F3E1C;
+      font-family: "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+      pointer-events: none;
+      transition: opacity 0.45s ease;
+      overflow: hidden;
+    }
+    #boot-splash.boot-splash--hide {
+      opacity: 0;
+    }
+    #boot-splash img {
+      display: block;
+      -webkit-user-drag: none;
+      user-select: none;
+    }
+    /* 背景云：慢速飘 */
+    .boot-cloud {
+      position: absolute;
+      width: 150px;
+      opacity: 0.75;
+      animation: boot-drift 9s ease-in-out infinite alternate;
+    }
+    .boot-cloud.c1 { left: -30px; top: 12%; animation-duration: 11s; }
+    .boot-cloud.c2 { right: -46px; top: 21%; width: 118px; animation-duration: 9s; animation-delay: 1.2s; }
+    .boot-cloud.c3 { left: 12%; top: 34%; width: 86px; opacity: 0.55; animation-duration: 13s; animation-delay: 2s; }
+    /* 底部草地丘 */
+    .boot-ground {
+      position: absolute;
+      left: 50%;
+      bottom: -12vh;
+      width: 150vw;
+      height: 34vh;
+      margin-left: -75vw;
+      border-radius: 50% 50% 0 0;
+      background: #FBEACB;
+      opacity: 0.85;
+    }
+    /* 丝带标题 */
+    .boot-ribbon {
+      position: relative;
+      width: 356px;
+      margin-bottom: 3vh;
+      animation: boot-drop 0.55s cubic-bezier(0.34, 1.4, 0.64, 1) 0.1s both;
+    }
+    .boot-ribbon img { width: 100%; }
+    /* 标题逐字沿铭牌中线排成弧形：弧参数与游戏内加载页同一拟合圆，
+       圆心在铭牌中线下方、半径 687（按 620→356 缩放为 394px） */
+    .boot-ribbon .boot-ribbon-text {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      font-size: 25px;
+      font-weight: 800;
+      color: #FFF6E0;
+      text-shadow: 0 2px 0 rgba(90, 61, 38, 0.55);
+    }
+    .boot-ribbon-text span {
+      position: absolute;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    /* 主角：抱毛线球的小猫 */
+    .boot-cat-wrap {
+      position: relative;
+      width: 264px;
+      max-width: 62vw;
+      animation: boot-pop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both, boot-bob 2.4s ease-in-out 0.6s infinite alternate;
+    }
+    .boot-cat-wrap img { width: 100%; opacity: 0; transition: opacity 0.3s ease; }
+    .boot-cat-wrap img.boot-img-ok { opacity: 1; }
+    .boot-cat-shadow {
+      position: absolute;
+      left: 50%;
+      bottom: -14px;
+      width: 72%;
+      height: 26px;
+      margin-left: -36%;
+      border-radius: 50%;
+      background: radial-gradient(ellipse at center, rgba(92, 54, 22, 0.22) 0%, rgba(92, 54, 22, 0) 68%);
+      animation: boot-shadow 2.4s ease-in-out 0.6s infinite alternate;
+    }
+    /* 进度条：毛线球沿轨道滚到进度条头部 */
+    .boot-bar-wrap {
+      position: relative;
+      margin-top: 5vh;
+      width: 316px;
+      max-width: 78vw;
+      animation: boot-rise 0.5s cubic-bezier(0.25, 1.2, 0.5, 1) 0.3s both;
+    }
+    .boot-bar {
+      height: 24px;
+      border-radius: 12px;
+      background: #FFF8E2;
+      border: 3px solid #EBCD9E;
+      box-shadow: inset 0 2px 0 rgba(92, 54, 22, 0.08), 0 3px 0 rgba(92, 54, 22, 0.1);
+      overflow: hidden;
+    }
+    .boot-bar-fill {
+      height: 100%;
+      width: 4%;
+      border-radius: 9px;
+      background: linear-gradient(90deg, #FFD968, #FFB347);
+      box-shadow: inset 0 -3px 0 rgba(92, 54, 22, 0.12);
+      transition: width 0.25s ease;
+      animation: boot-fill 18s ease-out forwards;
+    }
+    .boot-yarn {
+      position: absolute;
+      top: -17px;
+      left: 2%;
+      width: 40px;
+      margin-left: -20px;
+      animation: boot-yarn-run 18s ease-out forwards;
+      filter: drop-shadow(0 3px 2px rgba(92, 54, 22, 0.25));
+    }
+    .boot-yarn img {
+      width: 100%;
+      animation: boot-spin 1.1s linear infinite;
+    }
+    /* 提示语轮播 */
+    .boot-hints {
+      position: relative;
+      margin-top: 16px;
+      width: 340px;
+      max-width: 84vw;
+      height: 22px;
+      text-align: center;
+      font-size: 15px;
+      color: #8A5A32;
+      animation: boot-rise 0.5s cubic-bezier(0.25, 1.2, 0.5, 1) 0.42s both;
+    }
+    .boot-hints span {
+      position: absolute;
+      left: 0;
+      right: 0;
+      opacity: 0;
+      animation: boot-hint 9s ease-in-out infinite;
+    }
+    .boot-hints span:nth-child(2) { animation-delay: 3s; }
+    .boot-hints span:nth-child(3) { animation-delay: 6s; }
+    @keyframes boot-drift {
+      from { transform: translateX(0); }
+      to { transform: translateX(56px); }
+    }
+    @keyframes boot-drop {
+      from { opacity: 0; transform: translateY(-22px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes boot-pop {
+      from { opacity: 0; transform: scale(0.55); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    @keyframes boot-bob {
+      from { transform: translateY(0); }
+      to { transform: translateY(-9px); }
+    }
+    @keyframes boot-shadow {
+      from { transform: scaleX(1); opacity: 1; }
+      to { transform: scaleX(0.9); opacity: 0.75; }
+    }
+    @keyframes boot-rise {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes boot-yarn-run {
+      0% { left: 2%; }
+      10% { left: 24%; }
+      28% { left: 42%; }
+      55% { left: 64%; }
+      80% { left: 82%; }
+      100% { left: 96%; }
+    }
+    @keyframes boot-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    @keyframes boot-fill {
+      0% { width: 4%; }
+      10% { width: 26%; }
+      28% { width: 44%; }
+      55% { width: 66%; }
+      80% { width: 84%; }
+      100% { width: 90%; }
+    }
+    @keyframes boot-hint {
+      0% { opacity: 0; }
+      5% { opacity: 0.95; }
+      28% { opacity: 0.95; }
+      33% { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    /* 减弱动态效果：停掉装饰性动画，但保留一个静止的完整观感（进度 50%），避免像卡住 */
+    @media (prefers-reduced-motion: reduce) {
+      #boot-splash .boot-ribbon,
+      #boot-splash .boot-cat-wrap,
+      #boot-splash .boot-cat-shadow,
+      #boot-splash .boot-cloud,
+      #boot-splash .boot-bar-wrap,
+      #boot-splash .boot-hints span,
+      #boot-splash .boot-yarn,
+      #boot-splash .boot-yarn img {
+        animation: none !important;
+      }
+      #boot-splash .boot-bar-fill {
+        animation: none !important;
+        width: 50% !important;
+      }
+      #boot-splash .boot-yarn {
+        left: 46% !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="boot-splash" aria-live="polite">
+    <img class="boot-cloud c1" src="boot-cloud.png" alt="" onerror="this.style.display='none'"/>
+    <img class="boot-cloud c2" src="boot-cloud.png" alt="" onerror="this.style.display='none'"/>
+    <img class="boot-cloud c3" src="boot-cloud.png" alt="" onerror="this.style.display='none'"/>
+    <div class="boot-ground"></div>
+
+    <!-- 丝带标题：与游戏内加载页同一块横幅素材 -->
+    <div class="boot-ribbon">
+      <img src="boot-ribbon.png" alt="" onerror="this.style.display='none'"/>
+      <div class="boot-ribbon-text" id="bootTitle"></div>
+    </div>
+
+    <!-- 主角：游戏美术的小猫，呼吸浮动 -->
+    <div class="boot-cat-wrap">
+      <img src="boot-cat.png" alt="" onload="this.classList.add('boot-img-ok')" onerror="this.style.display='none'"/>
+      <div class="boot-cat-shadow"></div>
+    </div>
+
+    <!-- 进度条：毛线球在轨道上滚，滚到哪进度到哪 -->
+    <div class="boot-bar-wrap">
+      <div class="boot-bar"><div class="boot-bar-fill"></div></div>
+      <div class="boot-yarn"><img src="boot-yarn.png" alt="" onerror="this.style.display='none'"/></div>
+    </div>
+
+    <div class="boot-hints">
+      <span>正在唤醒小猫咪…</span>
+      <span>毛线球滚啊滚，滚进了小镇…</span>
+      <span>猫爪星球的居民们排队洗爪中…</span>
+    </div>
+  </div>
+  <div id="GameDiv" cc_exact_fit_screen="true">
+      <div id="Cocos3dGameContainer">
+        <canvas id="GameCanvas" oncontextmenu="event.preventDefault()" tabindex="99"></canvas>
+      </div>
+    </div>
+  <script>
+    (function () {
+      var splash = document.getElementById('boot-splash');
+      var hiding = false;
+      window.__catWorldHideBootSplash = function () {
+        if (hiding) return;
+        hiding = true;
+        if (!splash) return;
+        // 收尾：毛线球滚到终点、进度条补满，再整体淡出；元素多挂 1.2s 再移除，
+        // 覆盖游戏首帧渲染的空档，避免撤屏瞬间闪到黑色画布。
+        var fill = splash.querySelector('.boot-bar-fill');
+        if (fill) {
+          fill.style.animation = 'none';
+          fill.style.width = '100%';
+        }
+        var yarn = splash.querySelector('.boot-yarn');
+        if (yarn) {
+          yarn.style.animation = 'none';
+          yarn.style.left = '96%';
+        }
+        splash.classList.add('boot-splash--hide');
+        setTimeout(function () {
+          if (splash && splash.parentNode) splash.parentNode.removeChild(splash);
+        }, 1200);
+      };
+      // 弧形标题：与游戏内加载页同一拟合圆（620×220 节点上圆心 (0,-662)、半径 687），
+      // 按 575→356 显示比换算为 R=394、圆心在丝带中心下方 380px；字距=字号沿弧排布。
+      (function () {
+        var el = document.getElementById('bootTitle');
+        if (!el) return;
+        var TEXT = '猫爪星球奇遇记';
+        var R = 394, CY = 380, FS = 25, CX = 1.5;
+        var html = '';
+        for (var i = 0; i < TEXT.length; i++) {
+          var phi = (i - (TEXT.length - 1) / 2) * FS / R;
+          var x = (CX + R * Math.sin(phi)).toFixed(1);
+          var y = (CY - R * Math.cos(phi)).toFixed(1);
+          var deg = (phi * 180 / Math.PI).toFixed(1);
+          html += '<span style="transform:translate(-50%,-50%) translate(' + x + 'px,' + y + 'px) rotate(' + deg + 'deg)">' + TEXT.charAt(i) + '</span>';
+        }
+        el.innerHTML = html;
+      })();
+      // 游戏内加载页未回调时（旧包 / 启动失败）最多盖 12 秒，避免一直挡住画面；
+      // 兜底走同一个淡出函数，不会闪断。
+      setTimeout(function () {
+        if (typeof window.__catWorldHideBootSplash === 'function') {
+          window.__catWorldHideBootSplash();
+        }
+      }, 12000);
+    })();
+  </script>
+  <%- include(cocosTemplate, {}) %>
+</body>
+</html>

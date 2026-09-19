@@ -88,6 +88,14 @@ export interface LevelScore {
   rhythm: number;
 }
 
+/**
+ * 主线关卡胜利条件。缺省 / 旧档视为清空棋盘。
+ * collect_kind：三消指定种类达到 count 即过关，不必清空；count 必须是 3 的倍数。
+ */
+export type LevelGoal =
+  | { type: 'clear_board' }
+  | { type: 'collect_kind'; kind: number; count: number };
+
 export interface LevelDefinition {
   version: 1;
   level: number;
@@ -109,6 +117,8 @@ export interface LevelDefinition {
   plan: LevelPlan;
   score: LevelScore;
   fingerprint: string;
+  /** 缺省为清空棋盘；仅主线收集关写入 collect_kind */
+  goal?: LevelGoal;
 }
 
 export interface SolverOptions {

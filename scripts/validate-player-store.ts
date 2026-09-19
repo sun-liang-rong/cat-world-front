@@ -1,5 +1,7 @@
 import { sys } from 'cc';
 import { PlayerStore } from '../assets/scripts/PlayerStore';
+import { BUILDING_DEFINITIONS, isCampaignComplete, MAX_MAIN_LEVEL, themeIndexForLevel } from '../assets/scripts/TownContent';
+import { LevelGenerator } from '../assets/scripts/level/LevelGenerator';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`[PlayerStore] ${message}`);
@@ -225,10 +227,56 @@ function testBoardTutorialFlag() {
   assert(!legacy.isBoardTutorialDone(), 'legacy saves should default the flag to false');
 }
 
+function testLateThemesDoNotAddBuildings() {
+  const store = new PlayerStore('player-store-late-theme');
+  store.load();
+  store.setLevel(101);
+  const views = store.getBuildingViews();
+  assert(views.length === 5, 'late themes must not add town buildings');
+  assert(views.every(building => building.unlocked), 'reaching theme 6 should still unlock all five existing buildings');
+  assert(store.getNextBuildableInfo()?.buildingId === 'cat_house', 'unbuilt house remains the next target after theme 6');
+  store.setLevel(MAX_MAIN_LEVEL + 1);
+  assert(isCampaignComplete(store.getLevel()), 'level 161 should mark the campaign complete');
+  assert(themeIndexForLevel(101) === 5, 'level 101 belongs to theme 6');
+  assert(themeIndexForLevel(MAX_MAIN_LEVEL + 1) === 7, 'finished campaign stays on the last theme');
+  assert(BUILDING_DEFINITIONS.length === 5, 'building table stays at five entries');
+}
+
+function testCollectGoalSchedule() {
+  const scheduled = LevelGenerator.COLLECT_GOAL_LEVELS;
+  [11, 51, 111, 158].forEach(level => {
+    assert(scheduled.indexOf(level) >= 0, `level ${level} should be on the collect schedule`);
+    assert(LevelGenerator.wantsCollectGoal(level, 'normal', false, false), `level ${level} should request a collect goal`);
+  });
+  assert(!LevelGenerator.wantsCollectGoal(110, 'breather', false, false), 'breather levels must not request collect goals');
+  assert(!LevelGenerator.wantsCollectGoal(111, 'normal', true, false), 'challenge boards must not request collect goals');
+  assert(!LevelGenerator.wantsCollectGoal(23, 'normal', false, false), 'theme 2 keeps the original 21/24/28 schedule');
+}
+
+function testCollectGoalHintFlag() {
+  const store = new PlayerStore('player-store-collect-hint');
+  store.load();
+  assert(!store.isCollectGoalHintDone(), 'collect goal hint should be pending for new saves');
+  store.markCollectGoalHintDone();
+  store.markCollectGoalHintDone();
+  assert(store.isCollectGoalHintDone(), 'collect goal hint marker should be idempotent');
+  const reloaded = new PlayerStore('player-store-collect-hint');
+  reloaded.load();
+  assert(reloaded.isCollectGoalHintDone(), 'collect goal hint flag should survive reload');
+  const legacyKey = 'player-store-collect-hint-legacy';
+  sys.localStorage.setItem(legacyKey, JSON.stringify({ version: 2, level: 11 }));
+  const legacy = new PlayerStore(legacyKey);
+  legacy.load();
+  assert(!legacy.isCollectGoalHintDone(), 'legacy saves should default the collect hint flag to false');
+}
+
 testDefaultsAndRewards();
 testBuildingAndCatUnlock();
 testBuildTargetsAndGuideFlag();
 testBoardTutorialFlag();
+testCollectGoalHintFlag();
+testLateThemesDoNotAddBuildings();
+testCollectGoalSchedule();
 testShopLimits();
 testDailyTasksAndChest();
 testCatInteractionsAndChallengeReward();
@@ -236,4 +284,4 @@ testEndlessProgress();
 testAdFunnelAndRunFields();
 testSaveNormalization();
 testLegacyBuildingSave();
-process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, shop, daily tasks, cats, challenge marker, endless, ad funnel, normalization, legacy building save.\n');
+  process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, collect hint, late themes, collect schedule, shop, daily tasks, cats, challenge marker, endless, ad funnel, normalization, legacy building save.\n');

@@ -1,6 +1,6 @@
 import { Button, Color, EventMouse, EventTouch, Graphics, Label, Mask, Node, Sprite, tween, Tween, UITransform, Vec3, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
-import { LEVELS_PER_THEME } from './TownContent';
+import { isCampaignComplete, LEVELS_PER_THEME, MAIN_THEME_COUNT, themeIndexForLevel } from './TownContent';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
 
@@ -43,11 +43,17 @@ export const THEME_INFO: ThemeInfo[] = [
   { name: '星光海湾', tagline: '海风轻拂，星空下继续前进！', icon: 'adventure/adventure_theme_icon_3' },
   { name: '云朵山径', tagline: '云端小路，向着高峰出发！', icon: 'adventure/adventure_theme_icon_4' },
   { name: '莓果森林', tagline: '莓果飘香，终点宝藏就在眼前！', icon: 'adventure/adventure_theme_icon_5' },
+  { name: '暖冬灯市', tagline: '灯火暖暖，冬夜里的猫市开张啦！', icon: 'adventure/adventure_theme_icon_6' },
+  { name: '月光竹庭', tagline: '竹影摇月，庭院里全是呼噜声～', icon: 'adventure/adventure_theme_icon_7' },
+  { name: '星砂雪原', tagline: '雪粒像星星，最北的家园就在前方！', icon: 'adventure/adventure_theme_icon_8' },
 ];
 const THEME_LOCK_ICON = 'adventure/adventure_theme_lock';
 const THEME_CHECK_ICON = 'adventure/adventure_theme_check';
 const THEME_LOCKED_TINT = new Color(172, 172, 172, 255);
 const THEME_COUNT = THEME_INFO.length;
+if (THEME_COUNT !== MAIN_THEME_COUNT) {
+  console.error('[CatWorld] THEME_INFO length must match MAIN_THEME_COUNT');
+}
 // 底部主题栏：芯片宽度/相邻间距、可视宽度、内容总宽与滑动范围（设计稿像素）。
 // 内容左对齐放进裁剪区，可滑动范围 = 总宽 - 可视宽；选中主题的锚点保证该芯片完整出现在可视区内
 const THEME_CHIP_W = 188;
@@ -137,6 +143,9 @@ export class AdventureScreen {
       'adventure/adventure_theme_icon_3',
       'adventure/adventure_theme_icon_4',
       'adventure/adventure_theme_icon_5',
+      'adventure/adventure_theme_icon_6',
+      'adventure/adventure_theme_icon_7',
+      'adventure/adventure_theme_icon_8',
       'adventure/adventure_theme_lock',
       'adventure/adventure_theme_check',
       COMMON_UI_ASSETS.coinIcon,
@@ -398,12 +407,15 @@ export class AdventureScreen {
     this.buildMapDecoration();
 
     const playerLevel = Math.max(1, Math.floor(this.options.getLevel()));
+    const campaignComplete = isCampaignComplete(playerLevel);
     const themeStart = Math.max(0, this.selectedTheme) * LEVELS_PER_THEME + 1;
     const count = Math.min(MAP_WINDOW, LEVELS_PER_THEME - this.windowStart);
     for (let slot = 0; slot < count; slot += 1) {
       const index = this.windowStart + slot;
       const level = themeStart + index;
-      const state: LevelState = level < playerLevel ? 'completed' : level === playerLevel ? 'current' : 'locked';
+      const state: LevelState = campaignComplete || level < playerLevel
+        ? 'completed'
+        : level === playerLevel ? 'current' : 'locked';
       this.buildLevelNode(level, state, MAP_SLOTS[slot][0], MAP_SLOTS[slot][1], animated ? slot : -1);
     }
   }
@@ -463,7 +475,10 @@ export class AdventureScreen {
       if (state === 'current') {
         this.options.onStartGame();
       } else if (state === 'completed') {
-        this.toast(`第 ${level} 关已通关，当前挑战是第 ${this.options.getLevel()} 关`);
+        const current = Math.max(1, Math.floor(this.options.getLevel()));
+        this.toast(isCampaignComplete(current)
+          ? `第 ${level} 关已通关，主线冒险已全部完成`
+          : `第 ${level} 关已通关，当前挑战是第 ${current} 关`);
       } else {
         this.toast(`完成第 ${level - 1} 关后解锁`);
         tween(node)
@@ -663,10 +678,13 @@ export class AdventureScreen {
     if (!this.themeContent) return;
     this.themeContent.destroyAllChildren();
     const level = Math.max(1, Math.floor(this.options.getLevel()));
-    const currentTheme = Math.min(THEME_COUNT - 1, Math.floor((level - 1) / LEVELS_PER_THEME));
+    const currentTheme = themeIndexForLevel(level, THEME_COUNT);
+    const campaignComplete = isCampaignComplete(level);
     THEME_INFO.forEach((info, index) => {
       const unlocked = index <= currentTheme;
-      const cleared = Math.max(0, Math.min(LEVELS_PER_THEME, level - 1 - index * LEVELS_PER_THEME));
+      const cleared = campaignComplete || index < currentTheme
+        ? LEVELS_PER_THEME
+        : Math.max(0, Math.min(LEVELS_PER_THEME, level - 1 - index * LEVELS_PER_THEME));
       const clearedAll = cleared >= LEVELS_PER_THEME;
       const selected = index === this.selectedTheme;
       const chip = new Node(`AdventureThemeChip_${index}`);
@@ -732,11 +750,12 @@ export class AdventureScreen {
 
   private refresh() {
     const level = Math.max(1, Math.floor(this.options.getLevel()));
-    const currentTheme = Math.min(THEME_COUNT - 1, Math.floor((level - 1) / LEVELS_PER_THEME));
+    const campaignComplete = isCampaignComplete(level);
+    const currentTheme = themeIndexForLevel(level, THEME_COUNT);
     if (this.selectedTheme < 0 || this.selectedTheme >= THEME_COUNT) this.selectedTheme = currentTheme;
     const theme = this.selectedTheme;
     const info = THEME_INFO[theme];
-    const isCurrentTheme = theme === currentTheme;
+    const isCurrentTheme = theme === currentTheme && !campaignComplete;
     if (isCurrentTheme) {
       const focusIndex = Math.min(LEVELS_PER_THEME - 1, level - 1 - theme * LEVELS_PER_THEME);
       this.windowStart = Math.max(0, Math.min(LEVELS_PER_THEME - MAP_WINDOW, focusIndex - 2));
@@ -752,11 +771,17 @@ export class AdventureScreen {
     if (this.themeTitleLabel) this.themeTitleLabel.string = `主题 ${theme + 1} · ${info.name}`;
     if (this.themeTaglineLabel) this.themeTaglineLabel.string = info.tagline;
     if (this.starCountLabel) this.starCountLabel.string = `${this.options.getTotalStars()}`;
-    if (this.currentLevelLabel) this.currentLevelLabel.string = isCurrentTheme ? `第 ${level} 关` : '已通关';
+    if (this.currentLevelLabel) {
+      this.currentLevelLabel.string = campaignComplete && theme === currentTheme
+        ? '已通关'
+        : isCurrentTheme ? `第 ${level} 关` : '已通关';
+    }
     if (this.cardSubtitleLabel) {
-      this.cardSubtitleLabel.string = isCurrentTheme
-        ? `本主题 ${LEVELS_PER_THEME} 关 · ${info.name}路线`
-        : `${info.name} · ${LEVELS_PER_THEME} 关全部通关`;
+      this.cardSubtitleLabel.string = campaignComplete && theme === currentTheme
+        ? `${info.name} · 新主题即将到来`
+        : isCurrentTheme
+          ? `本主题 ${LEVELS_PER_THEME} 关 · ${info.name}路线`
+          : `${info.name} · ${LEVELS_PER_THEME} 关全部通关`;
     }
     this.rebuildThemeChips();
     this.rebuildMapNodes(false);
@@ -764,8 +789,12 @@ export class AdventureScreen {
 
   private onStartPressed() {
     const level = Math.max(1, Math.floor(this.options.getLevel()));
-    const currentTheme = Math.min(THEME_COUNT - 1, Math.floor((level - 1) / LEVELS_PER_THEME));
+    const currentTheme = themeIndexForLevel(level, THEME_COUNT);
     if (this.selectedTheme === currentTheme) {
+      if (isCampaignComplete(level)) {
+        this.toast('新主题即将到来');
+        return;
+      }
       this.options.onStartGame();
       return;
     }

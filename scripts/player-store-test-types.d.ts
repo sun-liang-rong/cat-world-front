@@ -11,10 +11,14 @@ declare module 'cc' {
   export class ImageAsset {}
   export class Texture2D {
     image: ImageAsset | null;
+    isValid: boolean;
     destroy(): void;
   }
   export class SpriteFrame {
     texture: Texture2D | null;
+    isValid: boolean;
+    addRef(): void;
+    decRef(): void;
     destroy(): void;
   }
 

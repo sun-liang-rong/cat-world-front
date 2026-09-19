@@ -2,6 +2,7 @@ import { CoverBoardState, LevelRules, LevelSolver, TileCoverGraph } from './Leve
 import {
   LevelArchetype,
   LevelDefinition,
+  LevelGoal,
   LevelPlan,
   LevelRhythm,
   LevelRhythmSegment,
@@ -56,6 +57,8 @@ export interface LevelGenerationOptions {
   recentArchetypes?: LevelArchetype[];
   maxAttempts?: number;
   solverAnalyzeBranches?: boolean;
+  /** 重试时沿用本关收集目标（种类 + 数量），只换排布 */
+  preserveGoal?: LevelGoal;
 }
 
 export class SeededRandom {
@@ -270,6 +273,8 @@ export class LevelGenerator {
       coverGraph,
     });
     if (!result.solvable) return null;
+    candidate.goal = this.resolvePreservedGoal(candidate, result.solution, options.preserveGoal)
+      || this.assignCollectGoal(candidate, result.solution, random);
 
     // 结构分（不跑玩家风险模拟）先做粗筛：难度明显不达标时直接丢弃，
     // 避免每个候选都付 estimatePlayerRisk 的全盘模拟成本。
@@ -361,7 +366,7 @@ export class LevelGenerator {
   static baseDifficulty(level: number) {
     if (level <= 1) return 22;
     // Level 2 starts at the measured mid-game baseline, then rises to the
-    // existing late-game cap by level 100.
+    // late-game cap by level 100. Theme 6–8 (L101–L160) keep this cap.
     const progress = Math.min(Math.max(level - 2, 0), 98) / 98;
     return Math.round((42.3 + progress * 22.7) * 10) / 10;
   }
@@ -505,13 +510,13 @@ export class LevelGenerator {
     const tileCount = archetype === 'rescue'
       ? LevelGenerator.rescueTileCount(level, random)
       : LevelGenerator.tileCount(level, random, role, fullTrayPressure);
-    const kindCount = LevelGenerator.kindCount(level, role);
+    const kindCount = LevelGenerator.kindCount(level, role, fullTrayPressure);
     const layerCount = archetype === 'rescue'
       ? Math.max(2, this.layerCount(level) - 3)
       : fullTrayPressure
-        // 超萌挑战顶满 PRD 的层数上限（6~7 层取 7）：60 张配 7 层 ≈ 每层 8.6 张，
-        // 再叠全叠柱，可见牌常年只有 3~5 张。
-        ? 7
+        // 超萌挑战：固定 8 层深堆，可见牌常年只有 3~5 张，
+        // 配合 15 种图案 + 5 槽 + 69 张牌，同种元素被拆进不同层。
+        ? 8
         : this.layerCount(level);
     const tiles = this.createLayout(tileCount, layerCount, archetype, random, 'cone', fullTrayPressure);
     const order = this.createRemovalOrder(tiles, archetype, random);
@@ -826,7 +831,7 @@ export class LevelGenerator {
    * 全叠配额：本层拿多少镜像对直接压在父层同位牌上（占本层镜像对的比例）。
    * stacked 原型叠得最密，hidden/order 次之，其余原型走基础比例——
    * 全叠只是把"能看见底牌的一角"变成"完全藏住"，机制上两者都不可点。
-   * deepStack（超萌挑战）：在压力原型基础上再抬 0.15，埋藏率顶满。
+   * deepStack（超萌挑战）：在压力原型基础上再抬约 0.32，埋藏率顶满。
    */
   private fullStackPairQuota(
     count: number,
@@ -838,8 +843,8 @@ export class LevelGenerator {
     if (pairCount <= 0) return 0;
     const minRatio = deepStack
       ? archetype === 'stacked'
-        ? 0.55
-        : 0.45
+        ? 0.72
+        : 0.62
       : archetype === 'stacked'
         ? 0.4
         : archetype === 'hidden' || archetype === 'order'
@@ -961,9 +966,14 @@ export class LevelGenerator {
       let ties = 0;
       for (const item of pool) {
         const layers = layersByKind[item.kind];
-        const score = layers.length === 0
+        const minGap = layers.length === 0
           ? Number.MAX_SAFE_INTEGER
           : Math.min(...layers.map(previous => Math.abs(previous - layer)));
+        // 贴满压力档额外惩罚「同种已经出现很多次」：同类尽量拆开，避免局部成团。
+        const scatter = fullPressure ? layers.length * 3 : 0;
+        const score = minGap === Number.MAX_SAFE_INTEGER
+          ? Number.MAX_SAFE_INTEGER
+          : minGap * 10 - scatter;
         if (score > bestScore) {
           best = item;
           bestScore = score;
@@ -1629,6 +1639,124 @@ export class LevelGenerator {
     return best;
   }
 
+  /** 主线收集关排期：每主题内对齐第 1 章的 11/13/16/18（避开爽关和难关）。主题 2 保留上线时的 21/24/28。 */
+  static readonly COLLECT_GOAL_LEVELS: readonly number[] = [
+    11, 13, 16, 18,
+    21, 24, 28,
+    51, 53, 56, 58,
+    71, 73, 76, 78,
+    91, 93, 96, 98,
+    111, 113, 116, 118,
+    131, 133, 136, 138,
+    151, 153, 156, 158,
+  ];
+
+  static wantsCollectGoal(level: number, role: LevelRole, fullTrayPressure: boolean, rescue: boolean) {
+    if (fullTrayPressure || rescue || role === 'breather') return false;
+    return LevelGenerator.COLLECT_GOAL_LEVELS.indexOf(level) >= 0;
+  }
+
+  private resolvePreservedGoal(
+    candidate: LevelDefinition,
+    solution: number[],
+    preserved?: LevelGoal,
+  ): LevelGoal | undefined {
+    if (!preserved || preserved.type !== 'collect_kind') return undefined;
+    const total = candidate.tiles.filter(tile => tile.kind === preserved.kind).length;
+    if (total < preserved.count) return undefined;
+    const idToTile = new Map(candidate.tiles.map(tile => [tile.id, tile]));
+    let solved = 0;
+    let tray = 0;
+    for (const tileId of solution) {
+      const tile = idToTile.get(tileId);
+      if (!tile || tile.kind !== preserved.kind) continue;
+      tray += 1;
+      if (tray >= 3) {
+        solved += 3;
+        tray = 0;
+      }
+    }
+    if (solved < preserved.count) return undefined;
+    return { type: 'collect_kind', kind: preserved.kind, count: preserved.count };
+  }
+
+  /**
+   * 可解候选上尝试挂「收集指定元素」。选不中种类或见证路径凑不够数量时回退清空，
+   * 不把整关作废——收集关是体验分层，不能拖垮主线生成。
+   */
+  private assignCollectGoal(
+    candidate: LevelDefinition,
+    solution: number[],
+    random: SeededRandom,
+  ): LevelGoal | undefined {
+    if (!LevelGenerator.wantsCollectGoal(
+      candidate.level,
+      candidate.role ?? 'normal',
+      false,
+      candidate.archetype === 'rescue',
+    )) {
+      return undefined;
+    }
+    const counts = new Map<number, number>();
+    candidate.tiles.forEach(tile => {
+      counts.set(tile.kind, (counts.get(tile.kind) || 0) + 1);
+    });
+    const idToTile = new Map(candidate.tiles.map(tile => [tile.id, tile]));
+    const exposedCount = new Map<number, number>();
+    candidate.tiles.forEach(tile => {
+      const covered = candidate.tiles.some(other => {
+        if (other.layer <= tile.layer) return false;
+        return LevelRules.overlaps(tile, other);
+      });
+      if (covered) return;
+      exposedCount.set(tile.kind, (exposedCount.get(tile.kind) || 0) + 1);
+    });
+    const dominantExposed = Array.from(exposedCount.entries())
+      .sort((a, b) => b[1] - a[1] || a[0] - b[0])[0];
+    const dominantKind = dominantExposed ? dominantExposed[0] : -1;
+
+    const solvedByKind = new Map<number, number>();
+    const tray = new Map<number, number>();
+    solution.forEach(tileId => {
+      const tile = idToTile.get(tileId);
+      if (!tile) return;
+      const next = (tray.get(tile.kind) || 0) + 1;
+      if (next >= 3) {
+        tray.set(tile.kind, 0);
+        solvedByKind.set(tile.kind, (solvedByKind.get(tile.kind) || 0) + 3);
+      } else {
+        tray.set(tile.kind, next);
+      }
+    });
+
+    const maxCount = candidate.role === 'spike' ? 12 : 18;
+    const desiredCount = (total: number) => {
+      const ratio = Math.floor(total * 0.6 / 3) * 3;
+      return Math.max(6, Math.min(maxCount, ratio || 6));
+    };
+    const pool = Array.from(counts.entries())
+      .filter(([kind, total]) => {
+        if (total < 6) return false;
+        if ((exposedCount.get(kind) || 0) >= 3) return false;
+        return (solvedByKind.get(kind) || 0) >= desiredCount(total);
+      })
+      .map(([kind, total]) => ({ kind, total }));
+    const fallback = pool.length > 0
+      ? pool
+      : Array.from(counts.entries())
+        .filter(([kind, total]) => total >= 6 && (solvedByKind.get(kind) || 0) >= 6)
+        .map(([kind, total]) => ({ kind, total }));
+    if (fallback.length === 0) return undefined;
+
+    const preferred = fallback.filter(item => item.kind !== dominantKind);
+    const choices = preferred.length > 0 ? preferred : fallback;
+    const picked = random.pick(choices);
+    const count = desiredCount(picked.total);
+    if (count < 6 || count % 3 !== 0) return undefined;
+    if ((solvedByKind.get(picked.kind) || 0) < count) return undefined;
+    return { type: 'collect_kind', kind: picked.kind, count };
+  }
+
   private chooseArchetype(level: number, random: SeededRandom, recent: LevelArchetype[], role: LevelRole = 'normal') {
     // 爽关固定 combo 原型：见证路径在缓解段优先完成三消，制造连锁
     if (role === 'breather') return 'combo';
@@ -1697,7 +1825,11 @@ export class LevelGenerator {
     return Math.min(9, 5 + Math.floor((level - 2) / 4));
   }
 
-  private static kindCount(level: number, role: LevelRole = 'normal') {
+  private static kindCount(level: number, role: LevelRole = 'normal', fullTrayPressure = false) {
+    // 超萌挑战：固定 15 种图案，同种元素极度分散，配对难度拉满。
+    if (fullTrayPressure) {
+      return 15;
+    }
     // 优先级2：延缓种类数增长 - 拉长难度曲线，给玩家更长的学习期
     // 🆕 再次优化：进一步增加前期种类数，解决"还是太简单"问题
     // 新曲线：L2=8种 → L3=9种 → L5=10种 → L10=11种 → L20=13种 → L35=15种
@@ -1732,13 +1864,13 @@ export class LevelGenerator {
   ) {
     if (level <= 1) return 18;
 
-    const kindCount = LevelGenerator.kindCount(level);
+    const kindCount = LevelGenerator.kindCount(level, role, fullTrayPressure);
     const minimum = kindCount * 3;
 
-    // 超萌挑战：牌量顶满 PRD 的 45~60 带上沿（54/57/60 三档），
-    // 15 种 × 每种恰好 3~4 张，容错被压到最低。
+    // 超萌挑战：固定 69 张（15 种 × 平均 4.6 张），
+    // 容错压到极限，配合 8 层深堆和 5 槽。
     if (fullTrayPressure) {
-      return 54 + (random ? random.int(0, 2) * 3 : 3);
+      return 69;
     }
 
     // 🆕 优化前 10 关：让每种元素保持在 7-8 张（策略性甜蜜点）

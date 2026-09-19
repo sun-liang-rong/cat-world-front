@@ -1,8 +1,23 @@
 import { BuildingId, CatId } from './PlayerTypes';
 
-// 每个主题的关卡数：主题 N 的 20 关最多产出 60 颗星星，
-// 正好覆盖对应建筑 清理/修复/装饰 三个阶段的总消耗
+// 每个主题的关卡数：主题 1–5 的 20 关最多产出 60 颗星星，
+// 正好覆盖对应建筑 清理/修复/装饰 三个阶段的总消耗。
+// 主题 6+ 只扩冒险与卡牌，不再对应新建筑 / 新猫咪。
 export const LEVELS_PER_THEME = 20;
+export const MAIN_THEME_COUNT = 8;
+export const MAX_MAIN_LEVEL = LEVELS_PER_THEME * MAIN_THEME_COUNT;
+
+export function isCampaignComplete(level: number) {
+  return Math.max(1, Math.floor(Number.isFinite(level) ? level : 1)) > MAX_MAIN_LEVEL;
+}
+
+/** 主线关卡对应的主题下标（0 起）；打完终章后停在最后一章，不滚回第 1 章。 */
+export function themeIndexForLevel(level: number, themeCount = MAIN_THEME_COUNT) {
+  const count = Math.max(1, Math.floor(themeCount));
+  if (isCampaignComplete(level)) return count - 1;
+  const safe = Math.max(1, Math.floor(Number.isFinite(level) ? level : 1));
+  return Math.min(count - 1, Math.floor((safe - 1) / LEVELS_PER_THEME));
+}
 
 // 小节点机制：每个大节点（清理/修复/装饰）拆成若干小格，点亮 1 格固定消耗 3 星，
 // 与「每关固定 3 星」严格对齐——打 1 关 = 点亮 1 格，玩家从第 1 关起每关都能建设。
@@ -10,8 +25,9 @@ export const LEVELS_PER_THEME = 20;
 export const CELL_STAR_COST = 3;
 export const BUILDING_STAGE_CELLS: number[] = [5, 7, 8];
 
-// 小镇建筑配置：主题 ↔ 建筑 ↔ 猫咪一一对应。
+// 小镇建筑配置：仅主题 1–5 与建筑、猫咪一一对应。
 // 建筑本身暂无功能（后期再加），作用是承载星星消耗并解锁对应猫咪。
+// 主题 6+ 不新增建筑。
 export interface BuildingDefinition {
   id: BuildingId;
   name: string;

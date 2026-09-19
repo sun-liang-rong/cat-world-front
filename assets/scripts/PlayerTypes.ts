@@ -141,6 +141,11 @@ export interface PlayerState {
    * 仅主线 level===1 且该标记为 false 时触发；失败重试不重放。
    */
   boardTutorialDone: boolean;
+  /**
+   * 首次进入收集指定元素关时的一句说明是否已显示。
+   * 只弹一次；与第 1 关棋盘教学相互独立。
+   */
+  collectGoalHintDone: boolean;
 }
 
 export interface PlayerExperienceInfo {

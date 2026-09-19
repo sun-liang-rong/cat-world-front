@@ -70,11 +70,19 @@ export class LoadingScreen {
   destroy() {
     this.destroyed = true;
     Tween.stopAllByTarget(this.progressProxy);
+    this.hideHtmlBootSplash();
     this.loadingUI?.destroy();
     this.loadingUI = null;
     this.fillSprite = null;
     this.pawThumb = null;
     this.percentLabel = null;
+  }
+
+  private hideHtmlBootSplash() {
+    // H5 / TapTap 在引擎启动前会挂一层 HTML 启动页；游戏内加载页就绪后收掉。
+    // 微信小游戏没有这层，调用点保持空操作。
+    const hide = (globalThis as { __catWorldHideBootSplash?: () => void }).__catWorldHideBootSplash;
+    if (typeof hide === 'function') hide();
   }
 
   private create() {
@@ -85,8 +93,15 @@ export class LoadingScreen {
     this.root.addChild(this.loadingUI);
     this.loadingUI.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
     const entrance = this.loadingUI.addComponent(UIOpacity);
-    entrance.opacity = 0;
-    tween(entrance).to(0.25, { opacity: 255 }).start();
+    const hasHtmlSplash = typeof (globalThis as { __catWorldHideBootSplash?: () => void }).__catWorldHideBootSplash === 'function';
+    if (hasHtmlSplash) {
+      // HTML 启动页已经盖住黑屏，游戏加载页直接满透明度接棒，避免再淡入一次露底。
+      entrance.opacity = 255;
+      this.hideHtmlBootSplash();
+    } else {
+      entrance.opacity = 0;
+      tween(entrance).to(0.25, { opacity: 255 }).start();
+    }
 
     this.buildSky(this.loadingUI, visibleSize.width, visibleSize.height);
 

@@ -21,6 +21,10 @@ const metricTotals = {
 assert(LevelGenerator.baseDifficulty(1) === 22, 'Level 1 difficulty changed unexpectedly');
 assert(LevelGenerator.baseDifficulty(2) === 42.3, 'Level 2 difficulty must start at 42.3');
 assert(LevelGenerator.baseDifficulty(2) < LevelGenerator.baseDifficulty(3), 'Difficulty must increase after level 2');
+assert(LevelGenerator.baseDifficulty(100) === 65, 'Level 100 must reach the late-game difficulty cap');
+assert(LevelGenerator.baseDifficulty(160) === LevelGenerator.baseDifficulty(100), 'Levels after 100 must keep the late-game difficulty cap');
+assert(LevelGenerator.COLLECT_GOAL_LEVELS.indexOf(111) >= 0, 'Theme 6 must include collect-goal levels');
+assert(LevelGenerator.COLLECT_GOAL_LEVELS.indexOf(158) >= 0, 'Theme 8 must include collect-goal levels');
 assert(!LevelRules.overlapsGeometry(
   { x: 0, y: 0, width: 104, height: 107 },
   { x: 99, y: 99, width: 104, height: 107 },

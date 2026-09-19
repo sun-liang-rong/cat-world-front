@@ -24,10 +24,10 @@ import { Toast } from './Toast';
 import type { RewardedAdResult } from './RewardedAdService';
 import { EndlessDirector } from './level/EndlessDirector';
 import { LevelRules } from './level/LevelSolver';
-import { LevelDefinition, PlayerRun, TileDefinition, TileGeometry } from './level/LevelTypes';
+import { LevelDefinition, LevelGoal, PlayerRun, TileDefinition, TileGeometry } from './level/LevelTypes';
 import { CatId, GamePetPosition, ItemId } from './PlayerTypes';
 import { SettingsPopup } from './SettingsPopup';
-import { BuildTargetInfo, LEVELS_PER_THEME } from './TownContent';
+import { BuildTargetInfo, MAX_MAIN_LEVEL, themeIndexForLevel } from './TownContent';
 import { PerformanceManager } from './PerformanceManager';
 
 type Tile = {
@@ -88,14 +88,17 @@ type CatSkillPanelView = {
 // 通用元素皮肤（game/tiles/tile_7..21）：未配套主题时的默认皮肤，也是主题皮肤缺图时的回退
 const GENERIC_ITEM_NAMES = ['小鱼', '毛线球', '猫爪', '铃铛', '玩具鼠', '猫罐头', '牛奶', '爱心', '饼干', '篮子', '蝴蝶结', '叶子', '羽毛', '骨头', '猫粮'];
 
-// 主题专属元素皮肤：kind 序号与通用皮肤一一对应，目录内 tile_1..15（见 需求.md 5.2.1）；
-// null 表示该主题尚未配套，沿用通用皮肤。素材在 assets/resources/game/tiles/<folder>/
+// 主题专属元素皮肤：kind 序号与通用皮肤一一对应，目录内 tile_1..15（见 需求.md 5.2.1）。
+// 主题 6+ 只换卡面，不对应新建筑。单张缺失时回退通用皮肤。素材在 assets/resources/game/tiles/<folder>/
 const THEME_ITEM_SKINS: Array<{ folder: string; names: string[] } | null> = [
   { folder: 'grassland', names: ['雏菊', '四叶草', '蘑菇', '蒲公英', '瓢虫', '蝴蝶', '蜗牛', '蜜蜂', '胡萝卜', '麦穗', '风车', '橡果', '鸟蛋', '木栅栏', '小青蛙'] },
-  null, // 2 溪谷小镇
-  null, // 3 星光海湾
-  null, // 4 云朵山径
-  null, // 5 莓果森林
+  { folder: 'valley', names: ['溪石', '溪鱼', '水车', '荷花', '蜂蜜罐', '木桥', '萤火虫', '枫叶', '草帽', '蓝莓', '铜铃', '野餐篮', '蜻蜓', '法棍', '水磨小屋'] },
+  { folder: 'bay', names: ['贝壳', '海星', '灯塔', '锚', '帆船', '海鸥', '珍珠', '椰子', '泳圈', '珊瑚', '漂流瓶', '海盐冰淇淋', '望远镜', '木栈道', '月光'] },
+  { folder: 'cloudtrail', names: ['云朵', '热气球', '登山杖', '野花', '松果', '羊驼', '木路牌', '水壶', '帐篷', '星罗盘', '披肩', '山雀', '石阶', '风铃', '彩虹'] },
+  { folder: 'berry', names: ['草莓', '蓝莓挞', '蘑菇屋', '藤篮', '果酱瓶', '橡果帽', '蝴蝶结', '浆果汁', '野莓枝', '木勺', '格子布', '小鹿', '松针', '提灯', '浆果派'] },
+  { folder: 'lantern', names: ['红灯笼', '糖葫芦', '围巾猫', '手炉', '雪梨汤', '纸伞', '铃铛摊', '麦芽糖', '窗花', '棉靴', '热奶茶', '灯谜条', '烤红薯', '绒手套', '牌坊'] },
+  { folder: 'bamboo', names: ['竹叶', '茶杯', '石灯笼', '锦鲤', '团扇', '竹笛', '月亮门', '青团', '蒲团', '萤火', '砚台', '竹扫帚', '莲花灯', '木屐', '庭院猫'] },
+  { folder: 'snowfield', names: ['雪花', '热可可', '雪靴', '星砂瓶', '绒帽', '雪橇', '冰晶', '暖炉', '雪猫', '北极星', '毛线帽', '冰灯', '雪松', '暖手包', '观星镜'] },
 ];
 const GAME_ITEM_TILE_IDS = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
 const TOOL_ELEMENT_IDS = [1, 2, 3, 4, 6, 7, 9, 10, 11];
@@ -127,8 +130,8 @@ const CAT_SKILL_ASSET_PATHS = [
  * 用户进入关卡后不会再因远程图片请求出现黑屏。
  */
 export function buildGameScreenImagePaths(level: number, theme?: number) {
-  const themeIndex = theme ?? Math.floor((level - 1) / LEVELS_PER_THEME);
-  const skin = THEME_ITEM_SKINS[themeIndex] ?? null;
+  const themeIndex = theme === -1 ? -1 : (theme ?? themeIndexForLevel(level));
+  const skin = themeIndex >= 0 ? THEME_ITEM_SKINS[themeIndex] ?? null : null;
   const themePaths = skin
     ? Array.from({ length: 15 }, (_, index) => `game/tiles/${skin.folder}/tile_${index + 1}`)
     : [];
@@ -222,6 +225,9 @@ export interface GameScreenOptions {
   tutorialEnabled?: boolean;
   /** 教学完成（第一次三消）时写存档标记 */
   onTutorialDone?: () => void;
+  /** 收集关首次提示是否已显示；缺省视为已显示，不再弹 */
+  shouldShowCollectGoalHint?: () => boolean;
+  onCollectGoalHintShown?: () => void;
   /** 主线成功结算的建设目标提示（小节点机制）；星够时结算页出现「去建设」入口。超萌挑战/无尽不传 */
   getBuildTargetInfo?: () => BuildTargetInfo | null;
   /** 点击「去建设」：关闭对局并跳转小镇 */
@@ -261,7 +267,10 @@ export class GameScreen {
   private destroyed = false;
   private coins: number;
   private targetLabel!: Label;
+  private collectGoalProgressLabel: Label | null = null;
+  private collectGoalHud: Node | null = null;
   private collectedTotal = 0;
+  private collectProgress = 0;
   private eliminatedCount = 0;
   private endlessDirector: EndlessDirector | null = null;
   private endlessStage = 0;
@@ -335,8 +344,10 @@ export class GameScreen {
     this.trayCapacity = this.baseTraySlots;
     this.trayFirstSlotX = -(this.baseTraySlots / 2) * this.traySlotSpacing;
     // 主题皮肤：显式传入优先（超萌挑战传 -1 强制通用皮肤），否则按关卡号推导
-    this.themeIndex = options.theme ?? Math.floor((options.level - 1) / LEVELS_PER_THEME);
-    this.itemNames = THEME_ITEM_SKINS[this.themeIndex]?.names ?? GENERIC_ITEM_NAMES;
+    this.themeIndex = options.theme === -1 ? -1 : (options.theme ?? themeIndexForLevel(options.level));
+    this.itemNames = this.themeIndex >= 0
+      ? THEME_ITEM_SKINS[this.themeIndex]?.names ?? GENERIC_ITEM_NAMES
+      : GENERIC_ITEM_NAMES;
     if (options.endless) this.endlessDirector = new EndlessDirector(options.endless.seed, this.startedAt);
     if (this.equippedCatId) {
       this.catSkill = options.getCatSkillState(this.equippedCatId);
@@ -399,6 +410,7 @@ export class GameScreen {
     this.startCatSkillRefresh();
     this.startCatSkillBubbleCycle();
     if (this.options.endless) this.startEndlessHud();
+    this.maybeShowCollectGoalHint();
     if (this.options.levelDefinition || this.options.endless) {
       this.beginBoardIntro();
       return;
@@ -501,10 +513,48 @@ export class GameScreen {
       goalTitle.verticalAlign = Label.VerticalAlign.CENTER;
       goalTitle.lineHeight = 43;
       goalTitle.node.getComponent(UITransform)!.setContentSize(185, 43);
-      const collectText = this.label(goal, '收集全部元素', -38, -12, 21, new Color(112, 69, 40));
-      collectText.isBold = true;
-      const clearText = this.label(goal, '即可通关', 190, -12, 21, new Color(112, 69, 40));
-      clearText.isBold = true;
+      const collectGoal = this.levelCollectGoal();
+      if (collectGoal) {
+        // 底图左右各有爪印装饰：内容收在中间约 220px，避免和爪印重叠。
+        this.collectGoalHud = new Node('CollectGoalHud');
+        goal.addChild(this.collectGoalHud);
+        this.collectGoalHud.setPosition(0, -12);
+        this.collectGoalHud.addComponent(UITransform).setContentSize(220, 44);
+        this.image(this.collectGoalHud, this.itemTilePath(collectGoal.kind), -78, 0, 36, 36);
+        const nameText = this.label(
+          this.collectGoalHud,
+          this.itemNames[collectGoal.kind] || '指定元素',
+          -18,
+          0,
+          22,
+          new Color(112, 69, 40),
+        );
+        nameText.isBold = true;
+        nameText.overflow = Label.Overflow.SHRINK;
+        nameText.enableWrapText = false;
+        nameText.verticalAlign = Label.VerticalAlign.CENTER;
+        nameText.horizontalAlign = Label.HorizontalAlign.CENTER;
+        nameText.node.getComponent(UITransform)!.setContentSize(72, 36);
+        this.collectGoalProgressLabel = this.label(
+          this.collectGoalHud,
+          `0/${collectGoal.count}`,
+          62,
+          0,
+          24,
+          new Color(111, 62, 28),
+        );
+        this.collectGoalProgressLabel.isBold = true;
+        this.collectGoalProgressLabel.overflow = Label.Overflow.SHRINK;
+        this.collectGoalProgressLabel.enableWrapText = false;
+        this.collectGoalProgressLabel.verticalAlign = Label.VerticalAlign.CENTER;
+        this.collectGoalProgressLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+        this.collectGoalProgressLabel.node.getComponent(UITransform)!.setContentSize(72, 36);
+      } else {
+        const collectText = this.label(goal, '收集全部元素', -38, -12, 21, new Color(112, 69, 40));
+        collectText.isBold = true;
+        const clearText = this.label(goal, '即可通关', 190, -12, 21, new Color(112, 69, 40));
+        clearText.isBold = true;
+      }
     }
 
     // Keep the progress value available to the game logic without adding a
@@ -1013,7 +1063,7 @@ export class GameScreen {
 
   /** 元素皮肤按主题取图；主题未配套或单张缺失时回退通用皮肤，保证不出现空卡片 */
   private itemTilePath(kind: number) {
-    const skin = THEME_ITEM_SKINS[this.themeIndex];
+    const skin = this.themeIndex >= 0 ? THEME_ITEM_SKINS[this.themeIndex] : undefined;
     if (skin) {
       const themed = `game/tiles/${skin.folder}/tile_${kind + 1}`;
       if (this.assets.getFrame(themed)) return themed;
@@ -1663,6 +1713,20 @@ export class GameScreen {
       this.registerCatProgress('match');
       let pendingMatchAnimations = removed.length + 1;
       this.addEliminated(removed.length);
+      if (this.registerCollectProgress(removed[0]?.kind, removed.length)) {
+        removed.forEach(tile => {
+          Tween.stopAllByTarget(tile.node);
+          tween(tile.node)
+            .to(0.14, { scale: new Vec3(0.1, 0.1, 1) }, { easing: 'quadIn' })
+            .call(() => {
+              if (tile.node.isValid) tile.node.destroy();
+            })
+            .start();
+        });
+        this.reflowTray();
+        this.finish(true);
+        return;
+      }
       const continueAfterMatch = () => {
         pendingMatchAnimations -= 1;
         if (pendingMatchAnimations > 0 || this.destroyed || this.gameOver) return;
@@ -1670,7 +1734,7 @@ export class GameScreen {
         if (this.boardIntroActive) return;
         if (this.boardTiles.some(tile => tile.active)) this.resolveTrayMatches();
         else if (this.options.endless) this.refillEndlessBoard(true);
-        else this.finish(true);
+        else this.finish(this.hasWonLevel());
       };
       removed.forEach(tile => {
         Tween.stopAllByTarget(tile.node);
@@ -1692,7 +1756,7 @@ export class GameScreen {
     if (this.boardIntroActive) return;
     if (!this.boardTiles.some(tile => tile.active)) {
       if (this.options.endless) this.refillEndlessBoard(true);
-      else this.finish(true);
+      else this.finish(this.hasWonLevel());
     } else if (this.trayTiles.length >= this.trayCapacity) this.finish(false);
   }
 
@@ -1907,7 +1971,73 @@ export class GameScreen {
       this.refreshEndlessHud();
       return;
     }
-    if (this.targetLabel) this.targetLabel.string = `已收集 ${this.collectedTotal} / ${this.boardTiles.length || this.options.levelDefinition?.tiles.length || 45}`;
+    const collectGoal = this.levelCollectGoal();
+    if (collectGoal && this.collectGoalProgressLabel) {
+      this.collectGoalProgressLabel.string = `${this.collectProgress}/${collectGoal.count}`;
+    }
+    if (this.targetLabel) {
+      this.targetLabel.string = collectGoal
+        ? `已收集 ${this.collectProgress} / ${collectGoal.count}`
+        : `已收集 ${this.collectedTotal} / ${this.boardTiles.length || this.options.levelDefinition?.tiles.length || 45}`;
+    }
+  }
+
+  private levelCollectGoal(): Extract<LevelGoal, { type: 'collect_kind' }> | null {
+    if (this.options.challenge || this.options.endless) return null;
+    const goal = this.options.levelDefinition?.goal;
+    if (!goal || goal.type !== 'collect_kind') return null;
+    if (!Number.isInteger(goal.kind) || goal.kind < 0) return null;
+    if (!Number.isInteger(goal.count) || goal.count < 3 || goal.count % 3 !== 0) return null;
+    return goal;
+  }
+
+  private hasCompletedCollectGoal() {
+    const collectGoal = this.levelCollectGoal();
+    return !!collectGoal && this.collectProgress >= collectGoal.count;
+  }
+
+  private hasWonLevel() {
+    if (this.options.endless) return false;
+    if (this.hasCompletedCollectGoal()) return true;
+    if (this.levelCollectGoal()) return false;
+    return !this.boardTiles.some(tile => tile.active);
+  }
+
+  /** 三消计入收集进度；达标返回 true，调用方应立即胜利。 */
+  private registerCollectProgress(kind: number | undefined, count: number) {
+    const collectGoal = this.levelCollectGoal();
+    if (!collectGoal || kind !== collectGoal.kind || count <= 0) return false;
+    this.collectProgress += count;
+    this.updateTargetLabel();
+    if (this.collectGoalHud?.isValid) {
+      Tween.stopAllByTarget(this.collectGoalHud);
+      this.collectGoalHud.setScale(new Vec3(0.92, 0.92, 1));
+      tween(this.collectGoalHud)
+        .to(0.12, { scale: new Vec3(1.04, 1.04, 1) }, { easing: 'quadOut' })
+        .to(0.12, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+        .start();
+    }
+    return this.collectProgress >= collectGoal.count;
+  }
+
+  private remainingCollectKindCount(kinds?: number[]) {
+    const collectGoal = this.levelCollectGoal();
+    if (!collectGoal) return 0;
+    const source = kinds || this.boardTiles
+      .filter(tile => tile.active && !tile.inTray)
+      .map(tile => tile.kind);
+    const boardCount = source.filter(kind => kind === collectGoal.kind).length;
+    const trayCount = this.trayTiles.filter(tile => tile.kind === collectGoal.kind).length;
+    return this.collectProgress + boardCount + trayCount;
+  }
+
+  private maybeShowCollectGoalHint() {
+    const collectGoal = this.levelCollectGoal();
+    if (!collectGoal) return;
+    if (this.options.shouldShowCollectGoalHint && !this.options.shouldShowCollectGoalHint()) return;
+    this.options.onCollectGoalHintShown?.();
+    const name = this.itemNames[collectGoal.kind] || '指定元素';
+    this.toast(`三消${name}即可过关，不必清空棋盘`);
   }
 
   private startEndlessHud() {
@@ -2143,8 +2273,8 @@ export class GameScreen {
       this.openEndlessSettlement();
       return;
     }
-    // 过关固定奖励 3 星：每主题 20 关 × 3 星 = 60 星，正好点亮对应建筑 20 个小节点（每格 3 星）；
-    // 超萌挑战不计入关卡进度，改发大额金币。
+    // 过关固定奖励 3 星：主题 1–5 每章 20 关 × 3 星 = 60 星，正好点亮对应建筑；
+    // 主题 6+ 仍发 3 星，但不再对应新建筑。超萌挑战不计入关卡进度，改发大额金币。
     const challenge = this.options.challenge;
     const starReward = win && !challenge ? 3 : 0;
     const coinReward = win ? (challenge ? challenge.coinReward : 50) : 0;
@@ -2156,6 +2286,8 @@ export class GameScreen {
       if (!challenge) this.options.onStarsGranted(starReward);
       else this.options.onChallengeWin?.(Date.now() - this.startedAt);
     }
+    const collectFailed = !win && !!this.levelCollectGoal() && !this.hasCompletedCollectGoal()
+      && !this.boardTiles.some(tile => tile.active);
     this.settlementPopup = SettlementPopup.open(this.gameUI, this.assets, {
       win,
       challenge: !!challenge,
@@ -2164,6 +2296,9 @@ export class GameScreen {
       starReward,
       coinReward,
       rating: win ? this.calculateRating() : '未完成',
+      failTitle: collectFailed ? '目标元素不足' : undefined,
+      failMessage: collectFailed ? '锤子和技能不计入收集进度，再试一次吧' : undefined,
+      nextButtonLabel: !challenge && win && this.options.level >= MAX_MAIN_LEVEL ? '完成冒险' : undefined,
       onNextLevel: () => {
         this.options.onPlaySound('click');
         this.options.onNextLevel();
@@ -2724,9 +2859,13 @@ export class GameScreen {
   private settleClearedBoardTile() {
     this.refillEndlessBoard();
     if (this.boardIntroActive) return;
+    if (this.hasCompletedCollectGoal()) {
+      this.finish(true);
+      return;
+    }
     if (!this.boardTiles.some(candidate => candidate.active)) {
       if (this.options.endless) this.refillEndlessBoard(true);
-      else this.finish(true);
+      else this.finish(this.hasWonLevel());
       return;
     }
     this.resolveTrayMatches();
@@ -2861,19 +3000,30 @@ export class GameScreen {
       this.toast('骰子道具不足');
       return;
     }
+
+    // 重新排列卡片种类
+    const kinds = active.map(tile => tile.kind);
+    const originalKinds = kinds.slice();
+    const collectGoal = this.levelCollectGoal();
+    let shuffled = false;
+    const maxAttempts = collectGoal ? 20 : 8;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      this.shuffleArray(kinds);
+      const changed = kinds.some((kind, index) => kind !== originalKinds[index]);
+      if (!changed) continue;
+      if (collectGoal && this.remainingCollectKindCount(kinds) < collectGoal.count) continue;
+      shuffled = true;
+      break;
+    }
+    if (!shuffled) {
+      this.toast(collectGoal ? '没有合适的重排' : '当前没有足够的元素可重排');
+      return;
+    }
     if (!this.options.onConsumeItem('dice')) {
       this.toast('骰子道具不足');
       return;
     }
     this.usedTools.add('dice');
-
-    // 重新排列卡片种类
-    const kinds = active.map(tile => tile.kind);
-    const originalKinds = kinds.slice();
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      this.shuffleArray(kinds);
-      if (kinds.some((kind, index) => kind !== originalKinds[index])) break;
-    }
 
     this.playToolUseAnimation('dice');
 
