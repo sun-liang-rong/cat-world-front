@@ -64,7 +64,7 @@ export interface LevelScore {
   /** 模拟过程中偏离当前最佳选择的比例（0-100）。 */
   wrongChoiceRisk: number;
   /**
-   * 模拟玩家失败时的平均棋盘进度（已取走牌数占比，0-100）。
+   * 模拟玩家失败时的平均进度（清空关为取牌占比，收集关为目标完成占比，0-100）。
    * 越高说明失败越集中在"快赢"的尾段——失败的可挽回感越强；
    * 中盘就失败的关卡是"绝望型失败"，直接劝退。
    */
@@ -132,7 +132,7 @@ export interface SolverOptions {
    * active 为剩余牌掩码（与 level.tiles 等长），counts 为槽内各 kind 的数量。
    * 提供时跳过见证路径直走，从该状态直接 DFS；pathMetrics 无意义（返回全 0）。
    */
-  initialState?: { active: boolean[]; counts: number[] };
+  initialState?: { active: boolean[]; counts: number[]; collected?: number };
 }
 
 export interface SolverResult {

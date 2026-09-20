@@ -16,7 +16,7 @@ export class DifficultyController {
     this.history.push({ ...run });
     while (this.history.length > this.historyLimit) this.history.shift();
     if ((this.currentRescue || this.recoveryStep > 0) && run.won) {
-      this.recoveryStep = Math.min(3, this.recoveryStep + 1);
+      this.recoveryStep = this.recoveryStep >= 3 ? 0 : this.recoveryStep + 1;
     } else if (!run.won) {
       this.recoveryStep = 0;
     }

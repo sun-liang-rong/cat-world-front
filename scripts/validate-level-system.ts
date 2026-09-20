@@ -51,7 +51,7 @@ for (let index = 0; index < 1000; index += 1) {
   // 复验带上见证路径提示（与 rescue 段一致）：真正的可解性证明是下面的
   // isWinningPath（逐步重放见证路径）。无提示的无界 DFS 在后期巨型关上会
   // 被状态上限截断，与玩法正确性无关。
-  const verification = solver.solve(level, { maxStates: 250000, analyzeBranches: false, preferredSolution: level.plan.solution });
+  const verification = solver.solve({ ...level, goal: undefined }, { maxStates: 250000, analyzeBranches: false, preferredSolution: level.plan.solution });
   assert(verification.solvable, `Seed ${level.seed} is not solvable`);
   assert(!verification.truncated, `Seed ${level.seed} verification was truncated`);
   assert(verification.solution.length === level.tiles.length, `Seed ${level.seed} has an incomplete solution`);
@@ -74,7 +74,7 @@ for (let index = 0; index < 1000; index += 1) {
   counts.forEach((count, kind) => assert(count % 3 === 0, `Seed ${level.seed} kind ${kind} is not a multiple of 3`));
   assert(new Set(level.tiles.map(tile => `${tile.layer}:${tile.x}:${tile.y}:${tile.kind}`)).size > 1, `Seed ${level.seed} is degenerate`);
   if (levelNumber > 1) {
-    const band = LevelGenerator.failureRateBand(levelNumber);
+    const band = LevelGenerator.failureRateBand(levelNumber, false, level.goal);
     assert(
       level.score.estimatedFailureRate >= band.min
         && level.score.estimatedFailureRate <= band.max,
@@ -82,8 +82,8 @@ for (let index = 0; index < 1000; index += 1) {
     );
     if (LevelGenerator.needsFailFeelGates(level.score, 'normal', band)) {
       assert(
-        level.score.failureProgressAvg >= LevelGenerator.minFailureProgress,
-        `Seed ${level.seed} failureProgressAvg ${level.score.failureProgressAvg} below ${LevelGenerator.minFailureProgress}`,
+        level.score.failureProgressAvg >= LevelGenerator.failureProgressFloor(level.goal),
+        `Seed ${level.seed} failureProgressAvg ${level.score.failureProgressAvg} below ${LevelGenerator.failureProgressFloor(level.goal)}`,
       );
       assert(
         level.score.trappedPairRate >= LevelGenerator.minTrappedPairRate,
@@ -171,6 +171,8 @@ const recoveryTwo = difficulty.planNext(60);
 assert(recoveryTwo.targetDifficulty < 60, 'Recovery jumped too quickly');
 difficulty.record({ ...failedRun, won: true, remainingSlots: 3 });
 assert(difficulty.planNext(60).targetDifficulty === 60, 'Recovery did not return to the baseline smoothly');
+difficulty.record({ ...failedRun, won: true, remainingSlots: 3 });
+assert(difficulty.planNext(60, 30).role === 'breather', 'Recovery must end and restore the role schedule');
 
 // —— 关卡角色节拍表：调度正确性 ——
 // 空历史时 mastery 偏低会主动取消 spike（新手保护），先回填 3 局干净胜利再测节拍。

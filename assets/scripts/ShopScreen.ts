@@ -13,7 +13,7 @@ export interface ShopScreenOptions {
   onBuyItem: (id: ItemId) => boolean;
   getShopItemStatus: (id: ItemId) => ShopItemStatus;
   onClaimItemByAd: (id: ItemId) => boolean;
-  onWatchAd?: () => Promise<RewardedAdResult>;
+  onWatchAd?: (scene?: 'revive' | 'double_coins' | 'home_coins' | 'shop_item') => Promise<RewardedAdResult>;
   onReturnHome: () => void;
 }
 
@@ -321,7 +321,7 @@ export class ShopScreen {
 
     let result: RewardedAdResult;
     try {
-      result = await watchAd();
+      result = await watchAd('shop_item');
     } catch (error) {
       console.error('[CatWorld] Rewarded ad callback failed', error);
       result = { completed: false, simulated: false };

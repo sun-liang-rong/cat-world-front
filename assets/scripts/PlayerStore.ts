@@ -35,6 +35,7 @@ import {
   TaskSnapshot,
   ItemId,
 } from './PlayerTypes';
+import { Analytics } from './Analytics';
 import { AdFunnelBand, AdFunnelBandStats, AdFunnelState, PlayerRun } from './level/LevelTypes';
 import {
   BuildCellResult,
@@ -83,8 +84,13 @@ type SavedPlayerState = Omit<Partial<PlayerState>, 'version'> & { version?: numb
 
 export class PlayerStore {
   private state: PlayerState = this.createDefaultState();
+  private analytics: Analytics | null = null;
 
   constructor(private readonly storageKey = STORAGE_KEY) {}
+
+  bindAnalytics(analytics: Analytics) {
+    this.analytics = analytics;
+  }
 
   load() {
     this.state = this.createDefaultState();
@@ -349,6 +355,14 @@ export class PlayerStore {
     }
     this.syncUnlocks(false);
     this.save();
+    this.analytics?.track('building_light', {
+      building_id: id,
+      stage,
+      sub_progress: stageJustCompleted ? 0 : nextSub,
+      cell_count: cellCount,
+      stage_completed: stageJustCompleted,
+      building_completed: buildingCompleted,
+    });
     const stageName = definition.stageNames[stage] ?? '';
     return {
       ok: true,
@@ -699,6 +713,10 @@ export class PlayerStore {
     progress.coinPurchased = true;
     this.state.inventory[id] += 1;
     this.save();
+    this.analytics?.track('shop_buy', {
+      item_id: id,
+      price: definition.price,
+    });
     return true;
   }
 

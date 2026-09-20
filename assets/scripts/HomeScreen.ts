@@ -1,4 +1,5 @@
 import { BlockInputEvents, Button, Color, Graphics, Label, Node, Sprite, tween, UIOpacity, UITransform, Vec2, Vec3, view } from 'cc';
+import { TrackEventName, TrackProps } from './Analytics';
 import { ActivitySnapshot } from './ActivityContent';
 import { AssetStore, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
@@ -111,8 +112,9 @@ export interface HomeScreenOptions {
   getDailyTaskBadgeCount: () => number;
   getChapterInfo: () => HomeChapterInfo;
   getPlayerName: () => string;
-  onWatchAd?: () => Promise<RewardedAdResult>;
+  onWatchAd?: (scene?: 'revive' | 'double_coins' | 'home_coins' | 'shop_item') => Promise<RewardedAdResult>;
   onAddCoins?: (amount: number) => void;
+  onTrack?: (name: TrackEventName, props?: TrackProps) => void;
 }
 
 export class HomeScreen {
@@ -1485,6 +1487,7 @@ export class HomeScreen {
     if (!this.coinAdPopup) this.buildCoinAdPopup();
     if (!this.coinAdPopup) return;
     this.coinAdPopup.active = true;
+    this.options.onTrack?.('ad_entrance_show', { scene: 'home_coins' });
 
     const panel = this.coinAdPopup.getChildByName('AdPanel');
     if (panel) {
@@ -1573,7 +1576,7 @@ export class HomeScreen {
 
     let result: RewardedAdResult;
     try {
-      result = await this.options.onWatchAd();
+      result = await this.options.onWatchAd('home_coins');
     } catch (error) {
       console.error('[CatWorld] Watch ad for coins failed', error);
       result = { completed: false, simulated: false };

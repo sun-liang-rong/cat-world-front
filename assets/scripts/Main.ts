@@ -22,6 +22,7 @@ import { Toast } from './Toast';
 import { MomentScreen } from './MomentScreen';
 import { AdventureScreen, THEME_INFO } from './AdventureScreen';
 import { LoadingOverlay } from './LoadingOverlay';
+import { AdScene, Analytics, AnalyticsPageId } from './Analytics';
 
 const { ccclass, property } = _decorator;
 
@@ -49,6 +50,8 @@ export class Main extends Component {
   private readonly levelSystem = new LevelSystem();
   private readonly playerStore = new PlayerStore();
   private readonly leaderboard = new LeaderboardService();
+  private readonly analytics = new Analytics();
+  private launchedAt = 0;
   private audio!: AudioManager;
   private rewardedAd!: RewardedAdService;
   private homeScreen!: HomeScreen;
@@ -99,7 +102,22 @@ export class Main extends Component {
     }
     Main.instance = this;
     view.setDesignResolutionSize(750, 1334, ResolutionPolicy.FIXED_WIDTH);
+    this.launchedAt = Date.now();
     this.playerStore.load();
+    this.analytics.setContext(() => ({
+      userId: this.playerStore.getUserId(),
+      level: this.playerStore.getLevel(),
+      coins: this.playerStore.getCoins(),
+      stars: this.playerStore.getStars(),
+      expLevel: this.playerStore.getExperienceInfo().level,
+      equippedCat: this.playerStore.getEquippedCat(),
+    }));
+    this.playerStore.bindAnalytics(this.analytics);
+    if (this.playerStore.hasProfile()) this.analytics.setUserId(this.playerStore.getUserId());
+    this.analytics.track('app_launch', {
+      is_new_user: !this.playerStore.hasProfile() && this.playerStore.getLevel() === 1 && this.playerStore.getTotalStarsEarned() === 0,
+      has_profile: this.playerStore.hasProfile(),
+    });
     this.levelSystem.seedRuns(this.playerStore.getRecentRuns());
     this.root = new Node('CatTownRoot');
     this.node.addChild(this.root);
@@ -124,7 +142,12 @@ export class Main extends Component {
   // 激励视频入口总控：REWARDED_AD_ENABLED 关闭时注入 undefined，
   // 结算复活/双倍、首页金币广告、商店广告领道具会各自隐藏入口。
   private buildWatchAdHandler() {
-    return REWARDED_AD_ENABLED ? () => this.rewardedAd.watch() : undefined;
+    if (!REWARDED_AD_ENABLED) return undefined;
+    return (scene: AdScene = 'home_coins') => this.analytics.trackRewardedAd(scene, () => this.rewardedAd.watch());
+  }
+
+  private trackPage(pageId: AnalyticsPageId) {
+    this.analytics.pageView(pageId);
   }
 
   // 只创建首页，其他页面延迟到用户访问时创建
@@ -169,6 +192,7 @@ export class Main extends Component {
       },
       // 首页章节横幅：关卡号与主题内通关数实时取主线进度（每通一关都会变化），
       // 主题名按关卡所在冒险主题（每 20 关一章）；回首页 setActive 时统一刷新
+      onTrack: (name, props) => this.analytics.track(name, props),
       getChapterInfo: () => {
         const rawLevel = this.playerStore.getLevel();
         const complete = isCampaignComplete(rawLevel);
@@ -185,6 +209,8 @@ export class Main extends Component {
           campaignComplete: complete,
         };
       },
+      onWatchAd: this.buildWatchAdHandler(),
+      onAddCoins: amount => this.playerStore.addReward({ coins: amount }),
     });
   }
 
@@ -372,7 +398,11 @@ export class Main extends Component {
   }
 
   private enterHome() {
+    this.analytics.track('loading_finish', {
+      duration_ms: Math.max(0, Date.now() - this.launchedAt),
+    });
     this.homeScreen.setActive(true);
+    this.trackPage('home');
     this.loadingScreen?.destroy();
     this.loadingScreen = null;
 
@@ -562,6 +592,10 @@ export class Main extends Component {
     }
     this.startingGame = true;
     this.hideExtraPages();
+    this.analytics.track('level_enter_click', {
+      mode: 'main',
+      level: this.playerStore.getLevel(),
+    });
     const level = this.playerStore.getLevel();
 
     // 通关后直接回小镇（不点“下一关”）时，存档关卡已 +1，而 currentLevelDefinition
@@ -671,6 +705,7 @@ export class Main extends Component {
       getBuildTargetInfo: () => this.playerStore.getNextBuildableInfo(),
       onGoBuild: () => this.goBuildFromGame(),
       onWatchAd: this.buildWatchAdHandler(),
+      onTrack: (name, props) => this.analytics.track(name, props),
       deferStart,
     });
     this.gameScreen.loadAndCreate(onReady);
@@ -695,6 +730,7 @@ export class Main extends Component {
     if (this.startingGame) return;
     this.startingGame = true;
     this.hideExtraPages();
+    this.analytics.track('level_enter_click', { mode: 'challenge', level: CHALLENGE_GENERATOR_LEVEL });
 
     // 如果超萌挑战关卡还未准备好，显示加载动画
     if (!this.challengeLevelDefinition) {
@@ -830,6 +866,7 @@ export class Main extends Component {
       onReturnHome: () => this.returnHomeFromGame(),
       onReplay: () => this.replayChallenge(),
       onWatchAd: this.buildWatchAdHandler(),
+      onTrack: (name, props) => this.analytics.track(name, props),
     });
     this.gameScreen.loadAndCreate(onReady);
   }
@@ -844,6 +881,7 @@ export class Main extends Component {
     }
     this.startingGame = true;
     this.hideExtraPages();
+    this.analytics.track('level_enter_click', { mode: 'endless' });
     this.openEndlessGame(() => {
       this.homeScreen.setActive(false);
       this.startingGame = false;
@@ -891,6 +929,7 @@ export class Main extends Component {
       onReturnHome: () => this.returnHomeFromGame(),
       onReplay: () => this.replayEndless(),
       onWatchAd: this.buildWatchAdHandler(),
+      onTrack: (name, props) => this.analytics.track(name, props),
     });
     this.gameScreen.loadAndCreate(onReady);
   }
@@ -970,6 +1009,7 @@ export class Main extends Component {
     this.activityScreen?.setActive(false);
     this.momentScreen?.setActive(false);
     this.catCollectionScreen!.setActive(true);
+    this.trackPage('cats');
   }
 
   private openCatDetail(id: CatId) {
@@ -981,11 +1021,13 @@ export class Main extends Component {
     this.catCollectionScreen?.setActive(false);
     this.catDetailScreen!.setCat(id);
     this.catDetailScreen!.setActive(true);
+    this.trackPage('cat_detail');
   }
 
   private returnToCatCollection() {
     this.catDetailScreen?.setActive(false);
     this.catCollectionScreen?.setActive(true);
+    this.trackPage('cats');
   }
 
   private openDailyTasks() {
@@ -1028,6 +1070,7 @@ export class Main extends Component {
     this.activityScreen?.setActive(false);
     this.momentScreen?.setActive(false);
     this.dailyTaskScreen!.setActive(true);
+    this.trackPage('daily');
   }
 
   private openShop() {
@@ -1070,6 +1113,7 @@ export class Main extends Component {
     this.activityScreen?.setActive(false);
     this.momentScreen?.setActive(false);
     this.shopScreen!.setActive(true);
+    this.trackPage('shop');
   }
 
   private openActivity() {
@@ -1112,6 +1156,7 @@ export class Main extends Component {
     this.shopScreen?.setActive(false);
     this.momentScreen?.setActive(false);
     this.activityScreen!.setActive(true);
+    this.trackPage('activity');
   }
 
   private openMoments() {
@@ -1149,6 +1194,7 @@ export class Main extends Component {
     this.hideExtraPages();
     this.homeScreen.setActive(false);
     this.momentScreen!.setActive(true);
+    this.trackPage('moments');
   }
 
   private openAdventure() {
@@ -1186,6 +1232,7 @@ export class Main extends Component {
     this.hideExtraPages();
     this.homeScreen.setActive(false);
     this.adventureScreen!.setActive(true);
+    this.trackPage('adventure');
   }
 
   private openRank() {
@@ -1223,11 +1270,13 @@ export class Main extends Component {
     this.hideExtraPages();
     this.homeScreen.setActive(false);
     this.rankScreen!.setActive(true);
+    this.trackPage('rank');
   }
 
   private returnHomeFromExtraPage() {
     this.hideExtraPages();
     this.homeScreen.setActive(true);
+    this.trackPage('home');
   }
 
   private returnHomeFromGame() {
@@ -1240,6 +1289,7 @@ export class Main extends Component {
     this.challengeSpareDefinition = null;
     this.hideExtraPages();
     this.homeScreen.setActive(true);
+    this.trackPage('home');
     this.resumeChallengePreparation();
   }
 
@@ -1327,11 +1377,13 @@ export class Main extends Component {
     this.hideExtraPages();
     this.homeScreen.setActive(false);
     this.townScreen!.setActive(true);
+    this.trackPage('town');
   }
 
   private returnHome() {
     this.townScreen?.setActive(false);
     this.homeScreen.setActive(true);
+    this.trackPage('home');
   }
 
   private replayLevel() {
@@ -1451,6 +1503,7 @@ export class Main extends Component {
     ).then(profile => {
       if (!this.node.isValid) return;
       this.playerStore.setProfile(profile.userId, profile.name);
+      this.analytics.setUserId(profile.userId);
     }).catch(error => {
       console.error('[CatWorld] Failed to generate player profile', error);
     });

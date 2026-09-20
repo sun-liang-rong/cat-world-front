@@ -1,5 +1,6 @@
 import {
   LevelDefinition,
+  LevelGoal,
   SolverOptions,
   SolverPathMetrics,
   SolverResult,
@@ -22,6 +23,24 @@ interface MoveResult {
 
 /** Pure rules shared by the generator, solver, QA tools and the game adapter. */
 export class LevelRules {
+  static collectGoal(goal?: LevelGoal): Extract<LevelGoal, { type: 'collect_kind' }> | null {
+    if (goal?.type !== 'collect_kind') return null;
+    if (!Number.isInteger(goal.kind) || goal.kind < 0) return null;
+    if (!Number.isInteger(goal.count) || goal.count < 3 || goal.count % 3 !== 0) return null;
+    return goal;
+  }
+
+  static hasWon(goal: LevelGoal | undefined, remaining: number, collected: number) {
+    const collect = LevelRules.collectGoal(goal);
+    return collect ? collected >= collect.count : remaining === 0;
+  }
+
+  static progressPercent(goal: LevelGoal | undefined, total: number, remaining: number, collected: number) {
+    const collect = LevelRules.collectGoal(goal);
+    const progress = collect ? collected / collect.count : (total - remaining) / Math.max(total, 1);
+    return Math.max(0, Math.min(100, Math.round(progress * 100)));
+  }
+
   // The card texture has large rounded transparent corners. Using the full
   // UITransform rectangle reports a cover when only those invisible corners
   // touch on screen.
@@ -325,7 +344,8 @@ export class CoverBoardState {
  * true; a generation candidate is rejected if the search is truncated.
  */
 export class LevelSolver {
-  private level!: Pick<LevelDefinition, 'tiles' | 'slotCapacity' | 'kindCount'>;
+  private level!: Pick<LevelDefinition, 'tiles' | 'slotCapacity' | 'kindCount' | 'goal'>;
+  private collected = 0;
   private graph!: TileCoverGraph;
   private maxStates = 250000;
   private analyzeBranches = true;
@@ -348,6 +368,7 @@ export class LevelSolver {
     this.truncated = false;
     this.memo.clear();
     this.preferredSolution = options.preferredSolution || [];
+    this.collected = Math.max(0, options.initialState?.collected || 0);
     this.graph = (options.coverGraph as TileCoverGraph | undefined) instanceof TileCoverGraph
       ? (options.coverGraph as TileCoverGraph)
       : new TileCoverGraph(level);
@@ -366,6 +387,7 @@ export class LevelSolver {
       this.board = new CoverBoardState(this.graph);
       this.counts = Array.from({ length: Math.max(level.kindCount, 1) }, () => 0);
       this.trayLength = 0;
+      this.collected = 0;
       this.pathStack = [];
 
       const preferred = this.tryFollowPreferredPath();
@@ -377,6 +399,7 @@ export class LevelSolver {
       this.board = new CoverBoardState(this.graph);
       this.counts = Array.from({ length: Math.max(level.kindCount, 1) }, () => 0);
       this.trayLength = 0;
+      this.collected = 0;
       this.pathStack = [];
     }
 
@@ -400,7 +423,8 @@ export class LevelSolver {
    * without any DFS.
    */
   private tryFollowPreferredPath(): SolverResult | null {
-    if (this.preferredSolution.length !== this.level.tiles.length) return null;
+    if (this.preferredSolution.length === 0) return null;
+    const goal = LevelRules.collectGoal(this.level.goal);
     const seen = new Set<number>();
     for (const tileId of this.preferredSolution) {
       const index = this.graph.idToIndex.get(tileId);
@@ -415,11 +439,13 @@ export class LevelSolver {
       while (this.counts[kind] >= 3) {
         this.counts[kind] -= 3;
         this.trayLength -= 3;
+        if (goal?.kind === kind) this.collected += 3;
       }
       this.pathStack.push(tileId);
+      if (LevelRules.hasWon(this.level.goal, this.board.remaining, this.collected)) break;
     }
-    if (this.board.remaining !== 0) return null;
-    this.exploredStates += this.level.tiles.length;
+    if (!LevelRules.hasWon(this.level.goal, this.board.remaining, this.collected)) return null;
+    this.exploredStates += this.pathStack.length;
     const solution = this.pathStack.slice();
     return {
       solvable: true,
@@ -433,7 +459,7 @@ export class LevelSolver {
   }
 
   private search(): SearchResult {
-    const key = LevelRules.stateKey(this.board.active, this.counts);
+    const key = `${LevelRules.stateKey(this.board.active, this.counts)}:${this.collected}`;
     const cached = this.memo.get(key);
     if (cached) return cached;
     if (this.exploredStates >= this.maxStates) {
@@ -442,10 +468,24 @@ export class LevelSolver {
     }
     this.exploredStates += 1;
 
-    if (this.board.remaining === 0) {
+    if (LevelRules.hasWon(this.level.goal, this.board.remaining, this.collected)) {
       const result = { solvable: true, path: [], winningChoices: 0 };
       this.memo.set(key, result);
       return result;
+    }
+
+    const goal = LevelRules.collectGoal(this.level.goal);
+    if (goal) {
+      let remainingMatches = this.counts[goal.kind] || 0;
+      this.level.tiles.forEach((tile, index) => {
+        if (this.board.active[index] && tile.kind === goal.kind) remainingMatches += 1;
+      });
+      if (this.collected + Math.floor(remainingMatches / 3) * 3 < goal.count) {
+        this.deadEndStates += 1;
+        const result = { solvable: false, path: [], winningChoices: 0 };
+        this.memo.set(key, result);
+        return result;
+      }
     }
 
     if (this.trayLength >= this.level.slotCapacity) {
@@ -497,9 +537,12 @@ export class LevelSolver {
         cleared += 1;
       }
       this.pathStack.push(tileId);
+      const collectedNow = goal?.kind === kind ? cleared * 3 : 0;
+      this.collected += collectedNow;
 
       const child = this.search();
 
+      this.collected -= collectedNow;
       this.pathStack.pop();
       if (cleared > 0) {
         this.counts[kind] += cleared * 3;

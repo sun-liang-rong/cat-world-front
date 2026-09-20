@@ -17,6 +17,7 @@ import {
   Vec3,
   view,
 } from 'cc';
+import { AdScene, TrackEventName, TrackProps } from './Analytics';
 import { AssetStore, COMMON_UI_ASSETS } from './AssetStore';
 import { SettlementButton, SettlementButtonTone } from './SettlementButton';
 import type { RewardedAdResult } from './RewardedAdService';
@@ -64,7 +65,8 @@ export interface SettlementPopupOptions {
   failMessage?: string;
   /** 激励视频完成后补发与基础通关奖励相同数量的金币。 */
   onDoubleReward?: () => void;
-  onWatchAd?: () => Promise<RewardedAdResult>;
+  onWatchAd?: (scene?: AdScene) => Promise<RewardedAdResult>;
+  onTrack?: (name: TrackEventName, props?: TrackProps) => void;
   /**
    * 主线成功态的建设目标提示（小节点机制）：星够时整行可点，作为「去建设」入口；
    * 文案由 GameScreen 按 PlayerStore.getNextBuildableInfo 组装。
@@ -270,6 +272,10 @@ export class SettlementPopup extends Component {
         ? () => this.options.onRevive!()
         : () => this.options.onDoubleReward!();
       this.createAdButton(group, adText, 'red', 0, buttonCenterY - (CAPSULE_HEIGHT + AD_ROW_GAP) / 2, adCompleted, freeRevive);
+      this.options.onTrack?.('ad_entrance_show', {
+        scene: this.adScene(),
+        free_revive: freeRevive,
+      });
     }
   }
 
@@ -665,7 +671,7 @@ export class SettlementPopup extends Component {
 
     let result: RewardedAdResult;
     try {
-      result = await this.options.onWatchAd();
+      result = await this.options.onWatchAd(this.adScene());
     } catch (error) {
       console.error('[CatWorld] Settlement rewarded ad failed', error);
       result = { completed: false, simulated: false };
@@ -685,6 +691,10 @@ export class SettlementPopup extends Component {
         ? '看广告清出一对'
         : '看广告×2金币';
     }
+  }
+
+  private adScene(): AdScene {
+    return this.options.onRevive ? 'revive' : 'double_coins';
   }
 
   private buildVictoryFireworks() {

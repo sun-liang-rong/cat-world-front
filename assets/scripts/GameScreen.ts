@@ -14,6 +14,7 @@ import {
   Vec3,
   view,
 } from 'cc';
+import { GameMode, TrackEventName, TrackProps } from './Analytics';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { BoardTutorial } from './BoardTutorial';
@@ -232,7 +233,8 @@ export interface GameScreenOptions {
   getBuildTargetInfo?: () => BuildTargetInfo | null;
   /** 点击「去建设」：关闭对局并跳转小镇 */
   onGoBuild?: () => void;
-  onWatchAd?: () => Promise<RewardedAdResult>;
+  onWatchAd?: (scene?: 'revive' | 'double_coins' | 'home_coins' | 'shop_item') => Promise<RewardedAdResult>;
+  onTrack?: (name: TrackEventName, props?: TrackProps) => void;
   /**
    * 启动预创建：只搭好关卡 UI，等 startPlay() 再开始计时和显示。
    * 加载页用它在进度条走完前把关卡准备好，避免开打时再等远程图。
@@ -390,6 +392,8 @@ export class GameScreen {
     this.pendingStart = false;
     this.playStarted = true;
     this.startedAt = Date.now();
+    this.trackEvent('page_view', { page_id: 'game', ...this.levelTrackProps() });
+    this.trackEvent('level_start', this.levelTrackProps());
     // 无尽 HUD 的「坚持时长」走 director，把开打时刻同步过去，和结算 durationMs 对齐
     this.endlessDirector?.markStarted(this.startedAt);
     this.coins = this.options.getCoins();
@@ -1361,7 +1365,10 @@ export class GameScreen {
       getExposedTiles: () => this.boardTiles
         .filter(tile => tile.active && !tile.inTray && tile.node.isValid && this.isTopTile(tile))
         .map(tile => ({ node: tile.node, kind: tile.kind })),
-      onDone: () => this.options.onTutorialDone?.(),
+      onDone: () => {
+        this.options.onTutorialDone?.();
+        this.trackEvent('tutorial_done', { level: this.options.level, mode: this.playMode() });
+      },
     });
     this.boardTutorial.begin();
   }
@@ -1984,23 +1991,21 @@ export class GameScreen {
 
   private levelCollectGoal(): Extract<LevelGoal, { type: 'collect_kind' }> | null {
     if (this.options.challenge || this.options.endless) return null;
-    const goal = this.options.levelDefinition?.goal;
-    if (!goal || goal.type !== 'collect_kind') return null;
-    if (!Number.isInteger(goal.kind) || goal.kind < 0) return null;
-    if (!Number.isInteger(goal.count) || goal.count < 3 || goal.count % 3 !== 0) return null;
-    return goal;
+    return LevelRules.collectGoal(this.options.levelDefinition?.goal);
   }
 
   private hasCompletedCollectGoal() {
     const collectGoal = this.levelCollectGoal();
-    return !!collectGoal && this.collectProgress >= collectGoal.count;
+    return !!collectGoal && LevelRules.hasWon(collectGoal, 0, this.collectProgress);
   }
 
   private hasWonLevel() {
     if (this.options.endless) return false;
-    if (this.hasCompletedCollectGoal()) return true;
-    if (this.levelCollectGoal()) return false;
-    return !this.boardTiles.some(tile => tile.active);
+    return LevelRules.hasWon(
+      this.levelCollectGoal() || undefined,
+      this.boardTiles.filter(tile => tile.active).length,
+      this.collectProgress,
+    );
   }
 
   /** 三消计入收集进度；达标返回 true，调用方应立即胜利。 */
@@ -2017,7 +2022,7 @@ export class GameScreen {
         .to(0.12, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
         .start();
     }
-    return this.collectProgress >= collectGoal.count;
+    return this.hasCompletedCollectGoal();
   }
 
   private remainingCollectKindCount(kinds?: number[]) {
@@ -2184,7 +2189,10 @@ export class GameScreen {
       () => {
         this.closeLeaveConfirm();
         if (this.options.endless) this.finish(false);
-        else this.options.onReturnHome();
+        else {
+          this.trackEvent('level_home', { ...this.levelTrackProps(), mid_run: true });
+          this.options.onReturnHome();
+        }
       },
     );
   }
@@ -2267,6 +2275,18 @@ export class GameScreen {
       }
     }
     this.closeLeaveConfirm();
+    this.trackEvent('level_end', {
+      ...this.levelTrackProps(),
+      result: this.options.endless ? 'endless' : (win ? 'win' : 'fail'),
+      duration_ms: Date.now() - this.startedAt,
+      collected: this.collectedTotal,
+      match_count: this.matchCount,
+      remaining_slots: Math.max(0, this.trayCapacity - this.trayTiles.length),
+      fail_had_pair: win ? null : failHadPair,
+      fail_progress: win ? null : failProgress,
+      revive_used: this.reviveUsed,
+      used_items: Array.from(this.usedTools),
+    });
     this.options.onPlaySound(this.options.endless || win ? 'win' : 'fail');
     this.options.onVibrate();
     if (this.options.endless) {
@@ -2301,17 +2321,21 @@ export class GameScreen {
       nextButtonLabel: !challenge && win && this.options.level >= MAX_MAIN_LEVEL ? '完成冒险' : undefined,
       onNextLevel: () => {
         this.options.onPlaySound('click');
+        this.trackEvent('level_next', this.levelTrackProps());
         this.options.onNextLevel();
       },
       onReturnHome: () => {
         this.options.onPlaySound('click');
+        this.trackEvent('level_home', { ...this.levelTrackProps(), mid_run: false });
         this.options.onReturnHome();
       },
       onReplay: () => {
         this.options.onPlaySound('click');
+        this.trackEvent('level_replay', this.levelTrackProps());
         this.options.onReplay();
       },
       onWatchAd: this.options.onWatchAd,
+      onTrack: this.options.onTrack,
       // 广告复活每局只开放一次；复活后再次失败时不再展示无效按钮。
       onRevive: win || this.reviveUsed ? undefined : () => this.reviveFromAd(),
       // 连败中打难关（spike）失败送一次免费复活（不看广告，走同一套清对子逻辑）：
@@ -2323,9 +2347,11 @@ export class GameScreen {
       buildTarget: win && !challenge ? this.composeBuildTarget() : undefined,
       onGoBuild: () => {
         this.options.onPlaySound('click');
+        this.trackEvent('level_go_build', this.levelTrackProps());
         this.options.onGoBuild?.();
       },
     });
+    this.trackEvent('page_view', { page_id: 'settlement', ...this.levelTrackProps(), result: win ? 'win' : 'fail' });
   }
 
   /** 主线成功结算的建设目标行：星够给「点击前往」入口，不够给差值文案；无可建建筑返回空 */
@@ -2387,19 +2413,24 @@ export class GameScreen {
       rating: '无尽挑战',
       onNextLevel: () => {
         this.options.onPlaySound('click');
+        this.trackEvent('level_replay', this.levelTrackProps());
         this.options.onReplay();
       },
       onReturnHome: () => {
         this.options.onPlaySound('click');
+        this.trackEvent('level_home', { ...this.levelTrackProps(), mid_run: false });
         this.options.onReturnHome();
       },
       onReplay: () => {
         this.options.onPlaySound('click');
+        this.trackEvent('level_replay', this.levelTrackProps());
         this.options.onReplay();
       },
       onWatchAd: result.coins > 0 ? this.options.onWatchAd : undefined,
+      onTrack: this.options.onTrack,
       onDoubleReward: result.coins > 0 ? () => this.doubleRewardFromAd() : undefined,
     });
+    this.trackEvent('page_view', { page_id: 'settlement', ...this.levelTrackProps(), result: 'endless' });
   }
 
   private reviveFromAd() {
@@ -3123,6 +3154,23 @@ export class GameScreen {
   private addCoins(amount: number) {
     this.coins += amount;
     this.options.onCoinsChanged(this.coins);
+  }
+
+  private playMode(): GameMode {
+    if (this.options.endless) return 'endless';
+    if (this.options.challenge) return 'challenge';
+    return 'main';
+  }
+
+  private levelTrackProps(): TrackProps {
+    return {
+      mode: this.playMode(),
+      level: this.options.level,
+    };
+  }
+
+  private trackEvent(name: TrackEventName, props: TrackProps = {}) {
+    this.options.onTrack?.(name, props);
   }
 
   private toast(text: string) {

@@ -1,4 +1,4 @@
-export const API_BASE_URL = 'https://hongshu.sale/cat_world_service_api';
+export const API_BASE_URL = 'http://localhost:3000/api';
 
 export type RankBoardType = 1 | 2 | 3;
 
@@ -38,6 +38,26 @@ export interface SubmitRankPayload {
   star_count?: number;
   clear_count?: number;
   duration_ms?: number;
+}
+
+export interface TrackEventPayload {
+  event_id: string;
+  name: string;
+  ts: number;
+  props?: Record<string, unknown>;
+}
+
+export interface TrackBatchPayload {
+  user_id?: string;
+  session_id: string;
+  platform?: string;
+  app_version?: string;
+  events: TrackEventPayload[];
+}
+
+export interface TrackIngestResult {
+  accepted: number;
+  dropped: number;
 }
 
 interface WechatRequestTask {
@@ -82,6 +102,10 @@ export class ApiClient {
     const query = [`type=${type}`, `user_id=${encodeURIComponent(userId)}`];
     if (date) query.push(`date=${encodeURIComponent(date)}`);
     return this.request<RankEntry[]>('GET', `/rank/list?${query.join('&')}`);
+  }
+
+  track(payload: TrackBatchPayload) {
+    return this.request<TrackIngestResult>('POST', '/track', payload);
   }
 
   private request<T>(method: 'GET' | 'POST', path: string, body?: unknown) {

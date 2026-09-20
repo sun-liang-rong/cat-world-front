@@ -90,8 +90,10 @@ export class LevelSystem {
       recentFingerprints: this.recentLevels.map(item => item.fingerprint),
       recentArchetypes: this.recentLevels.map(item => item.archetype),
       preserveGoal: level.goal,
+      retrySource: level,
     }).then(generated => {
       if (plan.freeRevive) generated.freeRevive = true;
+      this.rememberLevel(generated);
       return generated;
     });
   }
