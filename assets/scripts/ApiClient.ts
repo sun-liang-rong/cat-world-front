@@ -1,4 +1,4 @@
-export const API_BASE_URL = 'http://localhost:3000/api';
+export const API_BASE_URL = 'https://hongshu.sale/cat_world_service_api';
 
 export type RankBoardType = 1 | 2 | 3;
 

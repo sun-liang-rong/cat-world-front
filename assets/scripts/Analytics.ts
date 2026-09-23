@@ -1,6 +1,7 @@
 import { sys } from 'cc';
+import { HTML5, MINIGAME, PREVIEW, WECHAT } from 'cc/env';
 import { ApiClient } from './ApiClient';
-import { RewardedAdResult } from './RewardedAdService';
+import type { RewardedAdResult } from './RewardedAdService';
 
 export const ANALYTICS_APP_VERSION = '1.0.0';
 
@@ -17,6 +18,8 @@ export type AnalyticsPageId =
   | 'adventure'
   | 'rank'
   | 'moments';
+
+export type AnalyticsPlatform = 'wechat' | 'h5' | 'preview';
 
 export type GameMode = 'main' | 'challenge' | 'endless';
 
@@ -67,17 +70,44 @@ function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function detectPlatform() {
+let cachedPlatform: AnalyticsPlatform | null = null;
+
+export function getAnalyticsPlatform(): AnalyticsPlatform {
+  if (cachedPlatform) return cachedPlatform;
+  cachedPlatform = detectPlatform();
+  return cachedPlatform;
+}
+
+function detectPlatform(): AnalyticsPlatform {
+  // Cocos 会按构建目标把 cc/env 常量编译成字面量：
+  // 微信小游戏包 WECHAT/MINIGAME=true，web-mobile 包 HTML5=true。
+  // 不要只靠运行时有没有 wx，H5 里也可能被注入同类对象。
+  let platform: AnalyticsPlatform = 'h5';
+  if (PREVIEW) platform = 'preview';
+  else if (WECHAT || MINIGAME || sys.platform === sys.Platform.WECHAT_GAME) platform = 'wechat';
+  else if (HTML5 || sys.isBrowser) platform = 'h5';
+
   const runtime = typeof globalThis === 'undefined'
     ? null
-    : globalThis as typeof globalThis & { wx?: { request?: unknown } };
-  return runtime?.wx?.request ? 'wechat' : 'preview';
+    : globalThis as typeof globalThis & { wx?: unknown; tap?: unknown };
+  console.log('[CatWorld] 渠道检测', {
+    platform,
+    PREVIEW,
+    WECHAT,
+    MINIGAME,
+    HTML5,
+    sysPlatform: sys.platform,
+    isBrowser: sys.isBrowser,
+    hasWx: !!runtime?.wx,
+    hasTap: !!runtime?.tap,
+  });
+  return platform;
 }
 
 export class Analytics {
   private userId = '';
   private readonly sessionId = makeId();
-  private readonly platform = detectPlatform();
+  private readonly platform = getAnalyticsPlatform();
   private readonly api: ApiClient;
   private getContext: () => AnalyticsContext;
   private currentPage: AnalyticsPageId | '' = '';

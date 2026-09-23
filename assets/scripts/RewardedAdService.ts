@@ -1,80 +1,88 @@
+import { getAnalyticsPlatform } from './Analytics';
+
 export interface RewardedAdResult {
   completed: boolean;
   simulated: boolean;
 }
 
-// 激励视频总开关：false 时 Main 不给任何页面注入看广告能力，
-// 结算复活/双倍、首页金币广告、商店广告领道具的入口会全部自动隐藏。
-// 流量主开通、要恢复广告时改回 true 即可（各页面逻辑无需再动）。
-export const REWARDED_AD_ENABLED = false;
+export const TAP_REWARDED_AD_UNIT_ID = '1067058';
 
-interface WechatRewardedVideoAd {
+// preview / H5 走 TapTap 激励视频；微信渠道暂不开放广告入口。
+export const REWARDED_AD_ENABLED = getAnalyticsPlatform() !== 'wechat';
+
+interface TapRewardedVideoAd {
   show: () => Promise<void>;
   load: () => Promise<void>;
-  onClose: (callback: (result?: { isEnded?: boolean }) => void) => void;
+  onLoad: (callback: () => void) => void;
   onError: (callback: (error: unknown) => void) => void;
-  offClose?: (callback: (result?: { isEnded?: boolean }) => void) => void;
-  offError?: (callback: (error: unknown) => void) => void;
+  onClose: (callback: (result?: { isEnded?: boolean }) => void) => void;
 }
 
-interface WechatApi {
-  createRewardedVideoAd: (options: { adUnitId: string }) => WechatRewardedVideoAd;
+interface TapApi {
+  createRewardedVideoAd: (options: { adUnitId: string }) => TapRewardedVideoAd;
+}
+
+function getTapApi(): TapApi | null {
+  const runtime = typeof globalThis === 'undefined'
+    ? null
+    : globalThis as typeof globalThis & { tap?: TapApi };
+  return runtime?.tap?.createRewardedVideoAd ? runtime.tap : null;
 }
 
 export class RewardedAdService {
-  private rewardedAd: WechatRewardedVideoAd | null = null;
+  private rewardedAd: TapRewardedVideoAd | null = null;
+  private listenersBound = false;
+  private pending: ((result: RewardedAdResult) => void) | null = null;
 
-  constructor(private readonly adUnitId: string) {}
+  constructor(private readonly adUnitId = TAP_REWARDED_AD_UNIT_ID) {
+    console.log('[CatWorld] 激励广告初始化', {
+      enabled: REWARDED_AD_ENABLED,
+      platform: getAnalyticsPlatform(),
+      adUnitId: this.adUnitId,
+      hasTap: !!getTapApi(),
+    });
+  }
 
   watch(): Promise<RewardedAdResult> {
-    const wxApi = this.getWechatApi();
-    if (!wxApi) {
-      return Promise.resolve({ completed: true, simulated: true });
+    const platform = getAnalyticsPlatform();
+    const tapApi = getTapApi();
+    if (!tapApi) {
+      if (platform === 'preview') {
+        console.log('[CatWorld] 激励广告预览模拟完成');
+        return Promise.resolve({ completed: true, simulated: true });
+      }
+      console.error('[CatWorld] TapTap 广告 SDK 不可用');
+      return Promise.resolve({ completed: false, simulated: false });
     }
     if (!this.adUnitId.trim()) {
       console.error('[CatWorld] Rewarded ad unit ID is not configured');
       return Promise.resolve({ completed: false, simulated: false });
     }
+    if (this.pending) {
+      console.error('[CatWorld] Rewarded ad is already showing');
+      return Promise.resolve({ completed: false, simulated: false });
+    }
 
-    const ad = this.getRewardedAd(wxApi);
+    const ad = this.getRewardedAd(tapApi);
     if (!ad) return Promise.resolve({ completed: false, simulated: false });
 
     return new Promise(resolve => {
-      let settled = false;
-      const cleanup = () => {
-        ad.offClose?.(onClose);
-        ad.offError?.(onError);
-      };
-      const finish = (completed: boolean) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve({ completed, simulated: false });
-      };
-      const onClose = (result?: { isEnded?: boolean }) => {
-        finish(!result || result.isEnded !== false);
-      };
-      const onError = (error: unknown) => {
-        console.error('[CatWorld] Rewarded ad failed', error);
-        finish(false);
-      };
-      const show = () => {
-        ad.show().catch(() => {
-          if (settled) return;
-          ad.load().then(() => ad.show()).catch(onError);
+      this.pending = resolve;
+      ad.show().catch(() => {
+        if (!this.pending) return;
+        ad.load().then(() => ad.show()).catch(error => {
+          console.error('[CatWorld] Rewarded ad failed', error);
+          this.finish(false);
         });
-      };
-
-      ad.onClose(onClose);
-      ad.onError(onError);
-      show();
+      });
     });
   }
 
-  private getRewardedAd(wxApi: WechatApi) {
+  private getRewardedAd(tapApi: TapApi) {
     if (this.rewardedAd) return this.rewardedAd;
     try {
-      this.rewardedAd = wxApi.createRewardedVideoAd({ adUnitId: this.adUnitId });
+      this.rewardedAd = tapApi.createRewardedVideoAd({ adUnitId: this.adUnitId });
+      this.bindListeners(this.rewardedAd);
       return this.rewardedAd;
     } catch (error) {
       console.error('[CatWorld] Failed to create rewarded ad', error);
@@ -82,10 +90,25 @@ export class RewardedAdService {
     }
   }
 
-  private getWechatApi() {
-    const runtime = typeof globalThis === 'undefined'
-      ? null
-      : globalThis as typeof globalThis & { wx?: WechatApi };
-    return runtime?.wx || null;
+  private bindListeners(ad: TapRewardedVideoAd) {
+    if (this.listenersBound) return;
+    this.listenersBound = true;
+    ad.onLoad(() => {
+      console.log('[CatWorld] 激励视频广告加载成功');
+    });
+    ad.onError(error => {
+      console.error('[CatWorld] Rewarded ad failed', error);
+      this.finish(false);
+    });
+    ad.onClose(result => {
+      this.finish(!!result && result.isEnded === true);
+    });
+  }
+
+  private finish(completed: boolean) {
+    const resolve = this.pending;
+    if (!resolve) return;
+    this.pending = null;
+    resolve({ completed, simulated: false });
   }
 }

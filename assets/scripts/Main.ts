@@ -17,7 +17,7 @@ import { LoadingScreen } from './LoadingScreen';
 import { AudioManager } from './AudioManager';
 import { LeaderboardService } from './LeaderboardService';
 import { RankScreen } from './RankScreen';
-import { REWARDED_AD_ENABLED, RewardedAdService } from './RewardedAdService';
+import { REWARDED_AD_ENABLED, RewardedAdService, TAP_REWARDED_AD_UNIT_ID } from './RewardedAdService';
 import { Toast } from './Toast';
 import { MomentScreen } from './MomentScreen';
 import { AdventureScreen, THEME_INFO } from './AdventureScreen';
@@ -41,7 +41,7 @@ const CHALLENGE_REPEAT_COIN_REWARD = 80;
 
 @ccclass('Main')
 export class Main extends Component {
-  @property({ tooltip: '微信小游戏激励视频广告位 ID；编辑器预览会自动模拟广告完成' })
+  @property({ tooltip: '微信小游戏激励视频广告位 ID；H5 / 预览使用 TapTap 广告位 1067058' })
   rewardedAdUnitId = '';
 
   private static instance: Main | null = null;
@@ -130,7 +130,9 @@ export class Main extends Component {
     this.audio = new AudioManager(this.node);
     // 音频延迟加载，不阻塞首屏
     // this.audio.load();
-    this.rewardedAd = new RewardedAdService(this.rewardedAdUnitId);
+    this.rewardedAd = new RewardedAdService(
+      REWARDED_AD_ENABLED ? TAP_REWARDED_AD_UNIT_ID : this.rewardedAdUnitId,
+    );
 
     // 加载页先亮起来，进度条走完前必须把首页和当前关卡都准备好。
     this.loadingScreen = new LoadingScreen(this.root, this.assets, {
@@ -139,7 +141,7 @@ export class Main extends Component {
     this.loadingScreen.loadAndCreate(() => this.beginPrimaryLoad());
   }
 
-  // 激励视频入口总控：REWARDED_AD_ENABLED 关闭时注入 undefined，
+  // 激励视频入口总控：preview / H5 开放 TapTap 广告；微信渠道关闭时注入 undefined，
   // 结算复活/双倍、首页金币广告、商店广告领道具会各自隐藏入口。
   private buildWatchAdHandler() {
     if (!REWARDED_AD_ENABLED) return undefined;
