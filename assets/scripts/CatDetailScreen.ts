@@ -7,6 +7,9 @@ import {
   Sprite,
   UITransform,
   UIOpacity,
+  Tween,
+  Vec3,
+  tween,
   view,
 } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
@@ -15,12 +18,14 @@ import { SettlementButton } from './SettlementButton';
 import { Toast } from './Toast';
 import {
   CAT_DEFINITIONS,
+  CAT_MILESTONES,
   formatCatSkillCooldown,
+  getCatSkillChargeRequired,
   getCatDefinition,
   getCatUpgradeCost,
   MAX_CAT_LEVEL,
 } from './GameContent';
-import { CatId, CatInteraction, CatProgress } from './PlayerTypes';
+import { CatId, CatInteraction, CatProgress, CatUpgradeResult } from './PlayerTypes';
 
 export interface CatDetailScreenOptions {
   onPlaySound: (effect: AudioEffect) => void;
@@ -28,7 +33,7 @@ export interface CatDetailScreenOptions {
   getCat: (id: CatId) => CatProgress;
   getEquippedCat: () => CatId | null;
   onInteract: (id: CatId, interaction: CatInteraction) => { ok: boolean; message: string };
-  onUpgrade: (id: CatId) => { ok: boolean; message: string };
+  onUpgrade: (id: CatId) => CatUpgradeResult;
   onEquip: (id: CatId) => { ok: boolean; message: string };
   onReturnCollection: () => void;
 }
@@ -81,6 +86,7 @@ export class CatDetailScreen {
   private equipLabel: Label | null = null;
   private equipOpacity: UIOpacity | null = null;
   private interactionViews: InteractionView[] = [];
+  private idleAnimationStarted = false;
   private active = false;
 
   constructor(
@@ -125,6 +131,7 @@ export class CatDetailScreen {
 
   destroy() {
     this.interactionViews.length = 0;
+    if (this.portrait) Tween.stopAllByTarget(this.portrait);
     this.statCards = null;
     this.detailUI?.destroy();
     this.detailUI = null;
@@ -214,6 +221,7 @@ export class CatDetailScreen {
         const result = this.options.onUpgrade(this.catId);
         this.toast(result.message);
         this.refresh();
+        if (result.ok) this.playUpgradeAnimation();
       },
     });
     upgradeNode.setPosition(-156, -430);
@@ -364,6 +372,7 @@ export class CatDetailScreen {
       if (frame && sprite) sprite.spriteFrame = frame;
       const opacity = this.portrait.getComponent(UIOpacity) || this.portrait.addComponent(UIOpacity);
       opacity.opacity = unlocked ? 255 : 110;
+      this.refreshIdleAnimation(unlocked, progress?.level ?? 1);
     }
     if (this.nameLabel) this.nameLabel.string = definition.name;
     if (this.rarityPill && this.rarityLabel) {
@@ -394,7 +403,13 @@ export class CatDetailScreen {
     }
 
     if (this.skillDescLabel) {
-      this.skillDescLabel.string = unlocked ? definition.skill : definition.unlockHint;
+      if (!unlocked) {
+        this.skillDescLabel.string = definition.unlockHint;
+      } else {
+        const required = getCatSkillChargeRequired(this.catId, progress.level);
+        const skillText = definition.skill.replace(/\d+/, `${required}`);
+        this.skillDescLabel.string = `${skillText}\n${progress.level >= 5 ? 'Lv5 充能减负已生效' : '升级到 Lv5 可减少 1 次充能'}`;
+      }
     }
     if (this.skillCooldownLabel) {
       this.skillCooldownLabel.string = unlocked ? `冷却 ${formatCatSkillCooldown(progress.level)}` : '';
@@ -403,7 +418,16 @@ export class CatDetailScreen {
       const opacity = this.skillIcon.getComponent(UIOpacity) || this.skillIcon.addComponent(UIOpacity);
       opacity.opacity = unlocked ? 255 : 120;
     }
-    if (this.unlockLabel) this.unlockLabel.string = unlocked ? '' : definition.unlockHint;
+    if (this.unlockLabel) {
+      if (!unlocked) {
+        this.unlockLabel.string = definition.unlockHint;
+      } else {
+        const next = CAT_MILESTONES.find(milestone => milestone.level > progress.level);
+        this.unlockLabel.string = next
+          ? `成长里程碑 · Lv.${next.level} ${next.title}`
+          : '成长里程碑全部完成 · 专属头像框与称号已收藏';
+      }
+    }
 
     this.interactionViews.forEach(viewData => {
       const used = interactionCounts[viewData.id] >= 1;
@@ -439,6 +463,40 @@ export class CatDetailScreen {
       this.equipLabel.string = !unlocked ? '解锁后可装备' : equipped ? '当前装备' : '装备出战';
       this.equipOpacity.opacity = unlocked && !equipped ? 255 : 160;
     }
+  }
+
+  private refreshIdleAnimation(unlocked: boolean, level: number) {
+    if (!this.portrait) return;
+    if (!unlocked || level < 3) {
+      Tween.stopAllByTarget(this.portrait);
+      this.portrait.setScale(new Vec3(1, 1, 1));
+      this.idleAnimationStarted = false;
+      return;
+    }
+    if (this.idleAnimationStarted) return;
+    this.idleAnimationStarted = true;
+    tween(this.portrait)
+      .repeatForever(
+        tween()
+          .to(1.15, { scale: new Vec3(1.035, 0.965, 1) }, { easing: 'sineInOut' })
+          .to(1.15, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
+  }
+
+  private playUpgradeAnimation() {
+    if (!this.portrait) return;
+    Tween.stopAllByTarget(this.portrait);
+    this.idleAnimationStarted = false;
+    this.portrait.setScale(new Vec3(0.86, 0.86, 1));
+    tween(this.portrait)
+      .to(0.28, { scale: new Vec3(1.14, 1.14, 1) }, { easing: 'backOut' })
+      .to(0.18, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
+      .call(() => {
+        const progress = this.options.getCat(this.catId);
+        this.refreshIdleAnimation(progress.unlocked, progress.level);
+      })
+      .start();
   }
 
   private buildBackButton(parent: Node, x: number, y: number, callback: () => void) {

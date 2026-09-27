@@ -9,7 +9,9 @@ import { buildMomentSnapshots, MomentSnapshot } from './MomentContent';
 import {
   DAILY_CHEST_REWARD,
   DAILY_TASK_DEFINITIONS,
+  CAT_MILESTONES,
   getCatDefinition,
+  getCatSkillChargeRequired,
   getCatSkillConfig,
   getCatSkillCooldownMs,
   getCatUpgradeCost,
@@ -27,6 +29,9 @@ import {
   CatJourneySnapshot,
   CatJourneyState,
   CatTrialState,
+  CatMilestoneSnapshot,
+  CatUpgradeResult,
+  CatSkillFireResult,
   CatInteraction,
   TownDailyClaimResult,
   TownDailySnapshot,
@@ -170,10 +175,10 @@ export class PlayerStore {
       const serialized = sys.localStorage.getItem(this.storageKey);
       if (serialized) {
         const parsed = JSON.parse(serialized) as SavedPlayerState | null;
-        if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4)) {
+        if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5)) {
           console.error('[CatWorld] Invalid player save, reset to defaults');
         } else {
-          // v1/v2 旧档走同一套逐字段校验，新增字段保持默认值，写回时升级为 v3
+          // v1/v2 旧档走同一套逐字段校验，新增字段保持默认值，写回时升级为 v5
           this.state = this.normalize(parsed);
         }
       }
@@ -597,6 +602,18 @@ export class PlayerStore {
     this.save();
   }
 
+  getCatMilestones(id: CatId): CatMilestoneSnapshot[] {
+    const cat = this.state.cats[id];
+    const claimed = this.state.claimedCatMilestones[id] || [];
+    return CAT_MILESTONES.map(milestone => ({
+      level: milestone.level,
+      title: milestone.title,
+      description: milestone.description,
+      unlocked: !!cat?.unlocked && (cat.level >= milestone.level),
+      claimed: claimed.indexOf(milestone.level) >= 0,
+    }));
+  }
+
   // —— 猫咪技能：充能 + 冷却 ——
   // 充能（收集元素/完成三消）在关卡内累计并持久化；充能完成后由玩家手动触发。
   // 升级猫咪缩短冷却时间（getCatSkillCooldownMs：40 分钟 → 30 分钟）。
@@ -605,7 +622,7 @@ export class PlayerStore {
     if (this.isCatTrialActive() && id === this.state.catTrial.catId) {
       return {
         readyAt: 0,
-        charge: getCatSkillConfig(id).chargeRequired,
+        charge: getCatSkillChargeRequired(id, cat?.level ?? 1),
         level: cat?.level ?? 1,
       };
     }
@@ -616,13 +633,21 @@ export class PlayerStore {
     };
   }
 
-  fireCatSkill(id: CatId): number {
+  fireCatSkill(id: CatId): CatSkillFireResult {
     const cat = this.state.cats[id];
-    if (!cat) return Date.now();
+    if (!cat) return { readyAt: Date.now(), giftCoins: 0 };
     cat.skillReadyAt = Date.now() + getCatSkillCooldownMs(cat.level);
     cat.skillCharge = 0;
+    let giftCoins = 0;
+    const today = this.todayKey();
+    if (cat.level >= 15 && cat.skillGiftDate !== today) {
+      giftCoins = 20;
+      cat.skillGiftDate = today;
+      this.state.coins += giftCoins;
+      this.analytics?.track('cat_skill_gift', { cat_id: id, coins: giftCoins });
+    }
     this.save();
-    return cat.skillReadyAt;
+    return { readyAt: cat.skillReadyAt, giftCoins };
   }
 
   setCatSkillCharge(id: CatId, charge: number) {
@@ -1140,10 +1165,15 @@ export class PlayerStore {
     if (interaction === 'pet') this.completeTownDailyTask('pet_cat');
     this.save();
     const catName = getCatDefinition(id).name;
-    return { ok: true, message: interaction === 'pet' ? `${catName}开心地蹭了蹭你` : '互动成功，好感度提升啦' };
+    const message = interaction === 'pet'
+      ? cat.level >= 8
+        ? `${catName}：今天也要把快乐分给你呀！`
+        : `${catName}开心地蹭了蹭你`
+      : '互动成功，好感度提升啦';
+    return { ok: true, message };
   }
 
-  upgradeCat(id: CatId) {
+  upgradeCat(id: CatId): CatUpgradeResult {
     const cat = this.state.cats[id];
     if (!cat || !cat.unlocked) return { ok: false, message: '这只猫咪还没有解锁' };
     if (cat.level >= MAX_CAT_LEVEL) return { ok: false, message: '猫咪已经达到最高等级' };
@@ -1151,8 +1181,33 @@ export class PlayerStore {
     if (!this.spendCoins(cost)) return { ok: false, message: `升级需要 ${cost} 金币` };
     cat.level += 1;
     cat.experience = 0;
+    const milestones = CAT_MILESTONES
+      .filter(milestone => milestone.level === cat.level)
+      .filter(milestone => (this.state.claimedCatMilestones[id] || []).indexOf(milestone.level) < 0);
+    const milestoneLevels = this.state.claimedCatMilestones[id] || (this.state.claimedCatMilestones[id] = []);
+    milestones.forEach(milestone => {
+      milestoneLevels.push(milestone.level);
+      if (this.state.unlockedBadges.indexOf(`${milestone.badgeId}_${id}`) < 0) {
+        this.state.unlockedBadges.push(`${milestone.badgeId}_${id}`);
+      }
+    });
     this.save();
-    return { ok: true, message: `恭喜，${getCatDefinition(id).name}升到 Lv.${cat.level}` };
+    if (milestones.length > 0) {
+      this.analytics?.track('cat_milestone_unlock', {
+        cat_id: id,
+        level: cat.level,
+        milestone_levels: milestones.map(milestone => milestone.level).join(','),
+      });
+    }
+    const milestoneText = milestones.length > 0
+      ? ` · 解锁：${milestones.map(milestone => milestone.title).join('、')}`
+      : '';
+    return {
+      ok: true,
+      message: `恭喜，${getCatDefinition(id).name}升到 Lv.${cat.level}${milestoneText}`,
+      newLevel: cat.level,
+      milestoneLevels: milestones.map(milestone => milestone.level),
+    };
   }
 
   resetDailyState(shouldSave = true) {
@@ -1226,10 +1281,11 @@ export class PlayerStore {
         interactionCounts: this.emptyInteractionCounts(),
         skillReadyAt: 0,
         skillCharge: 0,
+        skillGiftDate: '',
       };
     });
     return {
-      version: 4,
+      version: 5,
       userName: '',
       userId: '',
       coins: 100,
@@ -1243,6 +1299,7 @@ export class PlayerStore {
       catTrial: this.createCatTrialState(),
       catJourney: this.createCatJourneyState(),
       unlockedBadges: [],
+      claimedCatMilestones: this.createClaimedCatMilestones(),
       equippedCat: null,
       gamePetPosition: { side: 'right', y: 220 },
       inventory: { hammer: 0, glove: 0, dice: 0, extra_slot: 0 },
@@ -1346,6 +1403,14 @@ export class PlayerStore {
       claimedDays: [],
       completed: false,
     };
+  }
+
+  private createClaimedCatMilestones(): Record<CatId, number[]> {
+    const milestones = {} as Record<CatId, number[]>;
+    (['orange', 'white', 'black', 'ragdoll', 'aurora'] as CatId[]).forEach(id => {
+      milestones[id] = [];
+    });
+    return milestones;
   }
 
   private createCatTrialState(): CatTrialState {
@@ -1453,7 +1518,7 @@ export class PlayerStore {
 
   private normalize(value: SavedPlayerState): PlayerState {
     const state = this.createDefaultState();
-    if (!value || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4)) return state;
+    if (!value || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5)) return state;
     state.userName = typeof value.userName === 'string' ? value.userName.trim() : '';
     state.userId = typeof value.userId === 'string' ? value.userId.trim() : '';
     state.coins = this.nonNegativeInteger(value.coins, state.coins);
@@ -1509,6 +1574,7 @@ export class PlayerStore {
         },
         skillReadyAt: Math.max(0, Math.floor(this.safeNumber(saved.skillReadyAt, 0))),
         skillCharge: this.nonNegativeInteger(saved.skillCharge, 0),
+        skillGiftDate: typeof saved.skillGiftDate === 'string' ? saved.skillGiftDate : '',
       };
     });
     const savedCatJourney = value.catJourney;
@@ -1536,6 +1602,15 @@ export class PlayerStore {
         .filter(badge => typeof badge === 'string' && badge.length > 0)
         .slice(0, 100);
     }
+    (Object.keys(state.claimedCatMilestones) as CatId[]).forEach(id => {
+      const savedMilestones = value.claimedCatMilestones?.[id];
+      if (!Array.isArray(savedMilestones)) return;
+      state.claimedCatMilestones[id] = savedMilestones
+        .filter(level => CAT_MILESTONES.some(milestone => milestone.level === level))
+        .map(level => Math.floor(level))
+        .filter((level, index, levels) => levels.indexOf(level) === index)
+        .sort((a, b) => a - b);
+    });
     const savedCatTrial = value.catTrial;
     if (savedCatTrial && typeof savedCatTrial === 'object') {
       const catId = savedCatTrial.catId === 'orange' ? 'orange' : 'orange';

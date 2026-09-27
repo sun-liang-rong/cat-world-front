@@ -2,6 +2,7 @@ import { sys } from 'cc';
 import { PlayerStore } from '../assets/scripts/PlayerStore';
 import { BUILDING_DEFINITIONS, isCampaignComplete, MAX_MAIN_LEVEL, themeIndexForLevel } from '../assets/scripts/TownContent';
 import { LevelGenerator } from '../assets/scripts/level/LevelGenerator';
+import { getCatSkillChargeRequired } from '../assets/scripts/GameContent';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`[PlayerStore] ${message}`);
@@ -222,6 +223,32 @@ function testCatTrialAndChallengeGate() {
   assert(journey.getCatJourneySnapshot().currentDay === 2, 'journey should advance to day two after claiming');
 }
 
+function testCatMilestonesAndSkillGifts() {
+  const store = new PlayerStore('player-store-cat-milestones');
+  store.load();
+  store.addReward({ stars: 60, coins: 20000 });
+  for (let index = 0; index < 20; index += 1) assert(store.lightBuildingCell('cat_house').ok, 'cat house should complete for milestone coverage');
+  assert(store.getCat('orange').unlocked, 'orange cat should be unlocked for milestone coverage');
+
+  const levelTwo = store.upgradeCat('orange');
+  assert(levelTwo.ok && levelTwo.newLevel === 2, 'cat upgrade should advance to level two');
+  assert(levelTwo.milestoneLevels?.indexOf(2) >= 0, 'level two should claim the upgrade animation milestone');
+  for (let index = 0; index < 3; index += 1) assert(store.upgradeCat('orange').ok, 'cat should upgrade through level five');
+  assert(getCatSkillChargeRequired('orange', 4) === 20, 'level four should keep the original orange charge requirement');
+  assert(getCatSkillChargeRequired('orange', 5) === 19, 'level five should reduce orange charge requirement by one');
+  assert(store.getCatMilestones('orange').find(milestone => milestone.level === 5)?.claimed, 'level five milestone should be claimed');
+
+  while (store.getCat('orange').level < 15) assert(store.upgradeCat('orange').ok, 'cat should upgrade through the daily gift milestone');
+  const beforeGift = store.getCoins();
+  const firstFire = store.fireCatSkill('orange');
+  assert(firstFire.giftCoins === 20 && store.getCoins() === beforeGift + 20, 'level fifteen first skill use should grant the daily cat gift');
+  const secondFire = store.fireCatSkill('orange');
+  assert(secondFire.giftCoins === 0, 'cat gift should not repeat on the same day');
+  const reloaded = new PlayerStore('player-store-cat-milestones');
+  reloaded.load();
+  assert(reloaded.getCat('orange').skillGiftDate.length > 0, 'cat gift date should persist');
+}
+
 function testEndlessProgress() {
   const store = new PlayerStore('player-store-endless');
   store.load();
@@ -381,8 +408,9 @@ testShopLimits();
 testDailyTasksAndChest();
 testCatInteractionsAndChallengeReward();
 testCatTrialAndChallengeGate();
+testCatMilestonesAndSkillGifts();
 testEndlessProgress();
 testAdFunnelAndRunFields();
 testSaveNormalization();
 testLegacyBuildingSave();
-  process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, collect hint, late themes, collect schedule, shop, daily tasks, cats, cat trial, challenge gate/marker, endless, ad funnel, town daily, normalization, legacy building save.\n');
+  process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, collect hint, late themes, collect schedule, shop, daily tasks, cats, cat trial, challenge gate/marker, cat milestones, endless, ad funnel, town daily, normalization, legacy building save.\n');

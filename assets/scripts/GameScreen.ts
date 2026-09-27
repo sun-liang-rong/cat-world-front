@@ -19,7 +19,7 @@ import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } fr
 import { AudioEffect } from './AudioManager';
 import { BoardTutorial } from './BoardTutorial';
 import { ComboTracker } from './ComboTracker';
-import { getCatDefinition, getCatSkillConfig } from './GameContent';
+import { getCatDefinition, getCatSkillChargeRequired, getCatSkillConfig } from './GameContent';
 import { SettlementPopup } from './SettlementPopup';
 import { Toast } from './Toast';
 import type { RewardedAdResult } from './RewardedAdService';
@@ -202,7 +202,7 @@ export interface GameScreenOptions {
   getGamePetPosition: () => GamePetPosition;
   onGamePetPositionChanged: (position: GamePetPosition) => void;
   getCatSkillState: (id: CatId) => CatSkillState;
-  onCatSkillFired: (id: CatId) => number;
+  onCatSkillFired: (id: CatId) => { readyAt: number; giftCoins: number };
   onCatSkillCharge: (id: CatId, charge: number) => void;
   onCatSkillItem: (id: ItemId) => void;
   onPlaySound: (effect: AudioEffect) => void;
@@ -1006,7 +1006,7 @@ export class GameScreen {
 
     const definition = getCatDefinition(catId);
     if (portraitSprite) portraitSprite.color = Color.WHITE;
-    const required = config.chargeRequired;
+    const required = getCatSkillChargeRequired(catId, skill.level);
     const charge = Math.min(required, Math.max(0, skill.charge));
     const cooldownRemaining = Math.max(0, skill.readyAt - Date.now());
     const chargeReady = charge >= required;
@@ -2760,7 +2760,8 @@ export class GameScreen {
     const skill = this.catSkill;
     const config = this.catSkillConfig;
     if (!skill || !config || this.gameOver || config.chargeType !== type) return;
-    skill.charge = Math.min(config.chargeRequired, skill.charge + 1);
+    const required = getCatSkillChargeRequired(this.equippedCatId!, skill.level);
+    skill.charge = Math.min(required, skill.charge + 1);
     this.refreshCatSkillPanel();
   }
 
@@ -2788,8 +2789,9 @@ export class GameScreen {
       this.toast('本局技能已经发动过啦');
       return;
     }
-    if (this.catSkill.charge < this.catSkillConfig.chargeRequired) {
-      this.toast(`技能还需要充能 ${this.catSkillConfig.chargeRequired - this.catSkill.charge} 次`);
+    const required = getCatSkillChargeRequired(this.equippedCatId, this.catSkill.level);
+    if (this.catSkill.charge < required) {
+      this.toast(`技能还需要充能 ${required - this.catSkill.charge} 次`);
       return;
     }
     if (Date.now() < this.catSkill.readyAt) {
@@ -2823,8 +2825,14 @@ export class GameScreen {
     const catId = this.equippedCatId;
     const config = this.catSkillConfig;
     if (!catId || !config || this.gameOver) return;
-    this.catSkill!.readyAt = this.options.onCatSkillFired(catId);
+    const fireResult = this.options.onCatSkillFired(catId);
+    this.catSkill!.readyAt = fireResult.readyAt;
     const catName = getCatDefinition(catId).name;
+    if (fireResult.giftCoins > 0) {
+      this.options.onCoinsChanged(this.options.getCoins());
+      this.toast(`猫咪谢礼：金币 +${fireResult.giftCoins}`);
+    }
+    if ((this.catSkill?.level ?? 1) >= 10) this.toast('强化技能发动，星光更亮啦！');
     this.options.onPlaySound('match');
     switch (config.effect) {
       case 'clear_tray':
@@ -2853,7 +2861,13 @@ export class GameScreen {
     if (firstPick) {
       this.catSkillUsed = true;
       skill.charge = 0;
-      skill.readyAt = this.options.onCatSkillFired(catId);
+      const fireResult = this.options.onCatSkillFired(catId);
+      skill.readyAt = fireResult.readyAt;
+      if (fireResult.giftCoins > 0) {
+        this.options.onCoinsChanged(this.options.getCoins());
+        this.toast(`猫咪谢礼：金币 +${fireResult.giftCoins}`);
+      }
+      if ((skill.level ?? 1) >= 10) this.toast('强化技能发动，星光更亮啦！');
       this.options.onPlaySound('match');
     }
     this.catSkillPicksLeft -= 1;

@@ -15,6 +15,30 @@ export function getCatUpgradeCost(level: number) {
   );
 }
 
+export interface CatMilestoneDefinition {
+  level: number;
+  title: string;
+  description: string;
+  badgeId: string;
+}
+
+export const CAT_MILESTONES: CatMilestoneDefinition[] = [
+  { level: 2, title: '升级动画', description: '升级时会触发专属成长动画。', badgeId: 'cat_milestone_2' },
+  { level: 3, title: '专属待机动作', description: '猫咪详情页解锁专属待机呼吸动作。', badgeId: 'cat_milestone_3' },
+  { level: 5, title: '技能充能减负', description: '技能充能需求降低 1 次，最低保留 1 次。', badgeId: 'cat_milestone_5' },
+  { level: 8, title: '专属互动对白', description: '每日互动时会听到猫咪的新回应。', badgeId: 'cat_milestone_8' },
+  { level: 10, title: '技能特效升级', description: '技能发动时追加强化星光反馈。', badgeId: 'cat_milestone_10' },
+  { level: 12, title: '小镇专属装饰', description: '猫咪会为小镇带来专属装饰标记。', badgeId: 'cat_milestone_12' },
+  { level: 15, title: '猫咪谢礼', description: '每天首次发动技能可获得金币谢礼。', badgeId: 'cat_milestone_15' },
+  { level: 18, title: '专属相册照片', description: '猫咪相册解锁一张专属照片。', badgeId: 'cat_milestone_18' },
+  { level: 20, title: '头像框与称号', description: '满级获得专属头像框与称号。', badgeId: 'cat_milestone_20' },
+];
+
+export function getCatSkillChargeRequired(id: CatId, level: number) {
+  const base = getCatSkillConfig(id).chargeRequired;
+  return Math.max(1, base - (Math.max(1, Math.floor(level)) >= 5 ? 1 : 0));
+}
+
 export function getCatSkillCooldownMs(level: number) {
   const currentLevel = Math.min(MAX_CAT_LEVEL, Math.max(1, Math.floor(level)));
   const progress = (currentLevel - 1) / (MAX_CAT_LEVEL - 1);

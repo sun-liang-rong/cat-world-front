@@ -92,6 +92,26 @@ export interface CatTrialState {
   started: boolean;
 }
 
+export interface CatMilestoneSnapshot {
+  level: number;
+  title: string;
+  description: string;
+  unlocked: boolean;
+  claimed: boolean;
+}
+
+export interface CatUpgradeResult {
+  ok: boolean;
+  message: string;
+  newLevel?: number;
+  milestoneLevels?: number[];
+}
+
+export interface CatSkillFireResult {
+  readyAt: number;
+  giftCoins: number;
+}
+
 export interface CatProgress {
   unlocked: boolean;
   level: number;
@@ -101,6 +121,8 @@ export interface CatProgress {
   interactionCounts: Record<CatInteraction, number>;
   skillReadyAt: number;
   skillCharge: number;
+  /** Lv15 里程碑：当天首次发动技能是否已领取谢礼。 */
+  skillGiftDate: string;
 }
 
 export interface DailyTaskProgress {
@@ -175,7 +197,7 @@ export interface GamePetPosition {
 }
 
 export interface PlayerState {
-  version: 4;
+  version: 5;
   /** 后端生成的展示昵称，加载页拿到后写入本地 */
   userName: string;
   /** 后端生成的用户 ID，排行榜上报和查询都用它 */
@@ -198,6 +220,8 @@ export interface PlayerState {
   townDaily: TownDailyState;
   /** 仅记录非数值的收藏徽章，不参与经济计算。 */
   unlockedBadges: string[];
+  /** 每只猫咪已触发过的升级里程碑等级。 */
+  claimedCatMilestones: Record<CatId, number[]>;
   equippedCat: CatId | null;
   /** 关卡宠物浮窗的本地位置偏好，不参与任何玩法计算 */
   gamePetPosition: GamePetPosition;

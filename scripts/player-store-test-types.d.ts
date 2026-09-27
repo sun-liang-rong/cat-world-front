@@ -1,5 +1,8 @@
 declare module 'cc' {
   export const sys: {
+    platform: number;
+    isBrowser: boolean;
+    Platform: { WECHAT_GAME: number };
     localStorage: {
       getItem(key: string): string | null;
       setItem(key: string, value: string): void;
@@ -50,3 +53,11 @@ declare module 'cc' {
 declare const process: {
   stdout: { write(value: string): void };
 };
+
+
+declare module 'cc/env' {
+  export const HTML5: boolean;
+  export const MINIGAME: boolean;
+  export const PREVIEW: boolean;
+  export const WECHAT: boolean;
+}

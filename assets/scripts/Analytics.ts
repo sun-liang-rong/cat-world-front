@@ -53,7 +53,9 @@ export type TrackEventName =
   | 'journey_complete'
   | 'town_daily_show'
   | 'town_daily_complete'
-  | 'town_daily_reward_claim';
+  | 'town_daily_reward_claim'
+  | 'cat_milestone_unlock'
+  | 'cat_skill_gift';
 
 export type TrackProps = Record<string, string | number | boolean | string[] | null>;
 
