@@ -28,6 +28,10 @@ import {
   CatJourneyState,
   CatTrialState,
   CatInteraction,
+  TownDailyClaimResult,
+  TownDailySnapshot,
+  TownDailyState,
+  TownDailyTaskId,
   DailyState,
   DailyTaskId,
   EndlessProgress,
@@ -51,6 +55,7 @@ import {
   CELL_STAR_COST,
   getBuildingDefinition,
   LEVELS_PER_THEME,
+  isCampaignComplete,
 } from './TownContent';
 
 // 全部玩法进度只写本机；排行榜累计星星由 LeaderboardService 单独上报微信，不经过这里。
@@ -63,6 +68,58 @@ const DAILY_SHOP_ITEM_IDS: ItemId[] = ['hammer', 'glove', 'dice', 'extra_slot'];
 const MAX_RECENT_RUNS = 10;
 // 主题 ↔ 建筑 ↔ 猫咪按顺序一一对应：第 N 栋建筑装饰完成解锁第 N 只猫咪
 const BUILDING_CATS: CatId[] = ['orange', 'white', 'black', 'ragdoll', 'aurora'];
+
+const TOWN_DAILY_TASKS: Record<TownDailyTaskId, {
+  title: string;
+  description: string;
+  actionLabel: string;
+  rewardText: string;
+  reward: RewardBundle;
+}> = {
+  pet_cat: {
+    title: '摸摸猫咪',
+    description: '给一只猫咪轻轻摸摸头，今天也要好好相处。',
+    actionLabel: '去互动',
+    rewardText: '金币 ×10',
+    reward: { coins: 10 },
+  },
+  complete_level: {
+    title: '完成一关主线',
+    description: '完成今天的一局主线闯关，为小镇带回新的星星。',
+    actionLabel: '去闯关',
+    rewardText: '金币 ×25',
+    reward: { coins: 25 },
+  },
+  light_cell: {
+    title: '点亮建设格',
+    description: '用星星点亮小镇的一格，让家园每天都有新变化。',
+    actionLabel: '去建设',
+    rewardText: '金币 ×15',
+    reward: { coins: 15 },
+  },
+  enter_building: {
+    title: '逛逛小镇建筑',
+    description: '点击一个已解锁的建筑，看看今天的小镇。',
+    actionLabel: '去逛逛',
+    rewardText: '金币 ×10',
+    reward: { coins: 10 },
+  },
+  view_dialogue: {
+    title: '听听猫咪对白',
+    description: '点击建筑里的猫咪对白，听听它今天想说什么。',
+    actionLabel: '听对白',
+    rewardText: '金币 ×10',
+    reward: { coins: 10 },
+  },
+};
+
+const TOWN_DAILY_TASK_ORDER: TownDailyTaskId[] = [
+  'pet_cat',
+  'complete_level',
+  'light_cell',
+  'enter_building',
+  'view_dialogue',
+];
 
 const CAT_JOURNEY_REWARDS: Array<{ text: string; reward: RewardBundle; badgeId?: string }> = [
   { text: '金币 ×50', reward: { coins: 50 } },
@@ -113,7 +170,7 @@ export class PlayerStore {
       const serialized = sys.localStorage.getItem(this.storageKey);
       if (serialized) {
         const parsed = JSON.parse(serialized) as SavedPlayerState | null;
-        if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3)) {
+        if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4)) {
           console.error('[CatWorld] Invalid player save, reset to defaults');
         } else {
           // v1/v2 旧档走同一套逐字段校验，新增字段保持默认值，写回时升级为 v3
@@ -210,6 +267,11 @@ export class PlayerStore {
   }
 
   // 任意一栋建筑推进过至少一个阶段（或点亮过任意一格），即视为建设过小镇
+  hasStartedCatHouse() {
+    const house = this.state.buildings.cat_house;
+    return this.state.buildStage > 0 || (house?.subProgress ?? 0) > 0;
+  }
+
   hasBuiltTown() {
     if (this.state.buildStage > 0) return true;
     return BUILDING_DEFINITIONS.some(definition => {
@@ -450,6 +512,7 @@ export class PlayerStore {
       this.state.buildings[id].stage = stage + 1;
     }
     this.syncUnlocks(false);
+    this.completeTownDailyTask('light_cell');
     this.save();
     this.analytics?.track('building_light', {
       building_id: id,
@@ -567,6 +630,86 @@ export class PlayerStore {
     if (!cat) return;
     cat.skillCharge = Math.max(0, Math.floor(Number.isFinite(charge) ? charge : 0));
     this.save();
+  }
+
+  getTownDailySnapshot(): TownDailySnapshot {
+    this.syncTownDailyState(true);
+    if (!this.hasStartedCatHouse()) {
+      return {
+        unlocked: false,
+        taskId: null,
+        title: '小镇每日生活',
+        description: '点亮流浪猫小屋第一格后，每天都会有一件小事等你回来。',
+        actionLabel: '建设后开启',
+        progress: 0,
+        target: 1,
+        completed: false,
+        claimed: false,
+        canClaim: false,
+        rewardText: '每日小礼物',
+      };
+    }
+    const taskId = this.state.townDaily.taskId;
+    const definition = TOWN_DAILY_TASKS[taskId];
+    return {
+      unlocked: true,
+      taskId,
+      title: definition.title,
+      description: definition.description,
+      actionLabel: this.state.townDaily.completed ? '领取奖励' : definition.actionLabel,
+      progress: this.state.townDaily.completed ? 1 : 0,
+      target: 1,
+      completed: this.state.townDaily.completed,
+      claimed: this.state.townDaily.claimed,
+      canClaim: this.state.townDaily.completed && !this.state.townDaily.claimed,
+      rewardText: definition.rewardText,
+    };
+  }
+
+  claimTownDaily(): TownDailyClaimResult {
+    this.syncTownDailyState(false);
+    if (!this.hasStartedCatHouse()) {
+      return { ok: false, message: '点亮流浪猫小屋第一格后开启小镇每日生活' };
+    }
+    const taskId = this.state.townDaily.taskId;
+    const definition = TOWN_DAILY_TASKS[taskId];
+    if (!this.state.townDaily.completed || this.state.townDaily.claimed) {
+      return { ok: false, message: this.state.townDaily.claimed ? '今天的小镇礼物已经领取过啦' : '先完成今天的小事吧' };
+    }
+    this.state.townDaily.claimed = true;
+    this.applyReward(definition.reward);
+    this.save();
+    this.analytics?.track('town_daily_reward_claim', {
+      task_id: taskId,
+      reward: definition.rewardText,
+    });
+    return { ok: true, message: `收到小镇礼物：${definition.rewardText}`, rewardText: definition.rewardText };
+  }
+
+  markTownBuildingEntered(id: BuildingId) {
+    if (!this.isBuildingUnlocked(id)) return false;
+    return this.completeTownDailyTask('enter_building');
+  }
+
+  markTownDialogueViewed(id: BuildingId) {
+    if (!this.isBuildingUnlocked(id)) return false;
+    return this.completeTownDailyTask('view_dialogue');
+  }
+
+  private completeTownDailyTask(taskId: TownDailyTaskId) {
+    this.syncTownDailyState(false);
+    if (
+      !this.hasStartedCatHouse()
+      || this.state.townDaily.taskId !== taskId
+      || this.state.townDaily.completed
+      || this.state.townDaily.claimed
+    ) {
+      return false;
+    }
+    this.state.townDaily.completed = true;
+    this.save();
+    this.analytics?.track('town_daily_complete', { task_id: taskId });
+    return true;
   }
 
   getCatJourneySnapshot(): CatJourneySnapshot {
@@ -952,7 +1095,10 @@ export class PlayerStore {
       this.state.recentRuns.push(sanitized);
       while (this.state.recentRuns.length > MAX_RECENT_RUNS) this.state.recentRuns.shift();
     }
-    if (run.won) this.grantWinExperience(run.level);
+    if (run.won) {
+      this.grantWinExperience(run.level);
+      this.completeTownDailyTask('complete_level');
+    }
     this.recordActivityRun(run);
     this.save();
   }
@@ -991,6 +1137,7 @@ export class PlayerStore {
     cat.affection = Math.min(MAX_AFFECTION, cat.affection + (interaction === 'pet' ? 1 : 2));
     cat.experience = Math.min(MAX_CAT_EXPERIENCE, cat.experience + 1);
     this.recordActivityInteraction();
+    if (interaction === 'pet') this.completeTownDailyTask('pet_cat');
     this.save();
     const catName = getCatDefinition(id).name;
     return { ok: true, message: interaction === 'pet' ? `${catName}开心地蹭了蹭你` : '互动成功，好感度提升啦' };
@@ -1020,6 +1167,7 @@ export class PlayerStore {
       changed = true;
     }
     changed = this.resetCatInteractionState(today) || changed;
+    changed = this.syncTownDailyState(false) || changed;
     if (changed && shouldSave) this.save();
     return changed;
   }
@@ -1081,7 +1229,7 @@ export class PlayerStore {
       };
     });
     return {
-      version: 3,
+      version: 4,
       userName: '',
       userId: '',
       coins: 100,
@@ -1100,6 +1248,7 @@ export class PlayerStore {
       inventory: { hammer: 0, glove: 0, dice: 0, extra_slot: 0 },
       buildings: this.createBuildingStates(),
       daily: this.createDailyState(this.todayKey()),
+      townDaily: this.createTownDailyState(),
       shop: this.createShopDailyState(this.todayKey()),
       activity: createActivityState(getCurrentActivity(), this.todayKey()),
       recentRuns: [],
@@ -1227,6 +1376,65 @@ export class PlayerStore {
     });
   }
 
+  private createTownDailyState(): TownDailyState {
+    return {
+      dateKey: '',
+      taskId: 'complete_level',
+      completed: false,
+      claimed: false,
+    };
+  }
+
+  private syncTownDailyState(shouldSave: boolean) {
+    if (!this.hasStartedCatHouse()) return false;
+    const today = this.todayKey();
+    if (this.state.townDaily.dateKey === today && TOWN_DAILY_TASK_ORDER.indexOf(this.state.townDaily.taskId) >= 0) {
+      return false;
+    }
+    const taskId = this.pickTownDailyTask(today);
+    this.state.townDaily = {
+      dateKey: today,
+      taskId,
+      completed: false,
+      claimed: false,
+    };
+    this.analytics?.track('town_daily_show', { task_id: taskId });
+    if (shouldSave) this.save();
+    return true;
+  }
+
+  private pickTownDailyTask(dateKey: string): TownDailyTaskId {
+    const candidates = TOWN_DAILY_TASK_ORDER.filter(id => this.isTownDailyTaskAvailable(id));
+    if (candidates.length === 0) return 'enter_building';
+    let hash = 0;
+    for (let index = 0; index < dateKey.length; index += 1) {
+      hash = (hash * 31 + dateKey.charCodeAt(index)) >>> 0;
+    }
+    return candidates[hash % candidates.length];
+  }
+
+  private isTownDailyTaskAvailable(id: TownDailyTaskId) {
+    switch (id) {
+      case 'pet_cat':
+        return (Object.keys(this.state.cats) as CatId[]).some(id => this.state.cats[id].unlocked);
+      case 'complete_level':
+        return !isCampaignComplete(this.state.level);
+      case 'light_cell':
+        return BUILDING_DEFINITIONS.some(definition => {
+          const stage = this.getBuildingStage(definition.id);
+          const unlocked = definition.id === 'cat_house' || this.state.buildings[definition.id]?.unlocked === true;
+          return unlocked && stage < definition.stageNames.length;
+        });
+      case 'enter_building':
+      case 'view_dialogue':
+        return BUILDING_DEFINITIONS.some(definition => (
+          definition.id === 'cat_house' || this.state.buildings[definition.id]?.unlocked === true
+        ));
+      default:
+        return false;
+    }
+  }
+
   private createDailyState(dateKey: string): DailyState {
     const tasks = {} as DailyState['tasks'];
     DAILY_TASK_DEFINITIONS.forEach(definition => {
@@ -1245,7 +1453,7 @@ export class PlayerStore {
 
   private normalize(value: SavedPlayerState): PlayerState {
     const state = this.createDefaultState();
-    if (!value || (value.version !== 1 && value.version !== 2 && value.version !== 3)) return state;
+    if (!value || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4)) return state;
     state.userName = typeof value.userName === 'string' ? value.userName.trim() : '';
     state.userId = typeof value.userId === 'string' ? value.userId.trim() : '';
     state.coins = this.nonNegativeInteger(value.coins, state.coins);
@@ -1377,6 +1585,18 @@ export class PlayerStore {
             : 0,
         };
       });
+    }
+    const savedTownDaily = value.townDaily;
+    if (savedTownDaily && typeof savedTownDaily === 'object' && savedTownDaily.dateKey === this.todayKey()) {
+      const taskId = TOWN_DAILY_TASK_ORDER.indexOf(savedTownDaily.taskId as TownDailyTaskId) >= 0
+        ? savedTownDaily.taskId as TownDailyTaskId
+        : state.townDaily.taskId;
+      state.townDaily = {
+        dateKey: savedTownDaily.dateKey,
+        taskId,
+        completed: savedTownDaily.completed === true,
+        claimed: savedTownDaily.claimed === true,
+      };
     }
     if (value.daily?.dateKey && value.daily.dateKey === this.todayKey()) {
       (Object.keys(state.daily.tasks) as DailyTaskId[]).forEach(id => {

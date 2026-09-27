@@ -104,6 +104,67 @@ function testDailyTasksAndChest() {
   assert(store.getItemCount('dice') === 1, 'daily chest should grant one dice');
 }
 
+function testTownDailyLife() {
+  const store = new PlayerStore('player-store-town-daily');
+  store.load();
+  assert(!store.getTownDailySnapshot().unlocked, 'town daily should stay locked before the first cat-house cell');
+
+  store.addReward({ stars: 3 });
+  assert(store.lightBuildingCell('cat_house').ok, 'first cat-house cell should unlock town daily life');
+  const snapshot = store.getTownDailySnapshot();
+  assert(snapshot.unlocked && snapshot.taskId !== null, 'town daily should expose a deterministic task after the first cell');
+  assert(!snapshot.claimed && !snapshot.canClaim, 'town daily should require completing the task before claiming');
+
+  switch (snapshot.taskId) {
+    case 'complete_level':
+      store.recordRun({
+        won: true,
+        level: 1,
+        remainingSlots: 2,
+        mistakes: 0,
+        elapsedMs: 1000,
+        decisionCount: 3,
+        nearFailureCount: 0,
+        collectedElements: 20,
+        matchCount: 3,
+      });
+      break;
+    case 'light_cell':
+      store.addReward({ stars: 3 });
+      assert(store.lightBuildingCell('cat_house').ok, 'town daily light-cell task should complete when another cell is lit');
+      break;
+    case 'enter_building':
+      assert(store.markTownBuildingEntered('cat_house'), 'enter-building task should complete from an unlocked building');
+      break;
+    case 'view_dialogue':
+      assert(store.markTownDialogueViewed('cat_house'), 'view-dialogue task should complete from an unlocked building');
+      break;
+    case 'pet_cat':
+      throw new Error('[PlayerStore] pet task should not be selected before a cat is unlocked');
+  }
+
+  const completed = store.getTownDailySnapshot();
+  assert(completed.completed && completed.canClaim, 'town daily should become claimable after its action');
+  const beforeClaim = store.getCoins();
+  const claimed = store.claimTownDaily();
+  assert(claimed.ok && store.getCoins() > beforeClaim, 'town daily claim should grant a small reward');
+  assert(!store.claimTownDaily().ok, 'town daily reward should be one-time per day');
+  const reloaded = new PlayerStore('player-store-town-daily');
+  reloaded.load();
+  assert(reloaded.getTownDailySnapshot().claimed, 'town daily claim should survive reload');
+
+  const catKey = 'player-store-town-daily-cat';
+  const catStore = new PlayerStore(catKey);
+  catStore.load();
+  catStore.addReward({ stars: 60 });
+  for (let index = 0; index < 20; index += 1) assert(catStore.lightBuildingCell('cat_house').ok, 'cat house should complete for pet-task coverage');
+  const catDaily = catStore.getTownDailySnapshot();
+  if (catDaily.taskId === 'pet_cat') {
+    assert(catStore.interactWithCat('orange', 'pet').ok, 'pet task should complete after orange is unlocked');
+    assert(catStore.getTownDailySnapshot().canClaim, 'pet task should become claimable');
+  }
+}
+
 function testCatInteractionsAndChallengeReward() {
   const store = new PlayerStore('player-store-cats');
   store.load();
@@ -311,6 +372,7 @@ function testCollectGoalHintFlag() {
 testDefaultsAndRewards();
 testBuildingAndCatUnlock();
 testBuildTargetsAndGuideFlag();
+testTownDailyLife();
 testBoardTutorialFlag();
 testCollectGoalHintFlag();
 testLateThemesDoNotAddBuildings();
@@ -323,4 +385,4 @@ testEndlessProgress();
 testAdFunnelAndRunFields();
 testSaveNormalization();
 testLegacyBuildingSave();
-  process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, collect hint, late themes, collect schedule, shop, daily tasks, cats, cat trial, challenge gate/marker, endless, ad funnel, normalization, legacy building save.\n');
+  process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, collect hint, late themes, collect schedule, shop, daily tasks, cats, cat trial, challenge gate/marker, endless, ad funnel, town daily, normalization, legacy building save.\n');

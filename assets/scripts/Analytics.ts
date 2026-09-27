@@ -50,7 +50,10 @@ export type TrackEventName =
   | 'journey_start'
   | 'journey_open'
   | 'journey_claim'
-  | 'journey_complete';
+  | 'journey_complete'
+  | 'town_daily_show'
+  | 'town_daily_complete'
+  | 'town_daily_reward_claim';
 
 export type TrackProps = Record<string, string | number | boolean | string[] | null>;
 

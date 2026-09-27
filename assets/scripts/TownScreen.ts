@@ -18,6 +18,7 @@ import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } fr
 import { AudioEffect } from './AudioManager';
 import { getCatDefinition } from './GameContent';
 import { BuildCellResult, BuildingView, CELL_STAR_COST } from './TownContent';
+import { TownDailyClaimResult, TownDailySnapshot, TownDailyTaskId } from './PlayerTypes';
 import { Toast } from './Toast';
 
 export interface TownScreenOptions {
@@ -33,6 +34,10 @@ export interface TownScreenOptions {
   onOpenCatCollection?: () => void;
   /** 一次性读取 Main 暂存的目标建筑 id（结算页「去建设」跳转用），读后即清 */
   consumeFocusBuilding?: () => BuildingView['id'] | null;
+  getTownDaily: () => TownDailySnapshot;
+  onClaimTownDaily: () => TownDailyClaimResult;
+  onTownDailyAction?: (taskId: TownDailyTaskId, buildingId?: BuildingView['id']) => void;
+  onStartGame?: () => void;
   onReturnHome: () => void;
 }
 
@@ -90,6 +95,14 @@ export class TownScreen {
   private selectedStage = 0;
   private stagedBuilding = -1;
   private constructionFx: Node | null = null;
+  private dailyCard: Node | null = null;
+  private dailyTitle: Label | null = null;
+  private dailyDescription: Label | null = null;
+  private dailyProgress: Label | null = null;
+  private dailyReward: Label | null = null;
+  private dailyActionNode: Node | null = null;
+  private dailyActionButton: Button | null = null;
+  private dailyActionLabel: Label | null = null;
   private active = false;
 
   constructor(
@@ -197,6 +210,7 @@ export class TownScreen {
     this.buildSelector(bottom);
     this.buildConstructionPanel(bottom);
     this.buildHeader(top);
+    this.buildDailyCard(top);
     this.focusBuildableStage();
     this.refresh();
   }
@@ -234,6 +248,132 @@ export class TownScreen {
       () => '' + this.options.getCoins(),
       () => this.toast('金币可在商店购买道具'),
     );
+  }
+
+  private buildDailyCard(top: number) {
+    this.dailyCard = this.roundPanel(
+      this.townUI!,
+      0,
+      top - 228,
+      660,
+      124,
+      26,
+      new Color(255, 248, 226, 246),
+      new Color(235, 205, 158),
+    );
+    const icon = this.dailyCard;
+    const iconGraphics = icon.getComponent(Graphics);
+    if (iconGraphics) {
+      iconGraphics.lineWidth = 4;
+      iconGraphics.strokeColor = new Color(244, 185, 63);
+    }
+    this.dailyTitle = this.label(this.dailyCard, '', -220, 34, 24, new Color(111, 62, 28));
+    this.dailyTitle.isBold = true;
+    this.dailyTitle.horizontalAlign = Label.HorizontalAlign.LEFT;
+    this.dailyDescription = this.label(this.dailyCard, '', -220, 3, 18, new Color(136, 94, 63));
+    this.dailyDescription.horizontalAlign = Label.HorizontalAlign.LEFT;
+    this.dailyDescription.node.getComponent(UITransform)!.setContentSize(420, 36);
+    this.dailyDescription.overflow = Label.Overflow.CLAMP;
+    this.dailyProgress = this.label(this.dailyCard, '', -220, -30, 17, new Color(157, 112, 74));
+    this.dailyProgress.horizontalAlign = Label.HorizontalAlign.LEFT;
+    this.dailyReward = this.label(this.dailyCard, '', 80, -30, 17, new Color(191, 125, 27));
+    this.dailyReward.isBold = true;
+    this.dailyReward.horizontalAlign = Label.HorizontalAlign.LEFT;
+
+    this.dailyActionNode = this.roundPanel(
+      this.dailyCard,
+      246,
+      0,
+      146,
+      64,
+      22,
+      new Color(255, 224, 108),
+      new Color(214, 151, 38),
+    );
+    this.dailyActionLabel = this.label(this.dailyActionNode, '', 0, -1, 20, new Color(112, 69, 40));
+    this.dailyActionLabel.isBold = true;
+    this.dailyActionButton = this.dailyActionNode.addComponent(Button);
+    this.dailyActionButton.transition = Button.Transition.SCALE;
+    this.dailyActionButton.zoomScale = 0.93;
+    this.dailyActionButton.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      this.handleDailyAction();
+    });
+  }
+
+  private renderDailyCard() {
+    if (!this.dailyCard || !this.dailyTitle || !this.dailyDescription || !this.dailyProgress
+      || !this.dailyReward || !this.dailyActionLabel || !this.dailyActionButton) return;
+    const snapshot = this.options.getTownDaily();
+    this.dailyTitle.string = snapshot.unlocked ? `今日小事 · ${snapshot.title}` : snapshot.title;
+    this.dailyDescription.string = snapshot.description;
+    this.dailyProgress.string = snapshot.unlocked
+      ? snapshot.claimed ? '今日已完成' : `${snapshot.progress}/${snapshot.target}`
+      : '建设后开放';
+    this.dailyReward.string = `奖励：${snapshot.rewardText}`;
+    this.dailyActionLabel.string = snapshot.actionLabel;
+    this.dailyActionButton.interactable = snapshot.unlocked && !snapshot.claimed;
+    const graphics = this.dailyActionNode?.getComponent(Graphics);
+    if (graphics) {
+      graphics.clear();
+      graphics.lineWidth = 3;
+      graphics.fillColor = snapshot.claimed
+        ? new Color(235, 227, 210, 245)
+        : snapshot.canClaim
+          ? new Color(255, 224, 108)
+          : new Color(255, 239, 178);
+      graphics.strokeColor = snapshot.claimed
+        ? new Color(205, 193, 170)
+        : new Color(214, 151, 38);
+      graphics.roundRect(-73, -32, 146, 64, 22);
+      graphics.fill();
+      graphics.stroke();
+    }
+    this.dailyActionLabel.color = snapshot.claimed
+      ? new Color(157, 145, 127)
+      : new Color(112, 69, 40);
+  }
+
+  private handleDailyAction() {
+    const snapshot = this.options.getTownDaily();
+    if (!snapshot.unlocked) {
+      this.toast('先点亮流浪猫小屋第一格，开启小镇每日生活');
+      return;
+    }
+    if (snapshot.canClaim) {
+      const result = this.options.onClaimTownDaily();
+      this.toast(result.message);
+      this.refresh();
+      return;
+    }
+    if (snapshot.claimed) return;
+    switch (snapshot.taskId) {
+      case 'pet_cat':
+        this.options.onOpenCatCollection?.();
+        break;
+      case 'complete_level':
+        this.options.onStartGame?.();
+        break;
+      case 'light_cell':
+        this.lightCell();
+        break;
+      case 'enter_building':
+      case 'view_dialogue':
+        this.options.onTownDailyAction?.(snapshot.taskId, this.selected.id);
+        this.toast(snapshot.taskId === 'enter_building' ? '逛完啦，今天的小镇也很热闹' : this.buildingDialogue(this.selected));
+        this.refresh();
+        break;
+      default:
+        break;
+    }
+  }
+
+  private buildingDialogue(building: BuildingView) {
+    if (building.id === 'cat_house') return '大橘：今天的小屋也要晒到太阳呀！';
+    if (building.id === 'cafe') return '白猫：来杯热牛奶，顺便看看今天的星星。';
+    if (building.id === 'yarn_workshop') return '黑猫：毛线团滚到哪里，快乐就跟到哪里。';
+    if (building.id === 'cat_society') return '布偶猫：欢迎回来，大家都在等你呢。';
+    return '极光猫：喷泉的星光，记得留一盏给明天。';
   }
 
   private buildBackButton(parent: Node, x: number, y: number) {
@@ -328,7 +468,9 @@ export class TownScreen {
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const building = this.selected;
-      this.toast(building.completed ? building.reward : building.name);
+      this.options.onTownDailyAction?.('view_dialogue', building.id);
+      this.toast(this.buildingDialogue(building));
+      this.refresh();
     });
   }
 
@@ -500,6 +642,7 @@ export class TownScreen {
     this.renderDisplay(building);
     this.renderSelector();
     this.renderPanel(building);
+    this.renderDailyCard();
   }
 
   private stageArtPath(building: BuildingView, stage: number) {
@@ -883,11 +1026,15 @@ export class TownScreen {
   }
 
   private selectBuilding(index: number) {
-    if (index === this.selectedBuilding) return;
     const building = this.buildings[index];
     if (!building) return;
+    if (index === this.selectedBuilding) {
+      if (building.unlocked) this.options.onTownDailyAction?.('enter_building', building.id);
+      return;
+    }
     this.selectedBuilding = index;
     this.focusBuildableStage(building);
+    if (building.unlocked) this.options.onTownDailyAction?.('enter_building', building.id);
     if (!building.unlocked) {
       this.toast(building.unlockHint);
     }

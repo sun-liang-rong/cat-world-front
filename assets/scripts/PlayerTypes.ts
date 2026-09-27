@@ -8,6 +8,8 @@ export type DailyTaskId = 'clear_3_levels' | 'collect_100_elements' | 'make_5_ma
 
 export type CatInteraction = 'pet' | 'feed' | 'play';
 
+export type TownDailyTaskId = 'pet_cat' | 'complete_level' | 'light_cell' | 'enter_building' | 'view_dialogue';
+
 export type ActivityTaskId = 'complete_levels' | 'make_matches' | 'interact_cats';
 
 export type ActivityRewardId = 'activity_reward_100' | 'activity_reward_300' | 'activity_reward_500'
@@ -44,6 +46,37 @@ export interface CatJourneyClaimResult {
   message: string;
   rewardText?: string;
   completed?: boolean;
+}
+
+export interface TownDailyState {
+  /** 当前自然日（上海时区）的任务日期。 */
+  dateKey: string;
+  /** 当日随机选择的一件小事。 */
+  taskId: TownDailyTaskId;
+  /** 当前任务是否已经完成。 */
+  completed: boolean;
+  /** 奖励是否已经领取。 */
+  claimed: boolean;
+}
+
+export interface TownDailySnapshot {
+  unlocked: boolean;
+  taskId: TownDailyTaskId | null;
+  title: string;
+  description: string;
+  actionLabel: string;
+  progress: number;
+  target: number;
+  completed: boolean;
+  claimed: boolean;
+  canClaim: boolean;
+  rewardText: string;
+}
+
+export interface TownDailyClaimResult {
+  ok: boolean;
+  message: string;
+  rewardText?: string;
 }
 
 export interface CatTrialState {
@@ -142,7 +175,7 @@ export interface GamePetPosition {
 }
 
 export interface PlayerState {
-  version: 3;
+  version: 4;
   /** 后端生成的展示昵称，加载页拿到后写入本地 */
   userName: string;
   /** 后端生成的用户 ID，排行榜上报和查询都用它 */
@@ -161,6 +194,8 @@ export interface PlayerState {
   catTrial: CatTrialState;
   /** 首次通关后开启的、不因漏签清零的 7 日猫咪旅程。 */
   catJourney: CatJourneyState;
+  /** 点亮流浪猫小屋第一格后开放的每日小事。 */
+  townDaily: TownDailyState;
   /** 仅记录非数值的收藏徽章，不参与经济计算。 */
   unlockedBadges: string[];
   equippedCat: CatId | null;

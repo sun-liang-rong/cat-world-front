@@ -10,7 +10,7 @@ import { PlayerStore } from './PlayerStore';
 import { isCampaignComplete, LEVELS_PER_THEME, MAX_MAIN_LEVEL, themeIndexForLevel } from './TownContent';
 import { ShopScreen } from './ShopScreen';
 import { TownScreen } from './TownScreen';
-import { CatId, BuildingId } from './PlayerTypes';
+import { CatId, BuildingId, TownDailyTaskId } from './PlayerTypes';
 import { LevelSystem } from './level/LevelSystem';
 import { LevelDefinition } from './level/LevelTypes';
 import { LoadingScreen } from './LoadingScreen';
@@ -233,6 +233,17 @@ export class Main extends Component {
       shouldShowCellGuide: () => this.playerStore.shouldShowTownBuildHint(),
       onOpenCatCollection: () => this.openCatCollection(),
       consumeFocusBuilding: () => this.consumeTownFocus(),
+      getTownDaily: () => this.playerStore.getTownDailySnapshot(),
+      onClaimTownDaily: () => this.playerStore.claimTownDaily(),
+      onTownDailyAction: (taskId: TownDailyTaskId, buildingId?: BuildingId) => {
+        if (!buildingId) return;
+        if (taskId === 'enter_building') this.playerStore.markTownBuildingEntered(buildingId);
+        if (taskId === 'view_dialogue') this.playerStore.markTownDialogueViewed(buildingId);
+      },
+      onStartGame: () => {
+        this.townScreen?.setActive(false);
+        this.startGame();
+      },
       onReturnHome: () => this.returnHome(),
     });
   }
