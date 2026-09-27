@@ -17,6 +17,19 @@ export type ActivityStatus = 'locked' | 'scheduled' | 'active' | 'claiming' | 'e
 
 export type BuildingId = 'cat_house' | 'cafe' | 'yarn_workshop' | 'cat_society' | 'star_fountain';
 
+export interface CatTrialState {
+  /** 试住的猫咪；当前只开放大橘，预留 CatId 方便后续扩展。 */
+  catId: CatId;
+  /** 还可消耗的主线有效对局数。 */
+  remainingGames: number;
+  /** 是否处于临时装备状态。 */
+  active: boolean;
+  /** 是否已经展示过首次试住邀请，避免新玩家反复打断。 */
+  offerShown: boolean;
+  /** 是否至少真正开始过一局试住。 */
+  started: boolean;
+}
+
 export interface CatProgress {
   unlocked: boolean;
   level: number;
@@ -100,7 +113,7 @@ export interface GamePetPosition {
 }
 
 export interface PlayerState {
-  version: 2;
+  version: 3;
   /** 后端生成的展示昵称，加载页拿到后写入本地 */
   userName: string;
   /** 后端生成的用户 ID，排行榜上报和查询都用它 */
@@ -115,6 +128,8 @@ export interface PlayerState {
   levelStars: Record<number, number>;
   buildStage: number;
   cats: Record<CatId, CatProgress>;
+  /** 建筑正式解锁前的临时猫咪体验状态。 */
+  catTrial: CatTrialState;
   equippedCat: CatId | null;
   /** 关卡宠物浮窗的本地位置偏好，不参与任何玩法计算 */
   gamePetPosition: GamePetPosition;

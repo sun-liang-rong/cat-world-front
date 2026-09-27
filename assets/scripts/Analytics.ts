@@ -41,7 +41,12 @@ export type TrackEventName =
   | 'ad_click'
   | 'ad_result'
   | 'building_light'
-  | 'shop_buy';
+  | 'shop_buy'
+  | 'cat_trial_offer_show'
+  | 'cat_trial_start'
+  | 'cat_trial_game_start'
+  | 'cat_trial_converted'
+  | 'challenge_locked_click';
 
 export type TrackProps = Record<string, string | number | boolean | string[] | null>;
 

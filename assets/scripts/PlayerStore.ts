@@ -10,6 +10,7 @@ import {
   DAILY_CHEST_REWARD,
   DAILY_TASK_DEFINITIONS,
   getCatDefinition,
+  getCatSkillConfig,
   getCatSkillCooldownMs,
   getCatUpgradeCost,
   getItemDefinition,
@@ -22,6 +23,7 @@ import {
   BuildingId,
   BuildingProgress,
   CatId,
+  CatTrialState,
   CatInteraction,
   DailyState,
   DailyTaskId,
@@ -79,7 +81,7 @@ function levelFromTotalExp(total: number) {
   return level;
 }
 
-// 存档反序列化用的宽松形状：version 允许 1/2（v1 读入后迁移补新字段）
+// 存档反序列化用的宽松形状：version 允许 1/2/3（旧档读入后迁移补新字段）
 type SavedPlayerState = Omit<Partial<PlayerState>, 'version'> & { version?: number };
 
 export class PlayerStore {
@@ -98,10 +100,10 @@ export class PlayerStore {
       const serialized = sys.localStorage.getItem(this.storageKey);
       if (serialized) {
         const parsed = JSON.parse(serialized) as SavedPlayerState | null;
-        if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2)) {
+        if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3)) {
           console.error('[CatWorld] Invalid player save, reset to defaults');
         } else {
-          // v1 旧档走同一套逐字段校验，新增字段保持默认值，写回时升级为 v2
+          // v1/v2 旧档走同一套逐字段校验，新增字段保持默认值，写回时升级为 v3
           this.state = this.normalize(parsed);
         }
       }
@@ -218,6 +220,87 @@ export class PlayerStore {
 
   shouldShowCatEquipHint() {
     return this.hasDecoratedTown() && !this.hasEquippedPet();
+  }
+
+  // —— 大橘试住 ——
+  // 第 1 关后给新玩家一次低门槛体验：临时装备大橘 3 局主线，
+  // 只有真正开始主线对局才消耗次数；超萌挑战/无尽不计入试住次数。
+  shouldShowCatTrialOffer() {
+    return this.hasClearedAnyLevel()
+      && !this.hasAnyUnlockedCat()
+      && !this.state.catTrial.active
+      && !this.state.catTrial.offerShown;
+  }
+
+  getCatTrial(): CatTrialState {
+    this.resetDailyState();
+    return this.clone(this.state.catTrial);
+  }
+
+  isCatTrialActive() {
+    return this.state.catTrial.active && this.state.catTrial.remainingGames > 0;
+  }
+
+  markCatTrialOfferShown() {
+    if (this.state.catTrial.offerShown) return;
+    this.state.catTrial.offerShown = true;
+    this.save();
+    this.analytics?.track('cat_trial_offer_show', {
+      cat_id: this.state.catTrial.catId,
+      remaining_games: this.state.catTrial.remainingGames,
+    });
+  }
+
+  startCatTrial() {
+    if (
+      !this.hasClearedAnyLevel()
+      || this.hasAnyUnlockedCat()
+      || this.state.catTrial.active
+      || this.state.catTrial.started
+    ) {
+      return { ok: false, message: '大橘试住暂时不可用' };
+    }
+    this.state.catTrial = {
+      catId: 'orange',
+      remainingGames: 3,
+      active: true,
+      offerShown: true,
+      started: false,
+    };
+    // 试住每局第一次进入时都从满充能开始，不污染正式猫咪的技能冷却。
+    const cat = this.state.cats.orange;
+    cat.skillReadyAt = 0;
+    cat.skillCharge = 0;
+    this.save();
+    this.analytics?.track('cat_trial_start', {
+      cat_id: this.state.catTrial.catId,
+      remaining_games: this.state.catTrial.remainingGames,
+    });
+    return { ok: true, message: '大橘已入住，接下来 3 局可以使用它的技能' };
+  }
+
+  // 在 GameScreen 真正 startPlay 后调用，返回本局使用的临时猫咪。
+  // 先由 GameScreen 读取 equippedCat，再扣次数，保证第 3 局仍然能使用大橘。
+  consumeCatTrialGame() {
+    if (!this.isCatTrialActive()) return null;
+    const catId = this.state.catTrial.catId;
+    this.state.catTrial.started = true;
+    this.state.catTrial.remainingGames = Math.max(0, this.state.catTrial.remainingGames - 1);
+    if (this.state.catTrial.remainingGames <= 0) this.state.catTrial.active = false;
+    const remainingGames = this.state.catTrial.remainingGames;
+    this.save();
+    this.analytics?.track('cat_trial_game_start', {
+      cat_id: catId,
+      remaining_games: remainingGames,
+    });
+    return { catId, remainingGames };
+  }
+
+  cancelCatTrial() {
+    if (!this.state.catTrial.active) return;
+    this.state.catTrial.active = false;
+    this.state.catTrial.remainingGames = 0;
+    this.save();
   }
 
   getLevelStar(level: number) {
@@ -412,14 +495,15 @@ export class PlayerStore {
     return this.clone(this.state.recentRuns);
   }
 
-  getEquippedCat() {
+  getEquippedCat(includeTrial = true) {
     this.resetDailyState();
-    return this.state.equippedCat;
+    return includeTrial && this.isCatTrialActive() ? this.state.catTrial.catId : this.state.equippedCat;
   }
 
   // 是否至少解锁了一只猫咪：宠物浮窗用它区分「去装备」和「先解锁建筑」两种提示
-  hasAnyUnlockedCat() {
-    return (Object.keys(this.state.cats) as CatId[]).some(id => this.state.cats[id].unlocked);
+  hasAnyUnlockedCat(includeTrial = true) {
+    return (includeTrial && this.isCatTrialActive())
+      || (Object.keys(this.state.cats) as CatId[]).some(id => this.state.cats[id].unlocked);
   }
 
   getGamePetPosition(): GamePetPosition {
@@ -442,6 +526,13 @@ export class PlayerStore {
   // 升级猫咪缩短冷却时间（getCatSkillCooldownMs：40 分钟 → 30 分钟）。
   getCatSkillState(id: CatId): { readyAt: number; charge: number; level: number } {
     const cat = this.state.cats[id];
+    if (this.isCatTrialActive() && id === this.state.catTrial.catId) {
+      return {
+        readyAt: 0,
+        charge: getCatSkillConfig(id).chargeRequired,
+        level: cat?.level ?? 1,
+      };
+    }
     return {
       readyAt: cat?.skillReadyAt ?? 0,
       charge: cat?.skillCharge ?? 0,
@@ -538,6 +629,11 @@ export class PlayerStore {
 
   isEndlessUnlocked() {
     return this.state.level >= 2;
+  }
+
+  // 超萌挑战在通关第 5 关后开放，避免新玩家在还没理解基础收集规则前被高压玩法打断。
+  isChallengeUnlocked() {
+    return this.state.level >= 6;
   }
 
   getEndlessProgress(): EndlessProgress {
@@ -874,6 +970,13 @@ export class PlayerStore {
         if (catId) this.state.cats[catId].unlocked = true;
       }
     });
+    if (this.state.cats[this.state.catTrial.catId]?.unlocked && this.state.catTrial.active) {
+      const catId = this.state.catTrial.catId;
+      this.state.catTrial.active = false;
+      this.state.catTrial.remainingGames = 0;
+      this.state.equippedCat = catId;
+      this.analytics?.track('cat_trial_converted', { cat_id: catId });
+    }
     if (shouldSave) this.save();
   }
 
@@ -892,7 +995,7 @@ export class PlayerStore {
       };
     });
     return {
-      version: 2,
+      version: 3,
       userName: '',
       userId: '',
       coins: 100,
@@ -903,6 +1006,7 @@ export class PlayerStore {
       levelStars: {},
       buildStage: 0,
       cats,
+      catTrial: this.createCatTrialState(),
       equippedCat: null,
       gamePetPosition: { side: 'right', y: 220 },
       inventory: { hammer: 0, glove: 0, dice: 0, extra_slot: 0 },
@@ -997,6 +1101,16 @@ export class PlayerStore {
     };
   }
 
+  private createCatTrialState(): CatTrialState {
+    return {
+      catId: 'orange',
+      remainingGames: 0,
+      active: false,
+      offerShown: false,
+      started: false,
+    };
+  }
+
   private createBuildingStates(): Record<BuildingId, BuildingProgress> {
     const buildings = {} as Record<BuildingId, BuildingProgress>;
     BUILDING_DEFINITIONS.forEach(definition => {
@@ -1033,7 +1147,7 @@ export class PlayerStore {
 
   private normalize(value: SavedPlayerState): PlayerState {
     const state = this.createDefaultState();
-    if (!value || (value.version !== 1 && value.version !== 2)) return state;
+    if (!value || (value.version !== 1 && value.version !== 2 && value.version !== 3)) return state;
     state.userName = typeof value.userName === 'string' ? value.userName.trim() : '';
     state.userId = typeof value.userId === 'string' ? value.userId.trim() : '';
     state.coins = this.nonNegativeInteger(value.coins, state.coins);
@@ -1091,6 +1205,22 @@ export class PlayerStore {
         skillCharge: this.nonNegativeInteger(saved.skillCharge, 0),
       };
     });
+    const savedCatTrial = value.catTrial;
+    if (savedCatTrial && typeof savedCatTrial === 'object') {
+      const catId = savedCatTrial.catId === 'orange' ? 'orange' : 'orange';
+      const remainingGames = Math.min(3, Math.max(0, Math.floor(this.safeNumber(savedCatTrial.remainingGames, 0))));
+      state.catTrial = {
+        catId,
+        remainingGames,
+        active: savedCatTrial.active === true && remainingGames > 0,
+        offerShown: savedCatTrial.offerShown === true,
+        started: savedCatTrial.started === true,
+      };
+    }
+    if (state.cats[state.catTrial.catId].unlocked) {
+      state.catTrial.active = false;
+      state.catTrial.remainingGames = 0;
+    }
     if (
       typeof value.equippedCat === 'string'
       && value.equippedCat in state.cats

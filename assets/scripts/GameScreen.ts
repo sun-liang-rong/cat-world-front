@@ -190,6 +190,8 @@ export interface GameScreenOptions {
   getEquippedCat: () => CatId | null;
   /** 是否至少解锁了一只猫咪：宠物浮窗区分「去装备」和「先解锁建筑」两种提示 */
   hasAnyUnlockedCat?: () => boolean;
+  /** 临时猫咪试住：仅主线真正 startPlay 时消耗一局，挑战/无尽不传。 */
+  onMainRunStarted?: () => void;
   /** 对局内设置弹窗的音频开关（Main 注入 AudioManager；缺省时弹窗按开启兜底） */
   getMusicEnabled?: () => boolean;
   getSoundEnabled?: () => boolean;
@@ -405,6 +407,8 @@ export class GameScreen {
       this.catSkill = null;
       this.catSkillConfig = null;
     }
+    // 在读取本局猫咪状态之后再扣试住次数，保证第 3 局仍然拿到大橘技能。
+    if (!this.options.challenge && !this.options.endless) this.options.onMainRunStarted?.();
     this.refreshToolButtons();
     this.refreshCatSkillPanel();
     this.gameUI.active = true;

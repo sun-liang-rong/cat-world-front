@@ -123,6 +123,30 @@ function testCatInteractionsAndChallengeReward() {
   assert(store.isChallengeRewardClaimed(), 'challenge reward marker should be idempotent');
 }
 
+function testCatTrialAndChallengeGate() {
+  const store = new PlayerStore('player-store-retention-phase1');
+  store.load();
+  assert(!store.isChallengeUnlocked(), 'challenge should stay locked before clearing level 5');
+  store.setLevel(6);
+  assert(store.isChallengeUnlocked(), 'challenge should unlock at level 6 after clearing level 5');
+
+  const fresh = new PlayerStore('player-store-cat-trial');
+  fresh.load();
+  assert(!fresh.shouldShowCatTrialOffer(), 'cat trial should wait until the first level is cleared');
+  fresh.recordLevelStars(1, 3);
+  assert(fresh.shouldShowCatTrialOffer(), 'cat trial should show after the first level is cleared');
+  fresh.markCatTrialOfferShown();
+  assert(fresh.startCatTrial().ok, 'cat trial should start after the offer is shown');
+  assert(fresh.getEquippedCat() === 'orange', 'active trial should temporarily equip orange cat');
+  assert(fresh.getEquippedCat(false) === null, 'trial cat should not count as a formal equipped cat');
+  assert(fresh.getCatSkillState('orange').charge === 20, 'trial game should start with a full orange skill charge');
+  assert(fresh.consumeCatTrialGame()?.remainingGames === 2, 'first trial game should leave two games');
+  assert(fresh.consumeCatTrialGame()?.remainingGames === 1, 'second trial game should leave one game');
+  assert(fresh.consumeCatTrialGame()?.remainingGames === 0, 'third trial game should finish the trial');
+  assert(!fresh.isCatTrialActive(), 'trial should deactivate after three mainline games');
+  assert(!fresh.shouldShowCatTrialOffer(), 'completed or dismissed trial should not reappear');
+}
+
 function testEndlessProgress() {
   const store = new PlayerStore('player-store-endless');
   store.load();
@@ -280,8 +304,9 @@ testCollectGoalSchedule();
 testShopLimits();
 testDailyTasksAndChest();
 testCatInteractionsAndChallengeReward();
+testCatTrialAndChallengeGate();
 testEndlessProgress();
 testAdFunnelAndRunFields();
 testSaveNormalization();
 testLegacyBuildingSave();
-  process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, collect hint, late themes, collect schedule, shop, daily tasks, cats, challenge marker, endless, ad funnel, normalization, legacy building save.\n');
+  process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, collect hint, late themes, collect schedule, shop, daily tasks, cats, cat trial, challenge gate/marker, endless, ad funnel, normalization, legacy building save.\n');

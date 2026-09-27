@@ -92,8 +92,12 @@ export interface HomeScreenOptions {
   onStartEndless: () => void;
   isEndlessUnlocked: () => boolean;
   onStartChallenge: () => void;
+  isChallengeUnlocked: () => boolean;
   challengeCoinReward: number;
   isChallengeRewardClaimed: () => boolean;
+  shouldShowCatTrialOffer?: () => boolean;
+  onCatTrialOfferShown?: () => void;
+  onStartCatTrial?: () => void;
   onOpenTown: () => void;
   shouldShowTownBuildHint: () => boolean;
   /** 第 1 关一次性引导：过关且从未点亮过建设格子时，首页弹引导蒙层 */
@@ -130,6 +134,10 @@ export class HomeScreen {
   private morePanel: Node | null = null;
   private challengeRewardLabel: Label | null = null;
   private challengeRewardCoin: Node | null = null;
+  private challengeEntry: Node | null = null;
+  private challengeLockLabel: Label | null = null;
+  private catTrialUI: Node | null = null;
+  private catTrialLoading = false;
   private endlessLabel: Label | null = null;
   private homeChapterTitleLabel: Label | null = null;
   private moreBadge: Node | null = null;
@@ -138,6 +146,7 @@ export class HomeScreen {
   private townHintBubble: Node | null = null;
   private catEquipHintBubble: Node | null = null;
   private townGuideUI: Node | null = null;
+  private townGuideLoading = false;
   private townEntry: Node | null = null;
   private readonly navSelectedPlates: Node[] = [];
   private selectedNavIndex = -1;
@@ -181,6 +190,7 @@ export class HomeScreen {
     }
     if (!active && this.guideUI) this.guideUI.active = false;
     if (!active && this.moreUI) this.moreUI.active = false;
+    if (!active) this.closeCatTrialOffer();
     if (active) {
       if (this.homeUI.parent) {
         this.homeUI.setSiblingIndex(this.homeUI.parent.children.length - 1);
@@ -195,6 +205,7 @@ export class HomeScreen {
       this.refreshTownHintBubble();
       this.refreshCatEquipHintBubble();
       this.maybeShowFirstTownGuide();
+      this.maybeShowCatTrialOffer();
     } else {
       this.closeFirstTownGuide();
     }
@@ -214,6 +225,10 @@ export class HomeScreen {
     this.morePanel = null;
     this.challengeRewardLabel = null;
     this.challengeRewardCoin = null;
+    this.challengeEntry = null;
+    this.challengeLockLabel = null;
+    this.catTrialUI = null;
+    this.catTrialLoading = false;
     this.endlessLabel = null;
     this.homeChapterTitleLabel = null;
     this.moreBadge = null;
@@ -222,6 +237,7 @@ export class HomeScreen {
     this.townHintBubble = null;
     this.catEquipHintBubble = null;
     this.townGuideUI = null;
+    this.townGuideLoading = false;
     this.townEntry = null;
     this.navSelectedPlates.length = 0;
     this.selectedNavIndex = -1;
@@ -549,12 +565,112 @@ export class HomeScreen {
     this.catEquipHintBubble.active = this.options.shouldShowCatEquipHint();
   }
 
+  // 大橘试住邀请：优先级低于第 1 关建设引导，避免同一时刻连续弹两个蒙层。
+  private maybeShowCatTrialOffer() {
+    if (
+      !this.options.shouldShowCatTrialOffer?.()
+      || !this.homeUI
+      || !this.homeUI.active
+      || this.townGuideUI
+      || this.townGuideLoading
+      || this.catTrialUI
+      || this.catTrialLoading
+    ) return;
+    this.catTrialLoading = true;
+    this.assets.loadImages(['cats/cat_orange'], () => {
+      this.catTrialLoading = false;
+      this.options.onCatTrialOfferShown?.();
+      this.buildCatTrialOffer();
+    });
+  }
+
+  private buildCatTrialOffer() {
+    if (!this.homeUI || !this.homeUI.active || this.catTrialUI) return;
+    const overlay = new Node('CatTrialOffer');
+    this.homeUI.addChild(overlay);
+    this.catTrialUI = overlay;
+    const visibleSize = view.getVisibleSize();
+    const backdrop = new Node('CatTrialOfferMask');
+    overlay.addChild(backdrop);
+    backdrop.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
+    const backdropGraphics = backdrop.addComponent(Graphics);
+    backdropGraphics.fillColor = new Color(22, 18, 13, 190);
+    backdropGraphics.rect(-visibleSize.width / 2, -visibleSize.height / 2, visibleSize.width, visibleSize.height);
+    backdropGraphics.fill();
+    backdrop.addComponent(BlockInputEvents);
+
+    this.roundedShape(
+      overlay, 'CatTrialOfferShadow', 0, -22, 560, 420, 34,
+      new Color(69, 48, 29, 88), new Color(69, 48, 29, 0), 0,
+    );
+    const panel = this.creamPanel(
+      overlay, 0, -12, 540, 408, 32,
+      new Color(255, 248, 226), new Color(235, 205, 158),
+    );
+    panel.setScale(new Vec3(0.76, 0.76, 1));
+    tween(panel).to(0.28, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' }).start();
+
+    const mascot = this.image(panel, 'cats/cat_orange', 0, 178, 126, 126);
+    tween(mascot)
+      .repeatForever(
+        tween()
+          .to(1, { scale: new Vec3(1.05, 1.05, 1) }, { easing: 'sineInOut' })
+          .to(1, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
+    const title = this.label(panel, '大橘来陪你闯关！', 0, 94, 30, new Color(111, 62, 28));
+    title.isBold = true;
+    const body = this.label(
+      panel,
+      '先试住 3 局，每局都有一次大橘技能。\n建好流浪猫小屋后，大橘就会正式入住！',
+      0,
+      28,
+      21,
+      new Color(112, 69, 40),
+    );
+    body.enableWrapText = true;
+    body.node.getComponent(UITransform)!.setContentSize(450, 72);
+
+    const startButton = this.creamPanel(
+      panel, -112, -112, 196, 88, 44,
+      new Color(255, 224, 108), new Color(201, 148, 47),
+    );
+    const startLabel = this.label(startButton, '现在试住', 0, -1, 25, new Color(111, 62, 28));
+    startLabel.isBold = true;
+    this.addTapFeedback(startButton, () => {
+      this.closeCatTrialOffer();
+      this.options.onStartCatTrial?.();
+    });
+
+    const laterButton = this.creamPanel(
+      panel, 112, -112, 196, 88, 44,
+      new Color(255, 252, 241), new Color(228, 215, 193),
+    );
+    const laterLabel = this.label(laterButton, '以后再说', 0, -1, 23, new Color(135, 104, 76));
+    laterLabel.isBold = true;
+    this.addTapFeedback(laterButton, () => this.closeCatTrialOffer(), 0.95);
+  }
+
+  private closeCatTrialOffer() {
+    this.catTrialUI?.destroy();
+    this.catTrialUI = null;
+  }
+
   // 第 1 关一次性建设引导：半透明蒙层 + 小镇入口高亮副本 + 脉冲光环 + 指引面板。
   // 跳过（稍后再说）不置标记，下次回首页会再弹；点亮过任意格子后条件自然消失。
   private maybeShowFirstTownGuide() {
-    if (!this.options.shouldShowFirstTownGuide?.() || !this.homeUI || this.townGuideUI) return;
+    if (
+      !this.options.shouldShowFirstTownGuide?.()
+      || !this.homeUI
+      || this.townGuideUI
+      || this.townGuideLoading
+    ) return;
+    this.townGuideLoading = true;
     // 猫探头 / 星星图标可能还没被预热进缓存，这里按需加载一次再画面板（命中缓存即同步回调）
-    this.assets.loadImages(['cats/cat_orange', COMMON_UI_ASSETS.starIcon], () => this.buildFirstTownGuide());
+    this.assets.loadImages(['cats/cat_orange', COMMON_UI_ASSETS.starIcon], () => {
+      this.townGuideLoading = false;
+      this.buildFirstTownGuide();
+    });
   }
 
   private buildFirstTownGuide() {
@@ -645,7 +761,7 @@ export class HomeScreen {
     const goLabel = this.label(goButton, '去建设', 0, -1, 26, new Color(111, 62, 28));
     goLabel.isBold = true;
     this.addTapFeedback(goButton, () => {
-      this.closeFirstTownGuide();
+      this.closeFirstTownGuide(false);
       this.options.onFirstTownGuideDone?.();
       this.options.onOpenTown();
     });
@@ -656,14 +772,15 @@ export class HomeScreen {
     );
     const skipLabel = this.label(skipButton, '稍后再说', 0, -1, 22, new Color(135, 104, 76));
     skipLabel.isBold = true;
-    this.addTapFeedback(skipButton, () => this.closeFirstTownGuide(), 0.95);
+    this.addTapFeedback(skipButton, () => this.closeFirstTownGuide(true), 0.95);
   }
 
-  private closeFirstTownGuide() {
+  private closeFirstTownGuide(showTrial = true) {
     this.townGuideUI?.destroy();
     this.townGuideUI = null;
     if (this.townEntry) this.townEntry.active = true;
     this.refreshTownHintBubble();
+    if (showTrial) this.maybeShowCatTrialOffer();
   }
 
   private buildCatSocietyEntry() {
@@ -701,6 +818,7 @@ export class HomeScreen {
     this.homeUI!.addChild(challenge);
     challenge.setPosition(x, y);
     challenge.addComponent(UITransform).setContentSize(124, 148);
+    this.challengeEntry = challenge;
     this.homeCrop(challenge, 'side_challenge', 0, 18, 84, 80);
     this.sideEntryLabel(challenge, '超萌挑战', 0, -50);
     const tag = this.creamPanel(
@@ -714,6 +832,10 @@ export class HomeScreen {
     this.challengeRewardLabel.enableWrapText = false;
     this.challengeRewardLabel.verticalAlign = Label.VerticalAlign.CENTER;
     this.challengeRewardLabel.node.getComponent(UITransform)!.setContentSize(92, 28);
+    this.challengeLockLabel = this.label(tag, '', 0, -1, 14, new Color(111, 62, 28));
+    this.challengeLockLabel.isBold = true;
+    this.challengeLockLabel.node.getComponent(UITransform)!.setContentSize(120, 28);
+    this.challengeLockLabel.node.active = false;
     this.addTapFeedback(challenge, this.options.onStartChallenge, 0.93);
     this.popIn(challenge, 0.30);
     this.refreshPlayEntries();
@@ -968,6 +1090,7 @@ export class HomeScreen {
   }
 
   private challengeRewardText() {
+    if (!this.options.isChallengeUnlocked()) return '';
     return this.options.isChallengeRewardClaimed()
       ? '今日已领取'
       : `赢${this.options.challengeCoinReward}金币`;
@@ -978,12 +1101,19 @@ export class HomeScreen {
   }
 
   private refreshPlayEntries() {
+    const challengeUnlocked = this.options.isChallengeUnlocked();
     const claimed = this.options.isChallengeRewardClaimed();
+    if (this.challengeEntry) this.challengeEntry.setScale(new Vec3(challengeUnlocked ? 1 : 0.92, challengeUnlocked ? 1 : 0.92, 1));
     if (this.challengeRewardLabel) {
       this.challengeRewardLabel.string = this.challengeRewardText();
-      this.challengeRewardLabel.node.setPosition(claimed ? 0 : 10, -1);
+      this.challengeRewardLabel.node.setPosition(claimed || !challengeUnlocked ? 0 : 10, -1);
+      this.challengeRewardLabel.node.active = challengeUnlocked;
     }
-    if (this.challengeRewardCoin) this.challengeRewardCoin.active = !claimed;
+    if (this.challengeRewardCoin) this.challengeRewardCoin.active = challengeUnlocked && !claimed;
+    if (this.challengeLockLabel) {
+      this.challengeLockLabel.string = challengeUnlocked ? '' : '第 5 关解锁';
+      this.challengeLockLabel.node.active = !challengeUnlocked;
+    }
     if (this.endlessLabel) {
       const unlocked = this.options.isEndlessUnlocked();
       this.endlessLabel.string = unlocked ? '无尽模式' : '无尽未解锁';

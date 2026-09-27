@@ -169,8 +169,12 @@ export class Main extends Component {
       onStartEndless: () => this.startEndless(),
       isEndlessUnlocked: () => this.playerStore.isEndlessUnlocked(),
       onStartChallenge: () => this.startChallenge(),
+      isChallengeUnlocked: () => this.playerStore.isChallengeUnlocked(),
       challengeCoinReward: CHALLENGE_COIN_REWARD,
       isChallengeRewardClaimed: () => this.playerStore.isChallengeRewardClaimed(),
+      shouldShowCatTrialOffer: () => this.playerStore.shouldShowCatTrialOffer(),
+      onCatTrialOfferShown: () => this.playerStore.markCatTrialOfferShown(),
+      onStartCatTrial: () => this.startCatTrial(),
       onOpenTown: () => this.openTown(),
       // 气泡条件 =「从未建设过」或「星星已够点亮下一格」（小节点机制的建设提醒）
       shouldShowTownBuildHint: () =>
@@ -238,7 +242,7 @@ export class Main extends Component {
     this.catCollectionScreen = new CatCollectionScreen(this.root, this.assets, {
       onPlaySound: effect => this.audio.playEffect(effect),
       getCats: () => this.playerStore.getState().cats,
-      getEquippedCat: () => this.playerStore.getEquippedCat(),
+      getEquippedCat: () => this.playerStore.getEquippedCat(false),
       onOpenCat: id => this.openCatDetail(id),
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
@@ -251,7 +255,7 @@ export class Main extends Component {
       onPlaySound: effect => this.audio.playEffect(effect),
       getCoins: () => this.playerStore.getCoins(),
       getCat: id => this.playerStore.getCat(id),
-      getEquippedCat: () => this.playerStore.getEquippedCat(),
+      getEquippedCat: () => this.playerStore.getEquippedCat(false),
       onInteract: (id, interaction) => this.playerStore.interactWithCat(id, interaction),
       onUpgrade: id => this.playerStore.upgradeCat(id),
       onEquip: id => this.playerStore.equipCat(id),
@@ -478,7 +482,7 @@ export class Main extends Component {
   // 再在后台逐个预载其余菜单页面（见 preloadMenuScreens）。
   private preloadSecondaryScreens() {
     this.homeScreen.preloadOverlays();
-    if (!this.challengeLevelDefinition && !this.challengePreparing) {
+    if (this.playerStore.isChallengeUnlocked() && !this.challengeLevelDefinition && !this.challengePreparing) {
       this.prepareChallengeLevel();
     }
     this.preloadMenuScreens();
@@ -672,6 +676,9 @@ export class Main extends Component {
       onConsumeItem: id => this.playerStore.consumeItem(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(),
       hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(),
+      onMainRunStarted: () => {
+        this.playerStore.consumeCatTrialGame();
+      },
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
       onGamePetPositionChanged: position => this.playerStore.setGamePetPosition(position),
       getCatSkillState: id => this.playerStore.getCatSkillState(id),
@@ -727,9 +734,27 @@ export class Main extends Component {
     return id;
   }
 
+  private startCatTrial() {
+    const result = this.playerStore.startCatTrial();
+    if (!result.ok) {
+      Toast.show(this.root, result.message);
+      return;
+    }
+    Toast.show(this.root, '大橘已入住，接下来 3 局可以使用它的技能');
+    this.homeScreen.setActive(true);
+  }
+
   // 超萌挑战：固定高压配置，每次进关换新种子，避免记住卡牌位置。
   private startChallenge() {
     if (this.startingGame) return;
+    if (!this.playerStore.isChallengeUnlocked()) {
+      this.analytics.track('challenge_locked_click', {
+        required_level: 6,
+        current_level: this.playerStore.getLevel(),
+      });
+      Toast.show(this.root, '通关第 5 关解锁超萌挑战');
+      return;
+    }
     this.startingGame = true;
     this.hideExtraPages();
     this.analytics.track('level_enter_click', { mode: 'challenge', level: CHALLENGE_GENERATOR_LEVEL });
@@ -783,6 +808,7 @@ export class Main extends Component {
   }
 
   private prepareChallengeLevel(seed = this.nextChallengeSeed()) {
+    if (!this.playerStore.isChallengeUnlocked()) return;
     const token = ++this.challengePrepareToken;
     this.challengePreparing = true;
     this.levelSystem.generator.generateAsync(this.challengeGenerationOptions(seed)).then(definition => {
@@ -847,8 +873,8 @@ export class Main extends Component {
       },
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
-      getEquippedCat: () => this.playerStore.getEquippedCat(),
-      hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(),
+      getEquippedCat: () => this.playerStore.getEquippedCat(false),
+      hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(false),
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
       onGamePetPositionChanged: position => this.playerStore.setGamePetPosition(position),
       getCatSkillState: id => this.playerStore.getCatSkillState(id),
@@ -910,8 +936,8 @@ export class Main extends Component {
       onStarsGranted: () => {},
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
-      getEquippedCat: () => this.playerStore.getEquippedCat(),
-      hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(),
+      getEquippedCat: () => this.playerStore.getEquippedCat(false),
+      hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(false),
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
       onGamePetPositionChanged: position => this.playerStore.setGamePetPosition(position),
       getCatSkillState: id => this.playerStore.getCatSkillState(id),
@@ -976,7 +1002,7 @@ export class Main extends Component {
     }
 
     // 如果资源还在加载中，显示加载动画
-    if (!this.readyScreens.has(this.catCollectionScreen)) {
+    if (!this.readyScreens.has(this.catCollectionScreen!)) {
       // 防止重复创建loading
       if (!this.loadingOverlay) {
         this.loadingOverlay = new LoadingOverlay(this.root);
@@ -1039,7 +1065,7 @@ export class Main extends Component {
     }
 
     // 如果资源还在加载中，显示加载动画
-    if (!this.readyScreens.has(this.dailyTaskScreen)) {
+    if (!this.readyScreens.has(this.dailyTaskScreen!)) {
       if (!this.loadingOverlay) {
         this.loadingOverlay = new LoadingOverlay(this.root);
         this.loadingOverlay.show('每日任务准备中...');
@@ -1082,7 +1108,7 @@ export class Main extends Component {
     }
 
     // 如果资源还在加载中，显示加载动画
-    if (!this.readyScreens.has(this.shopScreen)) {
+    if (!this.readyScreens.has(this.shopScreen!)) {
       if (!this.loadingOverlay) {
         this.loadingOverlay = new LoadingOverlay(this.root);
         this.loadingOverlay.show('商店准备中...');
@@ -1125,7 +1151,7 @@ export class Main extends Component {
     }
 
     // 如果资源还在加载中，显示加载动画
-    if (!this.readyScreens.has(this.activityScreen)) {
+    if (!this.readyScreens.has(this.activityScreen!)) {
       if (!this.loadingOverlay) {
         this.loadingOverlay = new LoadingOverlay(this.root);
         this.loadingOverlay.show('活动页面准备中...');
@@ -1168,7 +1194,7 @@ export class Main extends Component {
     }
 
     // 如果资源还在加载中，显示加载动画
-    if (!this.readyScreens.has(this.momentScreen)) {
+    if (!this.readyScreens.has(this.momentScreen!)) {
       if (!this.loadingOverlay) {
         this.loadingOverlay = new LoadingOverlay(this.root);
         this.loadingOverlay.show('点滴页面准备中...');
@@ -1206,7 +1232,7 @@ export class Main extends Component {
     }
 
     // 如果资源还在加载中，显示加载动画
-    if (!this.readyScreens.has(this.adventureScreen)) {
+    if (!this.readyScreens.has(this.adventureScreen!)) {
       if (!this.loadingOverlay) {
         this.loadingOverlay = new LoadingOverlay(this.root);
         this.loadingOverlay.show('冒险页面准备中...');
@@ -1244,7 +1270,7 @@ export class Main extends Component {
     }
 
     // 如果资源还在加载中，显示加载动画
-    if (!this.readyScreens.has(this.rankScreen)) {
+    if (!this.readyScreens.has(this.rankScreen!)) {
       if (!this.loadingOverlay) {
         this.loadingOverlay = new LoadingOverlay(this.root);
         this.loadingOverlay.show('排行榜准备中...');
@@ -1349,7 +1375,7 @@ export class Main extends Component {
     }
 
     // 如果资源还在加载中，显示加载动画
-    if (!this.readyScreens.has(this.townScreen)) {
+    if (!this.readyScreens.has(this.townScreen!)) {
       // 防止重复创建loading
       if (!this.loadingOverlay) {
         this.loadingOverlay = new LoadingOverlay(this.root);
@@ -1550,6 +1576,7 @@ export class Main extends Component {
   }
 
   private resumeChallengePreparation() {
+    if (!this.playerStore.isChallengeUnlocked()) return;
     if (this.nextLevelPreparing || this.challengePreparing) return;
     if (!this.challengeLevelDefinition) {
       this.prepareChallengeLevel();
