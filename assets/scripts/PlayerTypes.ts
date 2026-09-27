@@ -17,6 +17,35 @@ export type ActivityStatus = 'locked' | 'scheduled' | 'active' | 'claiming' | 'e
 
 export type BuildingId = 'cat_house' | 'cafe' | 'yarn_workshop' | 'cat_society' | 'star_fountain';
 
+export interface CatJourneyState {
+  /** 开启旅程的上海时区日期；空字符串表示尚未开启。 */
+  startedDateKey: string;
+  /** 下一次可领取的旅程天数，范围 1~7。 */
+  currentDay: number;
+  /** 上一次领取日期，防止同一天重复领取。 */
+  lastClaimDateKey: string;
+  /** 已领取的天数，用于展示和幂等校验。 */
+  claimedDays: number[];
+  /** 第 7 天领取后置为 true。 */
+  completed: boolean;
+}
+
+export interface CatJourneySnapshot {
+  started: boolean;
+  currentDay: number;
+  claimedDays: number[];
+  canClaim: boolean;
+  completed: boolean;
+  rewardText: string;
+}
+
+export interface CatJourneyClaimResult {
+  ok: boolean;
+  message: string;
+  rewardText?: string;
+  completed?: boolean;
+}
+
 export interface CatTrialState {
   /** 试住的猫咪；当前只开放大橘，预留 CatId 方便后续扩展。 */
   catId: CatId;
@@ -130,6 +159,10 @@ export interface PlayerState {
   cats: Record<CatId, CatProgress>;
   /** 建筑正式解锁前的临时猫咪体验状态。 */
   catTrial: CatTrialState;
+  /** 首次通关后开启的、不因漏签清零的 7 日猫咪旅程。 */
+  catJourney: CatJourneyState;
+  /** 仅记录非数值的收藏徽章，不参与经济计算。 */
+  unlockedBadges: string[];
   equippedCat: CatId | null;
   /** 关卡宠物浮窗的本地位置偏好，不参与任何玩法计算 */
   gamePetPosition: GamePetPosition;

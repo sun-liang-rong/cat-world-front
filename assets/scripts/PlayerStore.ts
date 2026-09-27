@@ -23,6 +23,9 @@ import {
   BuildingId,
   BuildingProgress,
   CatId,
+  CatJourneyClaimResult,
+  CatJourneySnapshot,
+  CatJourneyState,
   CatTrialState,
   CatInteraction,
   DailyState,
@@ -60,6 +63,16 @@ const DAILY_SHOP_ITEM_IDS: ItemId[] = ['hammer', 'glove', 'dice', 'extra_slot'];
 const MAX_RECENT_RUNS = 10;
 // 主题 ↔ 建筑 ↔ 猫咪按顺序一一对应：第 N 栋建筑装饰完成解锁第 N 只猫咪
 const BUILDING_CATS: CatId[] = ['orange', 'white', 'black', 'ragdoll', 'aurora'];
+
+const CAT_JOURNEY_REWARDS: Array<{ text: string; reward: RewardBundle; badgeId?: string }> = [
+  { text: '金币 ×50', reward: { coins: 50 } },
+  { text: '锤子 ×1', reward: { items: { hammer: 1 } } },
+  { text: '增加槽位 ×1', reward: { items: { extra_slot: 1 } } },
+  { text: '金币 ×100', reward: { coins: 100 } },
+  { text: '骰子 ×1', reward: { items: { dice: 1 } } },
+  { text: '手套 ×1 + 锤子 ×1', reward: { items: { glove: 1, hammer: 1 } } },
+  { text: '金币 ×300 + 大橘纪念徽章', reward: { coins: 300 }, badgeId: 'orange_journey' },
+];
 
 // 玩家经验/等级：与主线关卡进度（state.level）解耦，只由累计经验推导。
 // 通关任意关卡获胜得经验 = 30 + min(关卡号 - 1, 60)，越往后单关收益越高；
@@ -556,6 +569,67 @@ export class PlayerStore {
     this.save();
   }
 
+  getCatJourneySnapshot(): CatJourneySnapshot {
+    this.syncCatJourney(true);
+    const journey = this.state.catJourney;
+    const today = this.todayKey();
+    const dayIndex = Math.max(1, Math.min(7, journey.currentDay));
+    const reward = CAT_JOURNEY_REWARDS[dayIndex - 1];
+    return {
+      started: journey.startedDateKey.length > 0,
+      currentDay: dayIndex,
+      claimedDays: this.clone(journey.claimedDays),
+      canClaim: journey.startedDateKey.length > 0
+        && !journey.completed
+        && journey.lastClaimDateKey !== today
+        && journey.claimedDays.indexOf(dayIndex) < 0,
+      completed: journey.completed,
+      rewardText: reward?.text ?? '旅程已完成',
+    };
+  }
+
+  isCatJourneyClaimable() {
+    return this.getCatJourneySnapshot().canClaim;
+  }
+
+  claimCatJourney(): CatJourneyClaimResult {
+    this.syncCatJourney(false);
+    const snapshot = this.getCatJourneySnapshot();
+    if (!snapshot.started) return { ok: false, message: '通关第 1 关后开启猫咪旅程' };
+    if (snapshot.completed) return { ok: false, message: '猫咪 7 日旅程已完成' };
+    if (!snapshot.canClaim) return { ok: false, message: '今天已经领取过啦，明天再来吧' };
+
+    const day = snapshot.currentDay;
+    const reward = CAT_JOURNEY_REWARDS[day - 1];
+    if (!reward) return { ok: false, message: '旅程奖励配置异常' };
+    this.state.catJourney.lastClaimDateKey = this.todayKey();
+    if (this.state.catJourney.claimedDays.indexOf(day) < 0) {
+      this.state.catJourney.claimedDays.push(day);
+    }
+    this.state.catJourney.claimedDays.sort((a, b) => a - b);
+    this.state.catJourney.completed = day >= CAT_JOURNEY_REWARDS.length;
+    if (!this.state.catJourney.completed) this.state.catJourney.currentDay = day + 1;
+    if (reward.badgeId && this.state.unlockedBadges.indexOf(reward.badgeId) < 0) {
+      this.state.unlockedBadges.push(reward.badgeId);
+    }
+    this.applyReward(reward.reward);
+    this.save();
+    this.analytics?.track('journey_claim', {
+      day,
+      reward: reward.text,
+      completed: this.state.catJourney.completed,
+    });
+    if (this.state.catJourney.completed) {
+      this.analytics?.track('journey_complete', { day });
+    }
+    return {
+      ok: true,
+      message: this.state.catJourney.completed ? '恭喜完成猫咪 7 日旅程！' : `第 ${day} 天奖励已领取`,
+      rewardText: reward.text,
+      completed: this.state.catJourney.completed,
+    };
+  }
+
   getDailyDateKey() {
     this.resetDailyState();
     return this.state.daily.dateKey;
@@ -962,6 +1036,18 @@ export class PlayerStore {
     return changed;
   }
 
+  private syncCatJourney(shouldSave: boolean) {
+    if (this.state.catJourney.startedDateKey || !this.hasClearedAnyLevel()) return false;
+    this.state.catJourney.startedDateKey = this.todayKey();
+    this.state.catJourney.currentDay = 1;
+    this.state.catJourney.lastClaimDateKey = '';
+    this.state.catJourney.claimedDays = [];
+    this.state.catJourney.completed = false;
+    this.analytics?.track('journey_start', { day: 1 });
+    if (shouldSave) this.save();
+    return true;
+  }
+
   private syncUnlocks(shouldSave: boolean) {
     // 第 N 栋建筑装饰完成 → 解锁第 N 只猫咪
     BUILDING_DEFINITIONS.forEach((definition, index) => {
@@ -1007,6 +1093,8 @@ export class PlayerStore {
       buildStage: 0,
       cats,
       catTrial: this.createCatTrialState(),
+      catJourney: this.createCatJourneyState(),
+      unlockedBadges: [],
       equippedCat: null,
       gamePetPosition: { side: 'right', y: 220 },
       inventory: { hammer: 0, glove: 0, dice: 0, extra_slot: 0 },
@@ -1098,6 +1186,16 @@ export class PlayerStore {
       totalRuns: 0,
       totalEliminated: 0,
       dailyRewardDateKey: '',
+    };
+  }
+
+  private createCatJourneyState(): CatJourneyState {
+    return {
+      startedDateKey: '',
+      currentDay: 1,
+      lastClaimDateKey: '',
+      claimedDays: [],
+      completed: false,
     };
   }
 
@@ -1205,6 +1303,31 @@ export class PlayerStore {
         skillCharge: this.nonNegativeInteger(saved.skillCharge, 0),
       };
     });
+    const savedCatJourney = value.catJourney;
+    if (savedCatJourney && typeof savedCatJourney === 'object') {
+      const claimedDays = Array.isArray(savedCatJourney.claimedDays)
+        ? savedCatJourney.claimedDays
+          .filter(day => Number.isInteger(day) && day >= 1 && day <= CAT_JOURNEY_REWARDS.length)
+          .map(day => Math.floor(day))
+          .filter((day, index, days) => days.indexOf(day) === index)
+          .sort((a, b) => a - b)
+        : [];
+      const completed = savedCatJourney.completed === true || claimedDays.indexOf(CAT_JOURNEY_REWARDS.length) >= 0;
+      state.catJourney = {
+        startedDateKey: typeof savedCatJourney.startedDateKey === 'string' ? savedCatJourney.startedDateKey : '',
+        currentDay: completed
+          ? CAT_JOURNEY_REWARDS.length
+          : Math.max(1, Math.min(CAT_JOURNEY_REWARDS.length, Math.floor(this.safeNumber(savedCatJourney.currentDay, 1)))),
+        lastClaimDateKey: typeof savedCatJourney.lastClaimDateKey === 'string' ? savedCatJourney.lastClaimDateKey : '',
+        claimedDays,
+        completed,
+      };
+    }
+    if (Array.isArray(value.unlockedBadges)) {
+      state.unlockedBadges = value.unlockedBadges
+        .filter(badge => typeof badge === 'string' && badge.length > 0)
+        .slice(0, 100);
+    }
     const savedCatTrial = value.catTrial;
     if (savedCatTrial && typeof savedCatTrial === 'object') {
       const catId = savedCatTrial.catId === 'orange' ? 'orange' : 'orange';

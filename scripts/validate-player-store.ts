@@ -145,6 +145,20 @@ function testCatTrialAndChallengeGate() {
   assert(fresh.consumeCatTrialGame()?.remainingGames === 0, 'third trial game should finish the trial');
   assert(!fresh.isCatTrialActive(), 'trial should deactivate after three mainline games');
   assert(!fresh.shouldShowCatTrialOffer(), 'completed or dismissed trial should not reappear');
+
+  const journey = new PlayerStore('player-store-cat-journey');
+  journey.load();
+  assert(!journey.getCatJourneySnapshot().started, 'journey should stay locked before the first clear');
+  journey.recordLevelStars(1, 3);
+  const startedJourney = journey.getCatJourneySnapshot();
+  assert(startedJourney.started && startedJourney.currentDay === 1, 'journey should start at day one after the first clear');
+  assert(startedJourney.canClaim, 'day one journey reward should be claimable');
+  const beforeJourneyCoins = journey.getCoins();
+  const firstClaim = journey.claimCatJourney();
+  assert(firstClaim.ok && firstClaim.rewardText === '金币 ×50', 'day one journey claim should grant the configured reward');
+  assert(journey.getCoins() === beforeJourneyCoins + 50, 'day one journey reward should add fifty coins');
+  assert(!journey.claimCatJourney().ok, 'journey should not be claimable twice on the same day');
+  assert(journey.getCatJourneySnapshot().currentDay === 2, 'journey should advance to day two after claiming');
 }
 
 function testEndlessProgress() {

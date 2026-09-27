@@ -46,7 +46,11 @@ export type TrackEventName =
   | 'cat_trial_start'
   | 'cat_trial_game_start'
   | 'cat_trial_converted'
-  | 'challenge_locked_click';
+  | 'challenge_locked_click'
+  | 'journey_start'
+  | 'journey_open'
+  | 'journey_claim'
+  | 'journey_complete';
 
 export type TrackProps = Record<string, string | number | boolean | string[] | null>;
 

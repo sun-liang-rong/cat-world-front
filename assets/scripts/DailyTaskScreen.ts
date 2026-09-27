@@ -1,4 +1,5 @@
 import {
+  BlockInputEvents,
   Button,
   Color,
   Graphics,
@@ -11,7 +12,7 @@ import {
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { DAILY_CHEST_REWARD, DAILY_TASK_DEFINITIONS } from './GameContent';
-import { DailyTaskId, TaskSnapshot } from './PlayerTypes';
+import { CatJourneyClaimResult, CatJourneySnapshot, DailyTaskId, TaskSnapshot } from './PlayerTypes';
 import { Toast } from './Toast';
 
 export interface DailyTaskScreenOptions {
@@ -22,6 +23,9 @@ export interface DailyTaskScreenOptions {
   isChestClaimed: () => boolean;
   onClaimTask: (id: DailyTaskId) => boolean;
   onClaimChest: () => boolean;
+  getCatJourney: () => CatJourneySnapshot;
+  onClaimCatJourney: () => CatJourneyClaimResult;
+  onJourneyOpened?: () => void;
   onStartGame: () => void;
   onReturnHome: () => void;
 }
@@ -61,6 +65,10 @@ export class DailyTaskScreen {
   private chestButton: Button | null = null;
   private chestLabel: Label | null = null;
   private chestButtonBackground: Sprite | null = null;
+  private journeyButton: Button | null = null;
+  private journeyButtonLabel: Label | null = null;
+  private journeyButtonBackground: Sprite | null = null;
+  private journeyUI: Node | null = null;
   private readonly cardViews: TaskCardView[] = [];
   private active = false;
 
@@ -77,6 +85,7 @@ export class DailyTaskScreen {
       COMMON_UI_ASSETS.backButton,
       'tasks/daily_date',
       'tasks/daily_panel',
+      'cats/cat_orange',
       ...TASK_ICON_PATHS,
       'tasks/daily_progress_track',
       ...REWARD_ICON_PATHS,
@@ -100,13 +109,18 @@ export class DailyTaskScreen {
     this.active = active;
     if (!this.taskUI) return;
     this.taskUI.active = active;
+    if (!active) this.closeJourneyPanel();
     if (active) this.refresh();
   }
 
   destroy() {
+    this.closeJourneyPanel();
     this.cardViews.length = 0;
     this.taskUI?.destroy();
     this.taskUI = null;
+    this.journeyButton = null;
+    this.journeyButtonLabel = null;
+    this.journeyButtonBackground = null;
   }
 
   private create() {
@@ -148,6 +162,18 @@ export class DailyTaskScreen {
     this.dateLabel = this.label(dateChip, '', 22, -1, 22, new Color(112, 69, 40));
     this.dateLabel.isBold = true;
     this.dateLabel.node.getComponent(UITransform)!.setContentSize(206, 48);
+
+    const journeyView = this.actionButton(this.taskUI!, 228, top - 232, 190, 68, '');
+    journeyView.label.fontSize = 20;
+    journeyView.label.lineHeight = 28;
+    journeyView.label.node.getComponent(UITransform)!.setContentSize(180, 56);
+    journeyView.button.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      this.openJourneyPanel();
+    });
+    this.journeyButton = journeyView.button;
+    this.journeyButtonLabel = journeyView.label;
+    this.journeyButtonBackground = journeyView.background;
   }
 
   private buildTaskCard(id: DailyTaskId, index: number, y: number) {
@@ -266,6 +292,108 @@ export class DailyTaskScreen {
       this.chestLabel.string = claimed ? '已领取' : ready ? '领取宝箱' : '完成全部任务';
       this.setButtonVisual(this.chestButtonBackground, this.chestButton.interactable);
     }
+    this.refreshJourneyButton();
+  }
+
+  private refreshJourneyButton() {
+    if (!this.journeyButton || !this.journeyButtonLabel) return;
+    const journey = this.options.getCatJourney();
+    this.journeyButton.interactable = journey.started;
+    this.journeyButtonLabel.string = !journey.started
+      ? '第 1 关后开启'
+      : journey.completed
+        ? '猫咪旅程 · 已完成'
+        : journey.canClaim
+          ? `领取第 ${journey.currentDay} 天`
+          : '猫咪旅程 · 明天再来';
+    this.setButtonVisual(this.journeyButtonBackground, journey.started);
+  }
+
+  private openJourneyPanel() {
+    if (this.journeyUI || !this.taskUI) return;
+    const journey = this.options.getCatJourney();
+    if (!journey.started) {
+      this.toast('通关第 1 关后开启猫咪 7 日旅程');
+      return;
+    }
+    this.options.onJourneyOpened?.();
+    this.journeyUI = new Node('CatJourneyPanel');
+    this.taskUI.addChild(this.journeyUI);
+    const visibleSize = view.getVisibleSize();
+    const mask = new Node('CatJourneyMask');
+    this.journeyUI.addChild(mask);
+    mask.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
+    const maskGraphics = mask.addComponent(Graphics);
+    maskGraphics.fillColor = new Color(22, 18, 13, 190);
+    maskGraphics.rect(-visibleSize.width / 2, -visibleSize.height / 2, visibleSize.width, visibleSize.height);
+    maskGraphics.fill();
+    mask.addComponent(BlockInputEvents);
+    const panel = new Node('CatJourneyCard');
+    this.journeyUI.addChild(panel);
+    panel.setPosition(0, -12);
+    panel.addComponent(UITransform).setContentSize(640, 610);
+    const panelGraphics = panel.addComponent(Graphics);
+    panelGraphics.fillColor = new Color(255, 248, 226);
+    panelGraphics.strokeColor = new Color(235, 205, 158);
+    panelGraphics.lineWidth = 4;
+    panelGraphics.roundRect(-320, -305, 640, 610, 32);
+    panelGraphics.fill();
+    panelGraphics.stroke();
+
+    this.image(panel, 'cats/cat_orange', 0, 246, 108, 108);
+    const title = this.label(panel, '猫咪 7 日旅程', 0, 178, 34, new Color(111, 62, 28));
+    title.isBold = true;
+    const subtitle = this.label(panel, journey.completed ? '大橘为你准备了纪念徽章' : '每天回来看看，带走一份猫咪礼物', 0, 140, 20, new Color(112, 69, 40));
+    subtitle.node.getComponent(UITransform)!.setContentSize(560, 32);
+
+    const rewards = [
+      '金币 ×50', '锤子 ×1', '增加槽位 ×1', '金币 ×100',
+      '骰子 ×1', '手套 ×1 + 锤子 ×1', '金币 ×300 + 徽章',
+    ];
+    for (let index = 0; index < rewards.length; index += 1) {
+      const day = index + 1;
+      const row = Math.floor(index / 4);
+      const column = index % 4;
+      const x = -225 + column * 150;
+      const y = 70 - row * 102;
+      const cell = new Node(`JourneyDay${day}`);
+      panel.addChild(cell);
+      cell.setPosition(x, y);
+      cell.addComponent(UITransform).setContentSize(136, 86);
+      const cellGraphics = cell.addComponent(Graphics);
+      const claimed = journey.claimedDays.indexOf(day) >= 0;
+      const current = !journey.completed && journey.currentDay === day;
+      cellGraphics.fillColor = claimed
+        ? new Color(205, 238, 175)
+        : current ? new Color(255, 224, 108) : new Color(255, 252, 241);
+      cellGraphics.strokeColor = current ? new Color(201, 148, 47) : new Color(235, 205, 158);
+      cellGraphics.lineWidth = current ? 4 : 2;
+      cellGraphics.roundRect(-68, -43, 136, 86, 18);
+      cellGraphics.fill();
+      cellGraphics.stroke();
+      const dayLabel = this.label(cell, `第 ${day} 天`, 0, 20, 19, new Color(111, 62, 28));
+      dayLabel.isBold = true;
+      const rewardLabel = this.label(cell, claimed ? '已领取' : rewards[index], 0, -13, 15, new Color(112, 69, 40));
+      rewardLabel.node.getComponent(UITransform)!.setContentSize(126, 30);
+    }
+
+    const claimView = this.actionButton(panel, 0, -226, 250, 78, journey.canClaim ? '领取今日奖励' : journey.completed ? '旅程已完成' : '明天再来');
+    claimView.button.interactable = journey.canClaim;
+    this.setButtonVisual(claimView.background, journey.canClaim);
+    claimView.button.node.on(Button.EventType.CLICK, () => {
+      const result = this.options.onClaimCatJourney();
+      this.toast(result.ok ? `${result.message}：${result.rewardText ?? ''}` : result.message);
+      this.refresh();
+      this.closeJourneyPanel();
+    });
+
+    const close = this.actionButton(panel, 0, -278, 160, 64, '稍后查看');
+    close.button.node.on(Button.EventType.CLICK, () => this.closeJourneyPanel());
+  }
+
+  private closeJourneyPanel() {
+    this.journeyUI?.destroy();
+    this.journeyUI = null;
   }
 
   private taskButtonText(id: DailyTaskId, task: TaskSnapshot) {

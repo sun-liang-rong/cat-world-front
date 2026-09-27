@@ -194,7 +194,8 @@ export class Main extends Component {
         const tasks = this.playerStore.getTasks();
         const claimable = tasks.filter(task => task.completed && !task.claimed).length;
         const chestReady = this.playerStore.isDailyChestReady() && !this.playerStore.isDailyChestClaimed();
-        return claimable + (chestReady ? 1 : 0);
+        const journeyReady = this.playerStore.isCatJourneyClaimable();
+        return claimable + (chestReady ? 1 : 0) + (journeyReady ? 1 : 0);
       },
       // 首页章节横幅：关卡号与主题内通关数实时取主线进度（每通一关都会变化），
       // 主题名按关卡所在冒险主题（每 20 关一章）；回首页 setActive 时统一刷新
@@ -274,6 +275,9 @@ export class Main extends Component {
       isChestClaimed: () => this.playerStore.isDailyChestClaimed(),
       onClaimTask: id => this.playerStore.claimTask(id),
       onClaimChest: () => this.playerStore.claimDailyChest(),
+      getCatJourney: () => this.playerStore.getCatJourneySnapshot(),
+      onClaimCatJourney: () => this.playerStore.claimCatJourney(),
+      onJourneyOpened: () => this.analytics.track('journey_open'),
       onStartGame: () => this.startGame(),
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
