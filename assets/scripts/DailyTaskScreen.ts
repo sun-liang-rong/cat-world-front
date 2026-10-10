@@ -387,26 +387,27 @@ export class DailyTaskScreen {
     // 点蒙层空白处直接关闭，与首页各弹窗的交互一致
     mask.on(Node.EventType.TOUCH_END, () => this.closeJourneyPanel());
 
-    const panelHeight = shareOffer ? 730 : 650;
+    const panelWidth = 610;
+    const panelHeight = shareOffer ? 760 : 650;
     // 面板投影：与首页弹窗同一套「垫影」画法
     const shadow = new Node('CatJourneyShadow');
     this.journeyUI.addChild(shadow);
     shadow.setPosition(0, -6);
-    shadow.addComponent(UITransform).setContentSize(664, panelHeight + 16);
+    shadow.addComponent(UITransform).setContentSize(panelWidth + 24, panelHeight + 16);
     const shadowGraphics = shadow.addComponent(Graphics);
     shadowGraphics.fillColor = new Color(69, 48, 29, 88);
-    shadowGraphics.roundRect(-332, -(panelHeight + 16) / 2, 664, panelHeight + 16, 36);
+    shadowGraphics.roundRect(-(panelWidth + 24) / 2, -(panelHeight + 16) / 2, panelWidth + 24, panelHeight + 16, 36);
     shadowGraphics.fill();
 
     const panel = new Node('CatJourneyCard');
     this.journeyUI.addChild(panel);
     panel.setPosition(0, -12);
-    panel.addComponent(UITransform).setContentSize(640, panelHeight);
+    panel.addComponent(UITransform).setContentSize(panelWidth, panelHeight);
     const panelGraphics = panel.addComponent(Graphics);
     panelGraphics.fillColor = new Color(255, 248, 226);
     panelGraphics.strokeColor = new Color(235, 205, 158);
     panelGraphics.lineWidth = 4;
-    panelGraphics.roundRect(-320, -panelHeight / 2, 640, panelHeight, 32);
+    panelGraphics.roundRect(-panelWidth / 2, -panelHeight / 2, panelWidth, panelHeight, 32);
     panelGraphics.fill();
     panelGraphics.stroke();
     // 入场回弹：与首页各弹窗同一套节奏
@@ -414,9 +415,9 @@ export class DailyTaskScreen {
     tween(panel).to(0.28, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' }).start();
 
     // 底部两角的小爪印/星光：低透明度装饰，打破面板下方的空旷感
-    const cornerPaw = this.image(panel, 'tasks/daily_paw_cluster', -286, -panelHeight / 2 + 48, 32, 43);
+    const cornerPaw = this.image(panel, 'tasks/daily_paw_cluster', -270, -panelHeight / 2 + 48, 32, 43);
     cornerPaw.addComponent(UIOpacity).opacity = 150;
-    const cornerSpark = this.image(panel, 'tasks/daily_paw_sparkle', 286, -panelHeight / 2 + 48, 23, 27);
+    const cornerSpark = this.image(panel, 'tasks/daily_paw_sparkle', 270, -panelHeight / 2 + 48, 23, 27);
     cornerSpark.addComponent(UIOpacity).opacity = 150;
 
     // 垂直节奏（自上而下等比留白）：大橘 → 缎带标题 → 副标题 → 进度条 → 礼物卡 → 按钮
@@ -519,13 +520,13 @@ export class DailyTaskScreen {
       const day = index + 1;
       const row = Math.floor(index / 4);
       const column = index % 4;
-      // 第二行只有 3 格：整体居中，摆出对称的旅程队形；横向格间距 20px
-      const x = row === 0 ? -234 + column * 156 : -156 + column * 156;
+      // 四列卡片两侧各留 25px，横向格间距 16px；第二行居中。
+      const x = row === 0 ? -216 + column * 144 : -144 + column * 144;
       const y = gridTop - row * gridStep;
       const cell = new Node(`JourneyDay${day}`);
       panel.addChild(cell);
       cell.setPosition(x, y);
-      cell.addComponent(UITransform).setContentSize(140, 100);
+      cell.addComponent(UITransform).setContentSize(128, 100);
       const cellGraphics = cell.addComponent(Graphics);
       const claimed = journey.claimedDays.indexOf(day) >= 0;
       const current = !journey.completed && journey.currentDay === day;
@@ -534,7 +535,7 @@ export class DailyTaskScreen {
         : current ? new Color(255, 224, 108) : new Color(255, 252, 241);
       cellGraphics.strokeColor = current ? new Color(201, 148, 47) : new Color(235, 205, 158);
       cellGraphics.lineWidth = current ? 4 : 2;
-      cellGraphics.roundRect(-70, -50, 140, 100, 20);
+      cellGraphics.roundRect(-64, -50, 128, 100, 20);
       cellGraphics.fill();
       cellGraphics.stroke();
 
@@ -559,13 +560,13 @@ export class DailyTaskScreen {
       this.image(cell, rewardIcons[index], 0, -4, 44, 44);
       const rewardLabel = this.label(cell, claimed ? '已领取' : rewardShort[index], 0, -38, 17, new Color(112, 69, 40));
       rewardLabel.overflow = Label.Overflow.SHRINK;
-      rewardLabel.node.getComponent(UITransform)!.setContentSize(128, 26);
+      rewardLabel.node.getComponent(UITransform)!.setContentSize(116, 26);
 
       // 已领取：右上角补一枚绿勾，扫一眼就能分清新旧格子
       if (claimed) {
         const check = new Node('ClaimedCheck');
         cell.addChild(check);
-        check.setPosition(55, 33);
+        check.setPosition(49, 33);
         const checkGraphics = check.addComponent(Graphics);
         checkGraphics.strokeColor = new Color(78, 139, 50);
         checkGraphics.lineWidth = 4;
@@ -578,9 +579,9 @@ export class DailyTaskScreen {
       if (day === rewardShort.length) {
         cellGraphics.strokeColor = new Color(214, 151, 38);
         cellGraphics.lineWidth = 4;
-        cellGraphics.roundRect(-70, -50, 140, 100, 20);
+        cellGraphics.roundRect(-64, -50, 128, 100, 20);
         cellGraphics.stroke();
-        this.image(cell, 'tasks/daily_sparkle_large', -56, 33, 26, 30);
+        this.image(cell, 'tasks/daily_sparkle_large', -49, 33, 26, 30);
       }
       // 今日可领取的格子轻微呼吸，把视线引到「今天该点的那一格」
       if (current) {

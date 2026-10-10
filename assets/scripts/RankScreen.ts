@@ -281,7 +281,7 @@ export class RankScreen {
   private buildRetryButton(top: number) {
     const node = new Node('RankRetryButton');
     this.rankUI!.addChild(node);
-    node.setPosition(0, top - 390);
+    node.setPosition(0, top - 416);
     node.addComponent(UITransform).setContentSize(200, 72);
     const graphics = node.addComponent(Graphics);
     graphics.fillColor = new Color(255, 224, 108);
@@ -348,14 +348,19 @@ export class RankScreen {
     this.image(row, entry.avatarPath, AVATAR_X, 2, 94, 92);
 
     const nameBar = this.image(row, 'rank/bar_name', NAME_BAR_X, 2, NAME_BAR_WIDTH, NAME_BAR_HEIGHT);
-    const name = this.label(nameBar, entry.name, 0, 0, 22, new Color(112, 69, 40));
+    const name = this.label(nameBar, this.shortName(entry.name, 9), 0, 0, 22, new Color(112, 69, 40));
     name.isBold = true;
+    name.enableWrapText = false;
+    name.overflow = Label.Overflow.SHRINK;
     name.node.getComponent(UITransform)!.setContentSize(NAME_BAR_WIDTH - 24, 36);
 
     if (tab === 'level') this.image(row, COMMON_UI_ASSETS.starIcon, STAR_X, 2, 44, 43);
     this.drawScoreBar(row, SCORE_BAR_X);
     const score = this.label(row, entry.scoreLabel, SCORE_BAR_X, 2, tab === 'challenge' ? 18 : 21, new Color(112, 69, 40));
     score.isBold = true;
+    score.enableWrapText = false;
+    score.overflow = Label.Overflow.SHRINK;
+    score.node.getComponent(UITransform)!.setContentSize(SCORE_BAR_WIDTH - 16, 34);
   }
 
   private drawRowCard(parent: Node, isSelf: boolean) {
@@ -414,12 +419,16 @@ export class RankScreen {
     const nameBar = this.image(panel, 'rank/bar_name', -105, 50, 190, 46);
     this.selfNameLabel = this.label(nameBar, '我', 0, 0, 22, new Color(112, 69, 40));
     this.selfNameLabel.isBold = true;
+    this.selfNameLabel.enableWrapText = false;
+    this.selfNameLabel.overflow = Label.Overflow.SHRINK;
+    this.selfNameLabel.node.getComponent(UITransform)!.setContentSize(166, 34);
     this.image(panel, COMMON_UI_ASSETS.starIcon, 22, 50, 36, 35).name = 'SelfScoreIcon';
-    this.selfStarsLabel = this.label(panel, '', 90, 50, 22, new Color(112, 69, 40));
+    this.selfStarsLabel = this.label(panel, String(this.options.getStars()), 96, 50, 22, new Color(112, 69, 40));
     this.selfStarsLabel.isBold = true;
     this.selfStarsLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
-    this.selfStarsLabel.overflow = Label.Overflow.CLAMP;
-    this.selfStarsLabel.node.getComponent(UITransform)!.setContentSize(84, 28);
+    this.selfStarsLabel.enableWrapText = false;
+    this.selfStarsLabel.overflow = Label.Overflow.SHRINK;
+    this.selfStarsLabel.node.getComponent(UITransform)!.setContentSize(96, 34);
 
     this.selfCaptionLabel = this.label(panel, '', -35, 4, 18, new Color(136, 94, 63));
     this.selfCaptionLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
@@ -475,7 +484,7 @@ export class RankScreen {
     if (icon) icon.active = tab === 'level';
     const self = entries.find(entry => entry.isSelf);
     if (this.selfNameLabel) {
-      this.selfNameLabel.string = self ? self.name.replace('（我）', '') : '我';
+      this.selfNameLabel.string = self ? this.shortName(self.name.replace('（我）', ''), 7) : '我';
     }
     if (!self) {
       this.selfRankLabel.string = '未上榜';
@@ -595,6 +604,12 @@ export class RankScreen {
       sprite.spriteFrame = frame;
     }
     return node;
+  }
+
+  // 超长昵称保留可读字号，避免整串文字被压成难辨认的小字。
+  private shortName(name: string, maxChars: number) {
+    const chars = Array.from(name);
+    return chars.length > maxChars ? `${chars.slice(0, maxChars - 1).join('')}…` : name;
   }
 
   private label(parent: Node, text: string, x: number, y: number, size: number, color: Color) {

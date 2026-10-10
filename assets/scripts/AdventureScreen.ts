@@ -71,14 +71,14 @@ const THEME_TAP_JITTER = 20;
 // 沿背景石板路自上而下取的 6 个节点位，y 相对地图手势区中心（设计稿像素）。
 // 手势区顶边贴横幅底边、底边固定在 bottom+337：横幅下移 30px 时区中心只下移 15px，
 // 因此每个 y 都含 +15 补偿，让节点钉在背景石板路的原位（路牌同理，见 buildMapDecoration）。
-// 相邻间距已按节点实际高度留出余量（完成 85 / 旗帜 136 / 锁 92）。
+// 热区高 96px，纵向间距 112px，避免相邻关卡的点击区域重叠。
 const MAP_SLOTS: Array<[number, number]> = [
   [-4, 325],
-  [4, 229],
-  [-62, 111],
-  [13, -9],
-  [-103, -120],
-  [-119, -231],
+  [4, 213],
+  [-62, 101],
+  [13, -11],
+  [-103, -123],
+  [-119, -235],
 ];
 
 const COLORS = {
@@ -419,7 +419,7 @@ export class AdventureScreen {
     const node = new Node(`AdventureLevel_${level}`);
     this.mapLayer!.addChild(node);
     node.setPosition(x, y);
-    node.addComponent(UITransform).setContentSize(116, 156);
+    node.addComponent(UITransform).setContentSize(116, 96);
 
     let body: Node;
     let numberColor = Color.WHITE;
