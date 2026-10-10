@@ -2,7 +2,6 @@ import {
   BlockInputEvents,
   Button,
   Color,
-  EventTouch,
   Graphics,
   Label,
   Node,
@@ -25,7 +24,7 @@ import { Toast } from './Toast';
 import { EndlessDirector } from './level/EndlessDirector';
 import { LevelRules, LevelSolver } from './level/LevelSolver';
 import { LevelDefinition, LevelGoal, PlayerRun, TileDefinition, TileGeometry } from './level/LevelTypes';
-import { CatId, CatTrialStatus, GameRunCheckpoint, GamePetPosition, ItemId, ShareCardType, ShareOffer } from './PlayerTypes';
+import { CatId, CatTrialStatus, GameRunCheckpoint, ItemId, ShareCardType, ShareOffer } from './PlayerTypes';
 import { SettingsPopup } from './SettingsPopup';
 import { BuildTargetInfo, MAX_MAIN_LEVEL, themeIndexForLevel } from './TownContent';
 import { PerformanceManager } from './PerformanceManager';
@@ -77,15 +76,8 @@ type CatSkillPanelView = {
   portrait: Node;
   lockMark: Node;
   cooldownOverlay: Node;
-  speechBubble: Node;
-  speechBubbleGraphics: Graphics;
-  nameLabel: Label;
   cooldownLabel: Label;
-  descriptionLabel: Label;
   chargeLabel: Label;
-  statusLabel: Label;
-  chargeFill: Graphics;
-  trialBadge: Node;
 };
 
 // 通用元素皮肤（game/tiles/tile_7..21）：未配套主题时的默认皮肤，也是主题皮肤缺图时的回退
@@ -194,11 +186,11 @@ export interface GameScreenOptions {
   /** 道具用完时点击格子 → 每日免费补给（Main 处理平台可用性与每日限领）；不传时空道具保持禁用 */
   onToolSupplyGet?: (id: ItemId) => void;
   getEquippedCat: () => CatId | null;
-  /** 是否至少解锁了一只猫咪：宠物浮窗区分「去装备」和「先解锁建筑」两种提示 */
+  /** 是否至少解锁了一只猫咪：技能入口区分「去装备」和「先解锁建筑」两种提示 */
   hasAnyUnlockedCat?: () => boolean;
   /** 临时猫咪试住：仅主线玩家第一次真正操作时消耗一局，挑战/无尽不传。 */
   onMainRunStarted?: () => void;
-  /** 试住状态快照入口：主线开局时读取一次，驱动浮窗「试住中」角标与结算埋点。 */
+  /** 试住状态快照入口：主线开局时读取一次，驱动技能入口试住提示与结算埋点。 */
   getCatTrialStatus?: () => CatTrialStatus | null;
   /** 对局内设置弹窗的音频开关（Main 注入 AudioManager；缺省时弹窗按开启兜底） */
   getMusicEnabled?: () => boolean;
@@ -207,8 +199,6 @@ export interface GameScreenOptions {
   onMusicChanged?: (enabled: boolean) => void;
   onSoundChanged?: (enabled: boolean) => void;
   onVibrationChanged?: (enabled: boolean) => void;
-  getGamePetPosition: () => GamePetPosition;
-  onGamePetPositionChanged: (position: GamePetPosition) => void;
   getCatSkillState: (id: CatId) => CatSkillState;
   onCatSkillFired: (id: CatId) => { readyAt: number; giftCoins: number };
   onCatSkillCharge: (id: CatId, charge: number) => void;
@@ -340,18 +330,9 @@ export class GameScreen {
   private catSkillConfig: ReturnType<typeof getCatSkillConfig> | null = null;
   private catSkillPanel: CatSkillPanelView | null = null;
   private catSkillRefreshTimer: ReturnType<typeof setInterval> | null = null;
-  private catSkillBubbleTimer: ReturnType<typeof setInterval> | null = null;
-  private catSkillBubbleVisible = true;
   private catSkillUsed = false;
   // 棋盘清除类技能处于选择模式时剩余的可选目标数（大橘/白猫 1 个，极光猫 2 个）
   private catSkillPicksLeft = 0;
-  private catSkillDockSide: 'left' | 'right' = 'right';
-  /** 宠物可停靠的最高 y（气泡不得压到关卡目标横幅），create 时按 headerY 计算 */
-  private catSkillMaxY = Number.POSITIVE_INFINITY;
-  private catSkillDragActive = false;
-  private catSkillDragMoved = false;
-  private catSkillDragOffset = new Vec3();
-  private catSkillSuppressClick = false;
   private settlementPopup: SettlementPopup | null = null;
   private boardTutorial: BoardTutorial | null = null;
   private settingsPopup: SettingsPopup | null = null;
@@ -573,7 +554,6 @@ export class GameScreen {
       this.gameUI.setSiblingIndex(this.gameUI.parent.children.length - 1);
     }
     this.startCatSkillRefresh();
-    this.startCatSkillBubbleCycle();
     if (this.options.endless) this.startEndlessHud();
     if (this.options.checkpoint) {
       this.restoreCheckpoint(this.options.checkpoint);
@@ -754,23 +734,9 @@ export class GameScreen {
     this.gameUI.addChild(this.trayFlightLayer);
     this.trayFlightLayer.setPosition(this.trayLayer.position);
 
-    // 宠物是棋盘上的悬浮助手，贴在右侧安全边缘，不再占用顶部目标栏的横向空间。
-    const savedPetPosition = this.options.getGamePetPosition();
-    this.catSkillDockSide = savedPetPosition.side === 'left' ? 'left' : 'right';
-    const petX = this.catSkillDockSide === 'left'
-      ? -visibleSize.width / 2 + 78
-      : visibleSize.width / 2 - 78;
-    const minPetY = -visibleSize.height / 2 + 88;
-    // 宠物气泡（顶部 petY+97）不得压到关卡目标横幅（顶边 headerY-181.5）：
-    // 上限留 6px 余量；拖拽上限共用同一字段，避免拖回顶部时再次遮挡。
-    const maxPetY = headerY - 285;
-    this.catSkillMaxY = maxPetY;
-    const defaultPetY = Math.max(220, headerY - 300);
-    const petY = Math.max(
-      minPetY,
-      Math.min(maxPetY, Number.isFinite(savedPetPosition.y) ? savedPetPosition.y : defaultPetY),
-    );
-    this.buildCatSkillPanel(petX, petY);
+    // 技能入口固定在关卡标题和设置之间，独立热区不会覆盖任何棋盘牌。
+    // 不采用旧档悬浮位置，避免旧位置继续遮住末牌造成「清空却不通关」错觉。
+    this.buildCatSkillPanel(172, headerY);
     this.gameUI.active = false;
     this.created = true;
   }
@@ -800,8 +766,6 @@ export class GameScreen {
     this.hidePreparingHint(true);
     if (this.catSkillRefreshTimer) clearInterval(this.catSkillRefreshTimer);
     this.catSkillRefreshTimer = null;
-    if (this.catSkillBubbleTimer) clearInterval(this.catSkillBubbleTimer);
-    this.catSkillBubbleTimer = null;
     if (this.endlessHudTimer) clearInterval(this.endlessHudTimer);
     this.endlessHudTimer = null;
     this.endlessHudLabel = null;
@@ -898,257 +862,36 @@ export class GameScreen {
   }
 
   private buildCatSkillPanel(x: number, y: number) {
-    const panel = new Node('CatSkillPanel');
-    this.gameUI.addChild(panel);
-    panel.setPosition(x, y);
-    panel.addComponent(UITransform).setContentSize(156, 156);
-
-    // 阴影和金色外圈让宠物从棋盘背景中浮出来，点击热区保持 156×156。
-    const shadow = new Node('CatSkillShadow');
-    panel.addChild(shadow);
-    shadow.setPosition(0, -70);
-    shadow.addComponent(UITransform).setContentSize(112, 28);
-    const shadowGraphics = shadow.addComponent(Graphics);
-    shadowGraphics.fillColor = new Color(92, 54, 22, 70);
-    shadowGraphics.ellipse(0, 0, 52, 12);
-    shadowGraphics.fill();
-
-    const frame = new Node('CatSkillFrame');
-    panel.addChild(frame);
-    frame.setPosition(0, -4);
-    frame.addComponent(UITransform).setContentSize(128, 128);
-    const frameGraphics = frame.addComponent(Graphics);
-    frameGraphics.fillColor = new Color(255, 248, 226, 248);
-    frameGraphics.strokeColor = new Color(235, 205, 158, 255);
-    frameGraphics.lineWidth = 4;
-    frameGraphics.circle(0, 0, 62);
-    frameGraphics.fill();
-    frameGraphics.stroke();
-
+    const panel = this.addPanel('CatSkillPanel', x, y, 88, 88, new Color(255, 248, 226), this.gameUI);
     const portraitPath = this.equippedCatId
       ? getCatDefinition(this.equippedCatId).portraitPath
       : 'cats/cat_orange';
-    const portrait = this.image(panel, portraitPath, 0, -4, 110, 110);
-    const portraitSprite = portrait.getComponent(Sprite);
-    if (!this.equippedCatId && portraitSprite) {
-      // 未装备时保留猫咪轮廓，但以中性灰色显示，和已装备状态形成明确区分。
-      portraitSprite.color = new Color(154, 154, 154, 255);
-    }
+    const portrait = this.image(panel, portraitPath, 0, 12, 60, 60);
     const lockMark = this.buildCatLockMark(panel);
-    const skillIcon = this.image(panel, 'game/cat_skill_badge', 45, 42, 30, 30);
-    const skillSprite = skillIcon.getComponent(Sprite);
-    if (skillSprite) skillSprite.color = new Color(255, 189, 42, 255);
-
-    const cooldownOverlay = new Node('CatSkillCooldownOverlay');
-    panel.addChild(cooldownOverlay);
-    cooldownOverlay.setPosition(0, -4);
-    cooldownOverlay.addComponent(UITransform).setContentSize(112, 112);
-    const cooldownGraphics = cooldownOverlay.addComponent(Graphics);
-    cooldownGraphics.fillColor = new Color(48, 37, 28, 142);
-    cooldownGraphics.circle(0, 0, 55);
-    cooldownGraphics.fill();
+    lockMark.setPosition(-30, 28);
+    lockMark.setScale(0.7, 0.7, 1);
+    this.image(panel, 'game/cat_skill_badge', 30, 28, 24, 24);
+    const cooldownOverlay = this.addPanel('CatSkillCooldownOverlay', 0, 0, 88, 88, new Color(48, 37, 28, 142), panel);
     cooldownOverlay.active = false;
-
-    const cooldownLabel = this.label(panel, '', 0, -4, 25, new Color(255, 251, 238));
+    const cooldownLabel = this.label(panel, '', 0, 0, 22, new Color(255, 251, 238));
     cooldownLabel.isBold = true;
-    cooldownLabel.node.addComponent(UIOpacity);
-    cooldownLabel.node.getComponent(UITransform)!.setContentSize(112, 36);
-
-    const nameLabel = this.label(panel, '', 0, -73, 18, new Color(111, 62, 28));
-    nameLabel.isBold = true;
-    nameLabel.outlineWidth = 3;
-    nameLabel.outlineColor = new Color(255, 248, 226, 255);
-    nameLabel.overflow = Label.Overflow.CLAMP;
-    nameLabel.node.getComponent(UITransform)!.setContentSize(140, 26);
-
-    const speechBubble = new Node('CatSkillSpeechBubble');
-    panel.addChild(speechBubble);
-    speechBubble.setPosition(-142, 62);
-    speechBubble.addComponent(UITransform).setContentSize(264, 70);
-    const bubbleGraphics = speechBubble.addComponent(Graphics);
-    bubbleGraphics.fillColor = new Color(255, 248, 226, 252);
-    bubbleGraphics.strokeColor = new Color(235, 205, 158, 255);
-    bubbleGraphics.lineWidth = 3;
-    bubbleGraphics.roundRect(-132, -35, 264, 70, 20);
-    bubbleGraphics.fill();
-    bubbleGraphics.stroke();
-    bubbleGraphics.moveTo(118, -31);
-    bubbleGraphics.lineTo(132, -48);
-    bubbleGraphics.lineTo(104, -34);
-    bubbleGraphics.close();
-    bubbleGraphics.fill();
-
-    const descriptionLabel = this.label(speechBubble, '', 0, 0, 19, new Color(112, 69, 40));
-    descriptionLabel.verticalAlign = Label.VerticalAlign.CENTER;
-    descriptionLabel.lineHeight = 25;
-    descriptionLabel.overflow = Label.Overflow.CLAMP;
-    descriptionLabel.node.getComponent(UITransform)!.setContentSize(238, 56);
-
-    // 保留充能字段，改为宠物脚下的小进度条，避免丢失技能进度反馈。
-    const chargeLabel = this.label(panel, '', -45, -51, 15, new Color(145, 99, 54));
-    chargeLabel.node.getComponent(UITransform)!.setContentSize(90, 20);
-    const chargeTrack = new Node('CatSkillChargeTrack');
-    panel.addChild(chargeTrack);
-    chargeTrack.setPosition(34, -51);
-    chargeTrack.addComponent(UITransform).setContentSize(66, 10);
-    const trackGraphics = chargeTrack.addComponent(Graphics);
-    trackGraphics.fillColor = new Color(235, 215, 177, 255);
-    trackGraphics.roundRect(-33, -5, 66, 10, 5);
-    trackGraphics.fill();
-    const chargeFillNode = new Node('CatSkillChargeFill');
-    panel.addChild(chargeFillNode);
-    chargeFillNode.setPosition(34, -51);
-    chargeFillNode.addComponent(UITransform).setContentSize(66, 10);
-    const chargeFill = chargeFillNode.addComponent(Graphics);
-
-    // 试住角标：宠物浮窗下方的黄色小胶囊（「试住中 第N/5局」），非试住对局隐藏
-    const trialBadge = new Node('CatTrialBadge');
-    panel.addChild(trialBadge);
-    trialBadge.setPosition(0, -106);
-    trialBadge.addComponent(UITransform).setContentSize(140, 32);
-    const trialBadgeGraphics = trialBadge.addComponent(Graphics);
-    trialBadgeGraphics.fillColor = new Color(255, 224, 108, 248);
-    trialBadgeGraphics.strokeColor = new Color(201, 148, 47, 255);
-    trialBadgeGraphics.lineWidth = 3;
-    trialBadgeGraphics.roundRect(-70, -16, 140, 32, 16);
-    trialBadgeGraphics.fill();
-    trialBadgeGraphics.stroke();
-    const trialBadgeLabel = this.label(trialBadge, '', 0, 0, 15, new Color(111, 62, 28));
-    trialBadgeLabel.isBold = true;
-    trialBadgeLabel.overflow = Label.Overflow.SHRINK;
-    trialBadgeLabel.enableWrapText = false;
-    trialBadgeLabel.verticalAlign = Label.VerticalAlign.CENTER;
-    trialBadgeLabel.node.getComponent(UITransform)!.setContentSize(130, 24);
-    trialBadge.active = false;
-
-    const statusLabel = this.label(panel, '', 0, -92, 1, Color.TRANSPARENT);
-    statusLabel.node.active = false;
-
+    cooldownLabel.node.getComponent(UITransform)!.setContentSize(88, 30);
+    const chargeLabel = this.label(panel, '', 0, -28, 20, new Color(111, 62, 28));
+    chargeLabel.isBold = true;
+    chargeLabel.outlineWidth = 3;
+    chargeLabel.outlineColor = new Color(255, 248, 226);
+    chargeLabel.overflow = Label.Overflow.CLAMP;
+    chargeLabel.enableWrapText = false;
+    chargeLabel.node.getComponent(UITransform)!.setContentSize(152, 28);
     const button = panel.addComponent(Button);
     button.transition = Button.Transition.SCALE;
     button.zoomScale = 0.93;
     button.node.on(Button.EventType.CLICK, () => {
-      // Cocos Button 的 CLICK 可能先于 TOUCH_END 到达，拖动时必须屏蔽这次点击。
-      if (this.catSkillDragMoved || this.catSkillDragActive || this.catSkillSuppressClick) return;
       this.options.onPlaySound('click');
       this.onCatSkillTap();
     });
-
-    panel.on(Node.EventType.TOUCH_START, (event: EventTouch) => {
-      const touchPosition = this.getCatSkillTouchPosition(event);
-      this.catSkillDragActive = true;
-      this.catSkillDragMoved = false;
-      this.catSkillDragOffset.set(
-        panel.position.x - touchPosition.x,
-        panel.position.y - touchPosition.y,
-        0,
-      );
-    });
-    panel.on(Node.EventType.TOUCH_MOVE, (event: EventTouch) => {
-      if (!this.catSkillDragActive) return;
-      const touchPosition = this.getCatSkillTouchPosition(event);
-      const distanceX = touchPosition.x + this.catSkillDragOffset.x - panel.position.x;
-      const distanceY = touchPosition.y + this.catSkillDragOffset.y - panel.position.y;
-      if (!this.catSkillDragMoved && Math.hypot(distanceX, distanceY) < 8) return;
-      this.catSkillDragMoved = true;
-      const visibleSize = view.getVisibleSize();
-      const halfWidth = 78;
-      const nextX = touchPosition.x + this.catSkillDragOffset.x;
-      const nextY = touchPosition.y + this.catSkillDragOffset.y;
-      panel.setPosition(
-        Math.max(-visibleSize.width / 2 + halfWidth, Math.min(visibleSize.width / 2 - halfWidth, nextX)),
-        Math.max(-visibleSize.height / 2 + 88, Math.min(this.catSkillMaxY, nextY)),
-      );
-      const nextSide = panel.position.x < 0 ? 'left' : 'right';
-      if (nextSide !== this.catSkillDockSide) this.updateCatSkillBubbleSide(nextSide);
-    });
-    const finishCatSkillDrag = () => {
-      if (!this.catSkillDragActive) return;
-      this.catSkillDragActive = false;
-      if (!this.catSkillDragMoved) return;
-      this.catSkillSuppressClick = true;
-      const visibleSize = view.getVisibleSize();
-      const halfWidth = 78;
-      const rightX = visibleSize.width / 2 - halfWidth;
-      const leftX = -visibleSize.width / 2 + halfWidth;
-      const targetSide = panel.position.x < 0 ? 'left' : 'right';
-      const targetX = targetSide === 'left' ? leftX : rightX;
-      this.updateCatSkillBubbleSide(targetSide);
-      this.options.onGamePetPositionChanged({ side: targetSide, y: panel.position.y });
-      Tween.stopAllByTarget(panel);
-      tween(panel)
-        .to(0.18, { position: new Vec3(targetX, panel.position.y, 0) }, { easing: 'backOut' })
-        .start();
-      const resetTimer = setTimeout(() => {
-        this.timers.delete(resetTimer);
-        this.catSkillDragMoved = false;
-        this.catSkillSuppressClick = false;
-      }, 0);
-      this.timers.add(resetTimer);
-    };
-    panel.on(Node.EventType.TOUCH_END, finishCatSkillDrag);
-    panel.on(Node.EventType.TOUCH_CANCEL, finishCatSkillDrag);
-
-    this.catSkillPanel = {
-      node: panel,
-      button,
-      portrait,
-      lockMark,
-      cooldownOverlay,
-      speechBubble,
-      speechBubbleGraphics: bubbleGraphics,
-      nameLabel,
-      cooldownLabel,
-      descriptionLabel,
-      chargeLabel,
-      statusLabel,
-      chargeFill,
-      trialBadge,
-    };
-    this.updateCatSkillBubbleSide('right');
+    this.catSkillPanel = { node: panel, button, portrait, lockMark, cooldownOverlay, cooldownLabel, chargeLabel };
     this.refreshCatSkillPanel();
-  }
-
-  private getCatSkillTouchPosition(event: EventTouch) {
-    const location = event.getUILocation();
-    const transform = this.gameUI.getComponent(UITransform);
-    return transform
-      ? transform.convertToNodeSpaceAR(new Vec3(location.x, location.y, 0))
-      : new Vec3(location.x, location.y, 0);
-  }
-
-  private updateCatSkillBubbleSide(side: 'left' | 'right') {
-    const panel = this.catSkillPanel;
-    if (!panel) return;
-    this.catSkillDockSide = side;
-    panel.speechBubble.setPosition(side === 'right' ? -142 : 142, 62);
-    const graphics = panel.speechBubbleGraphics;
-    graphics.clear();
-    graphics.fillColor = new Color(255, 248, 226, 252);
-    graphics.strokeColor = new Color(235, 205, 158, 255);
-    graphics.lineWidth = 3;
-    graphics.roundRect(-132, -35, 264, 70, 20);
-    graphics.fill();
-    graphics.stroke();
-    const direction = side === 'right' ? 1 : -1;
-    graphics.moveTo(direction * 118, -31);
-    graphics.lineTo(direction * 132, -48);
-    graphics.lineTo(direction * 104, -34);
-    graphics.close();
-    graphics.fill();
-  }
-
-  private startCatSkillBubbleCycle() {
-    const panel = this.catSkillPanel;
-    if (!panel) return;
-    this.catSkillBubbleVisible = true;
-    panel.speechBubble.active = true;
-    // 气泡展示 4 秒、隐藏 4 秒，隐藏期间仍会正常更新技能状态。
-    this.catSkillBubbleTimer = setInterval(() => {
-      if (this.destroyed || !panel.node.isValid) return;
-      this.catSkillBubbleVisible = !this.catSkillBubbleVisible;
-      panel.speechBubble.active = this.catSkillBubbleVisible;
-    }, 4000);
   }
 
   private startCatSkillRefresh() {
@@ -1162,97 +905,34 @@ export class GameScreen {
     if (!panel) return;
     const catId = this.equippedCatId;
     const skill = this.catSkill;
-    const config = this.catSkillConfig;
-    const portraitPath = catId
-      ? getCatDefinition(catId).portraitPath
-      : 'cats/cat_orange';
     const portraitSprite = panel.portrait.getComponent(Sprite);
-    const portraitFrame = this.assets.getFrame(portraitPath);
+    const portraitFrame = this.assets.getFrame(catId ? getCatDefinition(catId).portraitPath : 'cats/cat_orange');
     if (portraitSprite && portraitFrame) portraitSprite.spriteFrame = portraitFrame;
-    if (!catId || !skill || !config) {
-      // 两种「没有出战宠物」的状态分开提示：
-      // 一只都没解锁 → 教学（装饰建筑解锁猫咪）；有解锁未装备 → 指引去猫咪社。
+    if (!catId || !skill || !this.catSkillConfig) {
       const anyUnlocked = this.options.hasAnyUnlockedCat?.() ?? false;
-      panel.portrait.active = true;
-      if (portraitSprite) portraitSprite.color = new Color(154, 154, 154, 255);
+      if (portraitSprite) portraitSprite.color = new Color(154, 154, 154);
       panel.lockMark.active = !anyUnlocked;
-      panel.nameLabel.string = '宠物位';
+      panel.chargeLabel.string = anyUnlocked ? '去上阵' : '待解锁';
       panel.cooldownLabel.string = '';
-      panel.descriptionLabel.string = anyUnlocked
-        ? '还没装备宠物\n去猫咪社上阵一只吧'
-        : '装饰完成小镇建筑\n解锁猫咪出战';
-      panel.chargeLabel.string = '';
-      panel.statusLabel.string = '去上阵';
       panel.cooldownOverlay.active = false;
-      panel.button.interactable = true;
-      panel.chargeFill.clear();
-      panel.trialBadge.active = false;
+      panel.button.interactable = !this.gameOver && !this.boardIntroActive;
       return;
     }
-    panel.lockMark.active = false;
-
-    const definition = getCatDefinition(catId);
     if (portraitSprite) portraitSprite.color = Color.WHITE;
+    panel.lockMark.active = false;
     const required = getCatSkillChargeRequired(catId, skill.level);
     const charge = Math.min(required, Math.max(0, skill.charge));
     const cooldownRemaining = Math.max(0, skill.readyAt - Date.now());
-    const chargeReady = charge >= required;
-    const canFire = !this.gameOver
-      && !this.boardIntroActive
-      && !this.catSkillUsed
-      && chargeReady
-      && cooldownRemaining === 0;
-    const trialRun = this.trialStartRemaining !== null;
-
-    panel.portrait.active = true;
-    panel.nameLabel.string = trialRun ? `${definition.name} · 试住` : definition.name;
-    if (trialRun) {
-      panel.trialBadge.active = true;
-      const badgeLabel = panel.trialBadge.getChildByName('Label')?.getComponent(Label);
-      if (badgeLabel) {
-        badgeLabel.string = `试住中 第${Math.max(1, 6 - this.trialStartRemaining!)}/5局`;
-      }
-    } else {
-      panel.trialBadge.active = false;
-    }
-    panel.descriptionLabel.string = this.activeTool === 'cat_skill'
-      ? `点选要清除的元素${this.catSkillPicksLeft > 1 ? `（可选 ${this.catSkillPicksLeft} 个）` : ''}`
-      : cooldownRemaining > 0
-        ? `技能冷却中\n${this.formatCatSkillRemaining(cooldownRemaining)}`
-        : this.catSkillUsed
-          ? '本局技能已使用'
-          : canFire
-            ? trialRun ? '本局可用！点击大橘发动技能' : '点击我使用技能！'
-            : `技能充能 ${charge}/${required}`;
-    panel.cooldownLabel.string = cooldownRemaining > 0
-      ? this.formatCatSkillRemaining(cooldownRemaining)
-      : '';
-    panel.chargeLabel.string = `充能 ${charge}/${required}`;
-    panel.statusLabel.string = this.activeTool === 'cat_skill'
-      ? '选择目标'
-      : this.catSkillUsed
-        ? '本局已发动'
-        : canFire
-          ? '点击发动'
-          : chargeReady
-            ? '等待冷却'
-            : '充能中';
-    panel.statusLabel.color = canFire || this.activeTool === 'cat_skill'
-      ? new Color(190, 59, 51)
-      : new Color(177, 106, 43);
-    panel.button.interactable = this.activeTool === 'cat_skill'
-      || (!this.gameOver && !this.catSkillUsed && !this.boardIntroActive);
-    panel.cooldownOverlay.active = cooldownRemaining > 0;
-
-    panel.chargeFill.clear();
-    if (charge > 0) {
-      const width = 66 * charge / required;
-      panel.chargeFill.fillColor = canFire
-        ? new Color(255, 189, 42, 255)
-        : new Color(244, 183, 77, 255);
-      panel.chargeFill.roundRect(-33, -5, width, 10, 5);
-      panel.chargeFill.fill();
-    }
+    const canFire = !this.gameOver && !this.boardIntroActive && !this.catSkillUsed
+      && charge >= required && cooldownRemaining === 0;
+    const selecting = this.activeTool === 'cat_skill';
+    const prefix = this.trialStartRemaining !== null ? '试住·' : '';
+    panel.chargeLabel.string = prefix + (selecting ? '选目标' : this.catSkillUsed
+      ? '已使用' : canFire ? '点我发动' : `${charge}/${required}`);
+    panel.chargeLabel.color = canFire || selecting ? new Color(190, 59, 51) : new Color(111, 62, 28);
+    panel.cooldownLabel.string = cooldownRemaining > 0 ? this.formatCatSkillRemaining(cooldownRemaining) : '';
+    panel.cooldownOverlay.active = cooldownRemaining > 0 || this.catSkillUsed;
+    panel.button.interactable = selecting || (!this.gameOver && !this.catSkillUsed && !this.boardIntroActive);
   }
 
   private formatCatSkillRemaining(milliseconds: number) {
