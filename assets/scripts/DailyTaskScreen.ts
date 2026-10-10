@@ -6,13 +6,18 @@ import {
   Label,
   Node,
   Sprite,
+  Tween,
+  tween,
+  UIOpacity,
   UITransform,
+  Vec3,
   view,
 } from 'cc';
-import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
+import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
+import { Theme, TITLE_SIGN } from './Theme';
 import { AudioEffect } from './AudioManager';
 import { DAILY_CHEST_REWARD, DAILY_TASK_DEFINITIONS } from './GameContent';
-import { CatJourneyClaimResult, CatJourneySnapshot, DailyTaskId, TaskSnapshot } from './PlayerTypes';
+import { CatJourneyClaimResult, CatJourneySnapshot, DailyTaskId, ShareCardType, ShareOffer, TaskSnapshot } from './PlayerTypes';
 import { Toast } from './Toast';
 
 export interface DailyTaskScreenOptions {
@@ -26,6 +31,8 @@ export interface DailyTaskScreenOptions {
   getCatJourney: () => CatJourneySnapshot;
   onClaimCatJourney: () => CatJourneyClaimResult;
   onJourneyOpened?: () => void;
+  getShareOffer?: () => ShareOffer | null;
+  onShare?: (type: ShareCardType) => void;
   onStartGame: () => void;
   onReturnHome: () => void;
 }
@@ -55,7 +62,7 @@ const TASK_ICON_PATHS = [
 ];
 const REWARD_ICON_PATHS = [
   COMMON_UI_ASSETS.coinIcon,
-  'tasks/daily_hammer',
+  'shop/icon_hammer',
   COMMON_UI_ASSETS.starIcon,
 ];
 
@@ -68,6 +75,7 @@ export class DailyTaskScreen {
   private journeyButton: Button | null = null;
   private journeyButtonLabel: Label | null = null;
   private journeyButtonBackground: Sprite | null = null;
+  private journeyBadge: Node | null = null;
   private journeyUI: Node | null = null;
   private readonly cardViews: TaskCardView[] = [];
   private active = false;
@@ -81,7 +89,12 @@ export class DailyTaskScreen {
   loadAndCreate(onReady?: () => void) {
     this.assets.loadImagesFor(this, [
       'home/home_bg',
-      'shop/item_dice',
+      TITLE_SIGN.path,
+      'shop/icon_hammer',
+      'shop/icon_glove',
+      'shop/icon_dice',
+      'shop/icon_extra_slot',
+      'shop/hint_ribbon',
       COMMON_UI_ASSETS.backButton,
       'tasks/daily_date',
       'tasks/daily_panel',
@@ -121,6 +134,7 @@ export class DailyTaskScreen {
     this.journeyButton = null;
     this.journeyButtonLabel = null;
     this.journeyButtonBackground = null;
+    this.journeyBadge = null;
   }
 
   private create() {
@@ -137,7 +151,8 @@ export class DailyTaskScreen {
     this.buildHeader(top);
 
     const taskStep = TASK_CARD_HEIGHT + 36;
-    const positions = [top - 360, top - 360 - taskStep, top - 360 - taskStep * 2];
+    // 任务卡与宝箱整体下移（旅程按钮下移后跟随，再留 10px 余量）
+    const positions = [top - 410, top - 410 - taskStep, top - 410 - taskStep * 2];
     DAILY_TASK_DEFINITIONS.forEach((definition, index) => {
       this.buildTaskCard(definition.id, index, positions[index]);
     });
@@ -150,20 +165,19 @@ export class DailyTaskScreen {
     const y = top - 150;
     this.buildBackButton(this.taskUI!, -304, y, this.options.onReturnHome);
 
-    const title = this.label(this.taskUI!, '每日任务', -50, y + 4, 49, new Color(111, 62, 28));
-    title.isBold = true;
-    title.outlineWidth = 2;
-    title.outlineColor = new Color(255, 222, 153, 190);
-    this.drawTitleLine(this.taskUI!, -50, y - 61);
-    this.drawPawDecoration(this.taskUI!, -205, y + 3, -0.9);
-    this.drawPawDecoration(this.taskUI!, 112, y + 3, 0.9);
+    // 统一标题吊牌（与商店/猫咪社/小镇/冒险同款）：日期与旅程按钮改为
+    // 吊牌下方一行横排，右上不再留悬浮的孤块。
+    const sign = this.image(this.taskUI!, TITLE_SIGN.path, -15, top - 106, TITLE_SIGN.width, TITLE_SIGN.height);
+    const signTitle = this.label(sign, '每日任务', 0, TITLE_SIGN.titleOffsetY, TITLE_SIGN.titleFontSize, Theme.title);
+    signTitle.isBold = true;
 
-    const dateChip = this.image(this.taskUI!, 'tasks/daily_date', 228, belowWeChatCapsule(top, 74), 264, 74);
+    const dateChip = this.image(this.taskUI!, 'tasks/daily_date', -112, top - 262, 264, 74);
     this.dateLabel = this.label(dateChip, '', 22, -1, 22, new Color(112, 69, 40));
     this.dateLabel.isBold = true;
     this.dateLabel.node.getComponent(UITransform)!.setContentSize(206, 48);
 
-    const journeyView = this.actionButton(this.taskUI!, 228, top - 232, 190, 68, '');
+    // 旅程按钮与日期胶囊同一行横排（右侧），红点角标随按钮一起移动
+    const journeyView = this.actionButton(this.taskUI!, 124, top - 262, 190, 68, '');
     journeyView.label.fontSize = 20;
     journeyView.label.lineHeight = 28;
     journeyView.label.node.getComponent(UITransform)!.setContentSize(180, 56);
@@ -174,6 +188,31 @@ export class DailyTaskScreen {
     this.journeyButton = journeyView.button;
     this.journeyButtonLabel = journeyView.label;
     this.journeyButtonBackground = journeyView.background;
+
+    // 可领取提醒：按钮右上角的红点 + 感叹号，领完当天奖励自动消失
+    this.journeyBadge = new Node('JourneyBadge');
+    journeyView.button.node.addChild(this.journeyBadge);
+    this.journeyBadge.setPosition(84, -26);
+    this.journeyBadge.addComponent(UITransform).setContentSize(32, 32);
+    const badgeGraphics = this.journeyBadge.addComponent(Graphics);
+    badgeGraphics.fillColor = new Color(244, 72, 74);
+    badgeGraphics.strokeColor = Color.WHITE;
+    badgeGraphics.lineWidth = 3;
+    badgeGraphics.circle(0, 0, 14);
+    badgeGraphics.fill();
+    badgeGraphics.stroke();
+    const badgeLabel = this.label(this.journeyBadge, '!', 0, 0, 20, Color.WHITE);
+    badgeLabel.isBold = true;
+    badgeLabel.node.getComponent(UITransform)!.setContentSize(24, 24);
+    this.journeyBadge.active = false;
+    tween(this.journeyBadge)
+      .repeatForever(
+        tween()
+          .delay(1.2)
+          .to(0.2, { scale: new Vec3(1.25, 1.25, 1) }, { easing: 'sineOut' })
+          .to(0.2, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' }),
+      )
+      .start();
   }
 
   private buildTaskCard(id: DailyTaskId, index: number, y: number) {
@@ -244,8 +283,8 @@ export class DailyTaskScreen {
     hint.isBold = true;
 
     this.buildChestReward(card, COMMON_UI_ASSETS.coinIcon, `金币 ×${DAILY_CHEST_REWARD.coins}`, -55, -7, 48);
-    this.buildChestReward(card, 'tasks/daily_hammer', `锤子 ×${DAILY_CHEST_REWARD.items.hammer}`, 95, -7, 50);
-    this.buildChestReward(card, 'shop/item_dice', `骰子 ×${DAILY_CHEST_REWARD.items.dice}`, 240, -7, 46);
+    this.buildChestReward(card, 'shop/icon_hammer', `锤子 ×${DAILY_CHEST_REWARD.items.hammer}`, 95, -7, 50);
+    this.buildChestReward(card, 'shop/icon_dice', `骰子 ×${DAILY_CHEST_REWARD.items.dice}`, 240, -7, 46);
 
     const buttonView = this.actionButton(card, 63, -95, 254, 78, '');
     this.chestButton = buttonView.button;
@@ -307,6 +346,19 @@ export class DailyTaskScreen {
           ? `领取第 ${journey.currentDay} 天`
           : '猫咪旅程 · 明天再来';
     this.setButtonVisual(this.journeyButtonBackground, journey.started);
+    // 可领取时红点亮起 + 按钮文字呼吸，把「今天还没领」这件事顶到玩家眼前
+    if (this.journeyBadge) this.journeyBadge.active = journey.canClaim;
+    Tween.stopAllByTarget(this.journeyButtonLabel.node);
+    this.journeyButtonLabel.node.setScale(new Vec3(1, 1, 1));
+    if (journey.canClaim) {
+      tween(this.journeyButtonLabel.node)
+        .repeatForever(
+          tween()
+            .to(0.75, { scale: new Vec3(1.08, 1.08, 1) }, { easing: 'sineInOut' })
+            .to(0.75, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+        )
+        .start();
+    }
   }
 
   private openJourneyPanel() {
@@ -317,6 +369,7 @@ export class DailyTaskScreen {
       return;
     }
     this.options.onJourneyOpened?.();
+    const shareOffer = journey.completed ? this.options.getShareOffer?.() : null;
     this.journeyUI = new Node('CatJourneyPanel');
     this.taskUI.addChild(this.journeyUI);
     const visibleSize = view.getVisibleSize();
@@ -328,38 +381,148 @@ export class DailyTaskScreen {
     maskGraphics.rect(-visibleSize.width / 2, -visibleSize.height / 2, visibleSize.width, visibleSize.height);
     maskGraphics.fill();
     mask.addComponent(BlockInputEvents);
+    // 点蒙层空白处直接关闭，与首页各弹窗的交互一致
+    mask.on(Node.EventType.TOUCH_END, () => this.closeJourneyPanel());
+
+    const panelHeight = shareOffer ? 730 : 650;
+    // 面板投影：与首页弹窗同一套「垫影」画法
+    const shadow = new Node('CatJourneyShadow');
+    this.journeyUI.addChild(shadow);
+    shadow.setPosition(0, -6);
+    shadow.addComponent(UITransform).setContentSize(664, panelHeight + 16);
+    const shadowGraphics = shadow.addComponent(Graphics);
+    shadowGraphics.fillColor = new Color(69, 48, 29, 88);
+    shadowGraphics.roundRect(-332, -(panelHeight + 16) / 2, 664, panelHeight + 16, 36);
+    shadowGraphics.fill();
+
     const panel = new Node('CatJourneyCard');
     this.journeyUI.addChild(panel);
     panel.setPosition(0, -12);
-    panel.addComponent(UITransform).setContentSize(640, 610);
+    panel.addComponent(UITransform).setContentSize(640, panelHeight);
     const panelGraphics = panel.addComponent(Graphics);
     panelGraphics.fillColor = new Color(255, 248, 226);
     panelGraphics.strokeColor = new Color(235, 205, 158);
     panelGraphics.lineWidth = 4;
-    panelGraphics.roundRect(-320, -305, 640, 610, 32);
+    panelGraphics.roundRect(-320, -panelHeight / 2, 640, panelHeight, 32);
     panelGraphics.fill();
     panelGraphics.stroke();
+    // 入场回弹：与首页各弹窗同一套节奏
+    panel.setScale(new Vec3(0.86, 0.86, 1));
+    tween(panel).to(0.28, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' }).start();
 
-    this.image(panel, 'cats/cat_orange', 0, 246, 108, 108);
-    const title = this.label(panel, '猫咪 7 日旅程', 0, 178, 34, new Color(111, 62, 28));
+    // 底部两角的小爪印/星光：低透明度装饰，打破面板下方的空旷感
+    const cornerPaw = this.image(panel, 'tasks/daily_paw_cluster', -286, -panelHeight / 2 + 48, 32, 43);
+    cornerPaw.addComponent(UIOpacity).opacity = 150;
+    const cornerSpark = this.image(panel, 'tasks/daily_paw_sparkle', 286, -panelHeight / 2 + 48, 23, 27);
+    cornerSpark.addComponent(UIOpacity).opacity = 150;
+
+    // 垂直节奏（自上而下等比留白）：大橘 → 缎带标题 → 副标题 → 进度条 → 礼物卡 → 按钮
+    const half = panelHeight / 2;
+    const mascotY = half - 64;
+    const mascot = this.image(panel, 'cats/cat_orange', 0, mascotY, 108, 108);
+    tween(mascot)
+      .repeatForever(
+        tween()
+          .to(1, { scale: new Vec3(1.05, 1.05, 1) }, { easing: 'sineInOut' })
+          .to(1, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
+    const sparkleLeft = this.image(panel, 'tasks/daily_sparkle_small', -96, mascotY + 26, 26, 30);
+    const sparkleRight = this.image(panel, 'tasks/daily_sparkle_tiny', 102, mascotY - 14, 20, 22);
+    [sparkleLeft, sparkleRight].forEach((sparkle, index) => {
+      tween(sparkle)
+        .delay(index * 0.35)
+        .repeatForever(
+          tween()
+            .to(0.75, { scale: new Vec3(0.78, 0.78, 1) }, { easing: 'sineInOut' })
+            .to(0.75, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+        )
+        .start();
+    });
+
+    // 标题压缎带（与猫咪详情页名牌同款素材），替代孤零零的一行字
+    const ribbonY = mascotY - 96;
+    const ribbon = this.image(panel, 'shop/hint_ribbon', 0, ribbonY, 320, 72);
+    if (!this.assets.getFrame('shop/hint_ribbon')) {
+      const fallback = ribbon.addComponent(Graphics);
+      fallback.fillColor = new Color(255, 248, 226);
+      fallback.strokeColor = new Color(224, 154, 51);
+      fallback.lineWidth = 3;
+      fallback.roundRect(-160, -34, 320, 68, 34);
+      fallback.fill();
+      fallback.stroke();
+    }
+    const title = this.label(panel, '猫咪 7 日旅程', 0, ribbonY + 2, 30, new Color(111, 62, 28));
     title.isBold = true;
-    const subtitle = this.label(panel, journey.completed ? '大橘为你准备了纪念徽章' : '每天回来看看，带走一份猫咪礼物', 0, 140, 20, new Color(112, 69, 40));
-    subtitle.node.getComponent(UITransform)!.setContentSize(560, 32);
+    const subtitleY = ribbonY - 62;
+    const subtitle = this.label(
+      panel,
+      journey.completed ? '大橘为你准备了纪念徽章' : '每天回来看看，带走一份猫咪礼物',
+      0,
+      subtitleY,
+      18,
+      new Color(136, 94, 63),
+    );
+    subtitle.node.getComponent(UITransform)!.setContentSize(560, 26);
 
-    const rewards = [
-      '金币 ×50', '锤子 ×1', '增加槽位 ×1', '金币 ×100',
-      '骰子 ×1', '手套 ×1 + 锤子 ×1', '金币 ×300 + 徽章',
+    // 旅程进度条：已领天数一目了然，也是弹窗里唯一的数据锚点
+    const progressY = subtitleY - 40;
+    const trackNode = new Node('JourneyProgress');
+    panel.addChild(trackNode);
+    trackNode.setPosition(0, progressY);
+    trackNode.addComponent(UITransform).setContentSize(360, 20);
+    const trackGraphics = trackNode.addComponent(Graphics);
+    trackGraphics.fillColor = new Color(246, 232, 204);
+    trackGraphics.strokeColor = new Color(235, 205, 158);
+    trackGraphics.lineWidth = 2;
+    trackGraphics.roundRect(-180, -10, 360, 20, 10);
+    trackGraphics.fill();
+    trackGraphics.stroke();
+    const claimedCount = journey.claimedDays.length;
+    if (claimedCount > 0) {
+      const fillNode = new Node('JourneyProgressFill');
+      trackNode.addChild(fillNode);
+      const fillGraphics = fillNode.addComponent(Graphics);
+      fillGraphics.fillColor = new Color(255, 176, 59);
+      fillGraphics.roundRect(-177, -7, Math.max(12, 354 * Math.min(1, claimedCount / 7)), 14, 7);
+      fillGraphics.fill();
+    }
+    const progressLabel = this.label(
+      trackNode,
+      claimedCount >= 7 ? '旅程全部完成' : `旅程进度 ${claimedCount}/7 天`,
+      0,
+      0,
+      14,
+      Color.WHITE,
+    );
+    progressLabel.isBold = true;
+    progressLabel.outlineWidth = 2;
+    progressLabel.outlineColor = new Color(190, 120, 40);
+
+    // 礼物卡：日签胶囊 + 奖励图标 + 短文案，替代纯文字格
+    const rewardShort = ['金币×50', '锤子×1', '槽位×1', '金币×100', '骰子×1', '手套+锤子', '金币×300+徽章'];
+    const rewardIcons = [
+      COMMON_UI_ASSETS.coinIcon,
+      'shop/icon_hammer',
+      'shop/icon_extra_slot',
+      COMMON_UI_ASSETS.coinIcon,
+      'shop/icon_dice',
+      'shop/icon_glove',
+      COMMON_UI_ASSETS.coinIcon,
     ];
-    for (let index = 0; index < rewards.length; index += 1) {
+    const gridTop = progressY - 73;
+    const gridStep = 116;
+    for (let index = 0; index < rewardShort.length; index += 1) {
       const day = index + 1;
       const row = Math.floor(index / 4);
       const column = index % 4;
-      const x = -225 + column * 150;
-      const y = 70 - row * 102;
+      // 第二行只有 3 格：整体居中，摆出对称的旅程队形；横向格间距 20px
+      const x = row === 0 ? -234 + column * 156 : -156 + column * 156;
+      const y = gridTop - row * gridStep;
       const cell = new Node(`JourneyDay${day}`);
       panel.addChild(cell);
       cell.setPosition(x, y);
-      cell.addComponent(UITransform).setContentSize(136, 86);
+      cell.addComponent(UITransform).setContentSize(140, 100);
       const cellGraphics = cell.addComponent(Graphics);
       const claimed = journey.claimedDays.indexOf(day) >= 0;
       const current = !journey.completed && journey.currentDay === day;
@@ -368,16 +531,71 @@ export class DailyTaskScreen {
         : current ? new Color(255, 224, 108) : new Color(255, 252, 241);
       cellGraphics.strokeColor = current ? new Color(201, 148, 47) : new Color(235, 205, 158);
       cellGraphics.lineWidth = current ? 4 : 2;
-      cellGraphics.roundRect(-68, -43, 136, 86, 18);
+      cellGraphics.roundRect(-70, -50, 140, 100, 20);
       cellGraphics.fill();
       cellGraphics.stroke();
-      const dayLabel = this.label(cell, `第 ${day} 天`, 0, 20, 19, new Color(111, 62, 28));
-      dayLabel.isBold = true;
-      const rewardLabel = this.label(cell, claimed ? '已领取' : rewards[index], 0, -13, 15, new Color(112, 69, 40));
-      rewardLabel.node.getComponent(UITransform)!.setContentSize(126, 30);
+
+      // 日签胶囊：今天这一格用白签反衬金底，其余用金签
+      const tag = new Node('DayTag');
+      cell.addChild(tag);
+      tag.setPosition(0, 33);
+      tag.addComponent(UITransform).setContentSize(70, 26);
+      const tagGraphics = tag.addComponent(Graphics);
+      tagGraphics.fillColor = current ? new Color(255, 255, 250) : new Color(255, 224, 108);
+      tagGraphics.strokeColor = new Color(214, 151, 38);
+      tagGraphics.lineWidth = 2;
+      tagGraphics.roundRect(-35, -13, 70, 26, 13);
+      tagGraphics.fill();
+      tagGraphics.stroke();
+      const tagLabel = this.label(tag, `第 ${day} 天`, 0, 0, 15, new Color(111, 62, 28));
+      tagLabel.isBold = true;
+      tagLabel.overflow = Label.Overflow.SHRINK;
+      tagLabel.node.getComponent(UITransform)!.setContentSize(64, 20);
+
+      // 奖励图标 + 短文案
+      this.image(cell, rewardIcons[index], 0, -4, 44, 44);
+      const rewardLabel = this.label(cell, claimed ? '已领取' : rewardShort[index], 0, -38, 15, new Color(112, 69, 40));
+      rewardLabel.overflow = Label.Overflow.SHRINK;
+      rewardLabel.node.getComponent(UITransform)!.setContentSize(128, 20);
+
+      // 已领取：右上角补一枚绿勾，扫一眼就能分清新旧格子
+      if (claimed) {
+        const check = new Node('ClaimedCheck');
+        cell.addChild(check);
+        check.setPosition(55, 33);
+        const checkGraphics = check.addComponent(Graphics);
+        checkGraphics.strokeColor = new Color(78, 139, 50);
+        checkGraphics.lineWidth = 4;
+        checkGraphics.moveTo(-6, 0);
+        checkGraphics.lineTo(-1, -5);
+        checkGraphics.lineTo(7, 6);
+        checkGraphics.stroke();
+      }
+      // 第 7 天终章大奖：金色粗边 + 星光角标，和普通格子拉开层级
+      if (day === rewardShort.length) {
+        cellGraphics.strokeColor = new Color(214, 151, 38);
+        cellGraphics.lineWidth = 4;
+        cellGraphics.roundRect(-70, -50, 140, 100, 20);
+        cellGraphics.stroke();
+        this.image(cell, 'tasks/daily_sparkle_large', -56, 33, 26, 30);
+      }
+      // 今日可领取的格子轻微呼吸，把视线引到「今天该点的那一格」
+      if (current) {
+        tween(cell)
+          .repeatForever(
+            tween()
+              .to(0.75, { scale: new Vec3(1.06, 1.06, 1) }, { easing: 'sineInOut' })
+              .to(0.75, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+          )
+          .start();
+      }
     }
 
-    const claimView = this.actionButton(panel, 0, -226, 250, 78, journey.canClaim ? '领取今日奖励' : journey.completed ? '旅程已完成' : '明天再来');
+    // 底部操作排成一行：主操作居左、稍后查看居右（次级灰底）；按钮收窄并整体下移
+    const row1Bottom = gridTop - gridStep - 50;
+    const shareY = row1Bottom - 52;
+    const buttonsY = (shareOffer ? shareY - 93 : row1Bottom - 57) - 20;
+    const claimView = this.actionButton(panel, -69, buttonsY, 210, 70, journey.canClaim ? '领取今日奖励' : journey.completed ? '旅程已完成' : '明天再来');
     claimView.button.interactable = journey.canClaim;
     this.setButtonVisual(claimView.background, journey.canClaim);
     claimView.button.node.on(Button.EventType.CLICK, () => {
@@ -385,9 +603,18 @@ export class DailyTaskScreen {
       this.toast(result.ok ? `${result.message}：${result.rewardText ?? ''}` : result.message);
       this.refresh();
       this.closeJourneyPanel();
+      if (result.ok && result.completed) this.openJourneyPanel();
     });
 
-    const close = this.actionButton(panel, 0, -278, 160, 64, '稍后查看');
+    if (shareOffer) {
+      const shareView = this.actionButton(panel, 0, shareY, 400, 72, shareOffer.label);
+      shareView.button.node.on(Button.EventType.CLICK, () => {
+        this.options.onShare?.(shareOffer.type);
+      });
+    }
+
+    const close = this.actionButton(panel, 109, buttonsY, 130, 70, '稍后查看');
+    this.setButtonVisual(close.background, false);
     close.button.node.on(Button.EventType.CLICK, () => this.closeJourneyPanel());
   }
 
@@ -481,39 +708,6 @@ export class DailyTaskScreen {
       this.options.onPlaySound('click');
       callback();
     });
-  }
-
-  private drawTitleLine(parent: Node, x: number, y: number) {
-    const node = new Node('TitleLine');
-    parent.addChild(node);
-    node.setPosition(x, y);
-    node.addComponent(UITransform).setContentSize(320, 16);
-    const graphics = node.addComponent(Graphics);
-    graphics.strokeColor = new Color(241, 139, 47);
-    graphics.lineWidth = 4;
-    graphics.moveTo(-145, 0);
-    graphics.lineTo(145, 0);
-    graphics.stroke();
-    graphics.fillColor = new Color(241, 139, 47);
-    graphics.circle(-145, 0, 3);
-    graphics.circle(145, 0, 3);
-    graphics.fill();
-  }
-
-  private drawPawDecoration(parent: Node, x: number, y: number, scaleX: number) {
-    const node = new Node('TitlePaw');
-    parent.addChild(node);
-    node.setPosition(x, y);
-    node.setScale(scaleX, 1, 1);
-    node.addComponent(UITransform).setContentSize(72, 58);
-    const graphics = node.addComponent(Graphics);
-    graphics.fillColor = new Color(193, 190, 167, 220);
-    graphics.circle(0, -10, 15);
-    graphics.circle(-21, 11, 8);
-    graphics.circle(-5, 25, 8);
-    graphics.circle(12, 25, 8);
-    graphics.circle(27, 11, 8);
-    graphics.fill();
   }
 
   private addWarmVeil(width: number, height: number) {

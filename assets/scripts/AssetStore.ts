@@ -38,6 +38,8 @@ export class AssetStore {
   private readonly permanentPaths = new Set<string>();
   // 保留 ImageAsset 引用，释放时才能让 assetManager 真正回收 CPU 侧图像数据。
   private readonly imageAssets = new Map<string, ImageAsset>();
+  // 累计加载失败的资源路径（takeLoadFailures 取出后清空），供首屏给出可见错误提示。
+  private readonly failedPaths = new Set<string>();
 
   loadImages(paths: string[], onComplete: () => void, onProgress?: (loaded: number, total: number) => void) {
     this.loadImagesWith(paths, onComplete, onProgress, (path, callback) => {
@@ -53,7 +55,7 @@ export class AssetStore {
   }
 
   /**
-   * 释放某个 owner 加载的图片。仅当某张图不再被任何 owner 引用时才真正销毁；
+   * 释放某个 owner 加载的图片。仅当某张图不再被任何 owner 引用时才走释放流程；
    * 被多个页面共用（或被无 owner 的常驻加载占用）的图片会保留。
    */
   releaseOwner(owner: object) {
@@ -67,14 +69,13 @@ export class AssetStore {
   }
 
   private destroyFrame(path: string) {
-    const frame = this.frames[path];
-    if (frame) {
-      delete this.frames[path];
-      const texture = frame.texture;
-      frame.decRef();
-      if (frame.isValid) frame.destroy();
-      if (texture?.isValid) texture.destroy();
-    }
+    // 软释放：只把帧移出缓存并回收 CPU 侧解码数据（ImageAsset.destroy 不影响
+    // 已上传的 GPU 贴图），SpriteFrame / Texture2D 对象本身保持有效。
+    // 此前在这里硬销毁贴图，一旦存在未按 owner 登记的借用引用，对应 Sprite
+    // 会在渲染时拿到已销毁的贴图，触发 "Can't getGFXSampler" 和
+    // "Cannot read properties of null (reading 'hash')" 的渲染崩溃。
+    // 代价是已上传的显存随对象存活整个会话；换来的是渲染期零崩溃。
+    delete this.frames[path];
     const image = this.imageAssets.get(path);
     if (image) {
       this.imageAssets.delete(path);
@@ -118,6 +119,18 @@ export class AssetStore {
 
   getFrame(path: string) {
     return this.frames[path];
+  }
+
+  /** 当前缓存的 SpriteFrame 数量（预览环境内存观测用）。 */
+  cachedFrameCount(): number {
+    return Object.keys(this.frames).length;
+  }
+
+  /** 取出并清空累计的加载失败路径；非空说明有本地资源加载失败（A-1 可见错误）。 */
+  takeLoadFailures(): string[] {
+    const list = Array.from(this.failedPaths);
+    this.failedPaths.clear();
+    return list;
   }
 
   private loadImagesWith(
@@ -174,6 +187,7 @@ export class AssetStore {
           this.imageAssets.set(path, asset);
         } else if (error) {
           console.error('[CatWorld] Failed to load image asset', path, error);
+          this.failedPaths.add(path);
         }
         const waiters = this.pending.get(path) || [];
         this.pending.delete(path);

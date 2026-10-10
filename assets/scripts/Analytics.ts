@@ -1,7 +1,12 @@
 import { sys } from 'cc';
 import { HTML5, MINIGAME, PREVIEW, WECHAT } from 'cc/env';
-import { ApiClient } from './ApiClient';
+import { ApiClient, ApiError } from './ApiClient';
+import { TrackEventName, TrackProps } from './TrackEvents';
 import type { RewardedAdResult } from './RewardedAdService';
+
+// 事件名与属性类型由 analytics/track-events.json 生成（scripts/generate_track_contract.js），
+// 这里统一再导出，历史调用方保持从 Analytics 导入的习惯。
+export type { TrackEventName, TrackProps } from './TrackEvents';
 
 export const ANALYTICS_APP_VERSION = '1.0.0';
 
@@ -25,47 +30,13 @@ export type GameMode = 'main' | 'challenge' | 'endless';
 
 export type AdScene = 'revive' | 'double_coins' | 'home_coins' | 'shop_item';
 
-export type TrackEventName =
-  | 'app_launch'
-  | 'loading_finish'
-  | 'page_view'
-  | 'level_enter_click'
-  | 'level_start'
-  | 'level_end'
-  | 'level_next'
-  | 'level_replay'
-  | 'level_home'
-  | 'level_go_build'
-  | 'tutorial_done'
-  | 'ad_entrance_show'
-  | 'ad_click'
-  | 'ad_result'
-  | 'building_light'
-  | 'shop_buy'
-  | 'cat_trial_offer_show'
-  | 'cat_trial_start'
-  | 'cat_trial_game_start'
-  | 'cat_trial_converted'
-  | 'challenge_locked_click'
-  | 'journey_start'
-  | 'journey_open'
-  | 'journey_claim'
-  | 'journey_complete'
-  | 'town_daily_show'
-  | 'town_daily_complete'
-  | 'town_daily_reward_claim'
-  | 'cat_milestone_unlock'
-  | 'cat_skill_gift';
-
-export type TrackProps = Record<string, string | number | boolean | string[] | null>;
-
+/**
+ * 埋点全局上下文只保留匿名身份；金币、星星、关卡、猫咪等本机存档状态
+ * 不再自动附加到每条事件（数据最小化，玩法进度不上传远端）。
+ * 看板需要的关卡/模式等字段由各事件在调用点显式携带（见 analytics/track-events.json）。
+ */
 export interface AnalyticsContext {
   userId: string;
-  level: number;
-  coins: number;
-  stars: number;
-  expLevel: number;
-  equippedCat: string | null;
 }
 
 interface QueuedEvent {
@@ -96,26 +67,10 @@ function detectPlatform(): AnalyticsPlatform {
   // Cocos 会按构建目标把 cc/env 常量编译成字面量：
   // 微信小游戏包 WECHAT/MINIGAME=true，web-mobile 包 HTML5=true。
   // 不要只靠运行时有没有 wx，H5 里也可能被注入同类对象。
-  let platform: AnalyticsPlatform = 'h5';
-  if (PREVIEW) platform = 'preview';
-  else if (WECHAT || MINIGAME || sys.platform === sys.Platform.WECHAT_GAME) platform = 'wechat';
-  else if (HTML5 || sys.isBrowser) platform = 'h5';
-
-  const runtime = typeof globalThis === 'undefined'
-    ? null
-    : globalThis as typeof globalThis & { wx?: unknown; tap?: unknown };
-  console.log('[CatWorld] 渠道检测', {
-    platform,
-    PREVIEW,
-    WECHAT,
-    MINIGAME,
-    HTML5,
-    sysPlatform: sys.platform,
-    isBrowser: sys.isBrowser,
-    hasWx: !!runtime?.wx,
-    hasTap: !!runtime?.tap,
-  });
-  return platform;
+  if (PREVIEW) return 'preview';
+  if (WECHAT || MINIGAME || sys.platform === sys.Platform.WECHAT_GAME) return 'wechat';
+  if (HTML5 || sys.isBrowser) return 'h5';
+  return 'h5';
 }
 
 export class Analytics {
@@ -130,14 +85,7 @@ export class Analytics {
   private flushing = false;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(api = new ApiClient(), getContext: () => AnalyticsContext = () => ({
-    userId: '',
-    level: 1,
-    coins: 0,
-    stars: 0,
-    expLevel: 1,
-    equippedCat: null,
-  })) {
+  constructor(api = new ApiClient(), getContext: () => AnalyticsContext = () => ({ userId: '' })) {
     this.api = api;
     this.getContext = getContext;
     this.queue = this.readQueue();
@@ -165,19 +113,11 @@ export class Analytics {
       if (!pageId || this.currentPage === pageId) return;
       this.currentPage = pageId as AnalyticsPageId;
     }
-    const context = this.getContext();
     const event: QueuedEvent = {
       event_id: makeId(),
       name,
       ts: Date.now(),
-      props: this.compact({
-        level: context.level,
-        coins: context.coins,
-        stars: context.stars,
-        exp_level: context.expLevel,
-        equipped_cat: context.equippedCat,
-        ...props,
-      }),
+      props: this.compact(props),
     };
     this.queue.push(event);
     if (this.queue.length > MAX_QUEUE) {
@@ -227,18 +167,35 @@ export class Analytics {
     this.flushing = true;
     const batch = this.queue.slice(0, MAX_BATCH);
     const ids = new Set(batch.map(event => event.event_id));
+    const dropBatch = () => {
+      this.queue = this.queue.filter(event => !ids.has(event.event_id));
+      this.writeQueue();
+    };
     try {
-      await this.api.track({
+      const result = await this.api.track({
         user_id: this.userId || this.getContext().userId,
         session_id: this.sessionId,
         platform: this.platform,
         app_version: ANALYTICS_APP_VERSION,
         events: batch,
       });
-      this.queue = this.queue.filter(event => !ids.has(event.event_id));
-      this.writeQueue();
+      // 服务端已确认处理（含拒收），这批事件从队列移除；dropped 由服务端聚合告警，
+      // 开发环境额外提示一次，避免被拒收事件在本地无限重试。
+      dropBatch();
+      if (PREVIEW && result.dropped > 0) {
+        console.error(`[CatWorld] 本批埋点有 ${result.dropped} 条被服务端拒收（未知事件或非法属性），请核对事件目录`);
+      }
     } catch (error) {
-      console.error('[CatWorld] Analytics flush failed', error);
+      // 服务端明确拒收（4xx）= 永久失败：丢弃本批，不再重试；
+      // 网络失败 / 5xx（含数据库错误）= 临时失败：保留队列等待下次 flush。
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+        dropBatch();
+        if (PREVIEW) {
+          console.error('[CatWorld] 埋点批次被服务端拒收（4xx），已丢弃本批事件', error);
+        }
+      } else {
+        console.error('[CatWorld] Analytics flush failed', error);
+      }
     } finally {
       this.flushing = false;
       if (this.allowFlush && this.queue.length > 0) this.scheduleFlush(2000);

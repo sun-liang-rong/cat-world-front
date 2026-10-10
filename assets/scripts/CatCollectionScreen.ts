@@ -14,14 +14,17 @@ import {
 } from 'cc';
 import { CAT_DEFINITIONS, CatDefinition } from './GameContent';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
+import { Theme, TITLE_SIGN } from './Theme';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
-import { CatId, CatProgress } from './PlayerTypes';
+import { CatId, CatProgress, CatTrialStatus } from './PlayerTypes';
 
 export interface CatCollectionScreenOptions {
   onPlaySound: (effect: AudioEffect) => void;
   getCats: () => Record<CatId, CatProgress>;
   getEquippedCat: () => CatId | null;
+  /** 试住快照：试住期的猫咪在展台上按「试住中」展示，而不是未解锁灰态 */
+  getCatTrialStatus?: () => CatTrialStatus | null;
   onOpenCat: (id: CatId) => void;
   onReturnHome: () => void;
 }
@@ -70,17 +73,17 @@ const RARITY_STYLES: Record<string, RarityStyle> = {
 };
 
 const COLORS = {
-  title: new Color(111, 62, 28),
-  body: new Color(112, 69, 40),
+  ...Theme,
+  // 本页辅助文字偏灰（锁猫提示），与全局暖棕 muted 区分
   muted: new Color(150, 137, 121),
-  green: new Color(78, 139, 50),
-  orange: new Color(234, 117, 21),
   wood: new Color(206, 158, 104),
   woodTop: new Color(234, 197, 145),
   woodStroke: new Color(150, 100, 56),
-  shadow: new Color(92, 54, 22, 70),
   lockedPlague: new Color(241, 235, 224),
   lockedStroke: new Color(206, 192, 172),
+  trialPlaque: new Color(255, 239, 188),
+  trialStroke: new Color(224, 154, 51),
+  trialText: new Color(166, 110, 34),
 };
 
 const PLAQUE_HEIGHT = 52;
@@ -137,7 +140,7 @@ export class CatCollectionScreen {
     this.assets.loadImagesFor(this, [
       'cat_she/cat_collection_bg',
       'cat_she/cat_locked',
-      'cat_she/title_logo',
+      TITLE_SIGN.path,
       'cat_she/progress_panel',
       'cat_she/footer_banner',
       'cat_she/sparkle_large',
@@ -194,8 +197,10 @@ export class CatCollectionScreen {
     const headerY = top - 140;
     this.buildBackButton(this.collectionUI!, -300, headerY, this.options.onReturnHome);
 
-    // 标题徽标夹在返回键与收集进度之间，窄屏也不会互相压到。
-    this.image(this.collectionUI!, 'cat_she/title_logo', 0, headerY, 260, 79);
+    // 统一标题吊牌：偏左放，右侧让给收集进度胶囊（胶囊左缘 157，吊牌右缘 140）。
+    const sign = this.image(this.collectionUI!, TITLE_SIGN.path, -30, top - 118, TITLE_SIGN.width, TITLE_SIGN.height);
+    const signTitle = this.label(sign, '猫咪社', 0, TITLE_SIGN.titleOffsetY, TITLE_SIGN.titleFontSize, COLORS.title);
+    signTitle.isBold = true;
 
     // 收集进度胶囊：素材原始比例 240×116，按等比缩放展示（189×91），
     // 之前的 200×68 会把爪印竖向压扁。文字随胶囊缩小到 18px，仍在规范下限之上。
@@ -319,7 +324,8 @@ export class CatCollectionScreen {
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const progress = this.options.getCats()[definition.id];
-      if (progress?.unlocked) this.options.onOpenCat(definition.id);
+      const trial = this.trialCatId() === definition.id;
+      if (progress?.unlocked || trial) this.options.onOpenCat(definition.id);
       else this.toast(definition.unlockHint);
     });
 
@@ -367,20 +373,23 @@ export class CatCollectionScreen {
     if (!this.collectionUI) return;
     const cats = this.options.getCats();
     const equippedCat = this.options.getEquippedCat();
+    const trialStatus = this.options.getCatTrialStatus?.() ?? null;
     let unlockedCount = 0;
 
     this.slotViews.forEach((viewData, index) => {
       const definition = viewData.definition;
       const progress = cats[definition.id];
       const unlocked = !!progress?.unlocked;
+      const trial = !unlocked && trialStatus?.catId === definition.id;
       const equipped = unlocked && equippedCat === definition.id;
       const style = RARITY_STYLES[definition.rarity] ?? RARITY_STYLES['普通'];
-      const plaqueStroke = unlocked ? style.stroke : COLORS.lockedStroke;
+      const plaqueFill = unlocked ? style.fill : trial ? COLORS.trialPlaque : COLORS.lockedPlague;
+      const plaqueStroke = unlocked ? style.stroke : trial ? COLORS.trialStroke : COLORS.lockedStroke;
       if (unlocked) unlockedCount++;
 
-      this.drawPlaque(viewData.plaque, viewData.plaqueWidth, PLAQUE_HEIGHT, unlocked ? style.fill : COLORS.lockedPlague, plaqueStroke);
+      this.drawPlaque(viewData.plaque, viewData.plaqueWidth, PLAQUE_HEIGHT, plaqueFill, plaqueStroke);
 
-      const portraitPath = unlocked ? CAT_SHE_PORTRAITS[definition.id] : 'cat_she/cat_locked';
+      const portraitPath = unlocked || trial ? CAT_SHE_PORTRAITS[definition.id] : 'cat_she/cat_locked';
       const frame = this.assets.getFrame(portraitPath);
       const sprite = viewData.portrait.getComponent(Sprite);
       if (frame && sprite) {
@@ -393,19 +402,25 @@ export class CatCollectionScreen {
         viewData.portrait.getComponent(UITransform)!.setContentSize(fitted.width, fitted.height);
       }
       const portraitOpacity = viewData.portrait.getComponent(UIOpacity)!;
-      portraitOpacity.opacity = unlocked ? 255 : 205;
+      portraitOpacity.opacity = unlocked || trial ? 255 : 205;
       // 未解锁的剪影原图更饱满，收一点比例，解锁的猫才读得出"被点亮"。
-      const emphasis = unlocked ? 1 : 0.9;
+      const emphasis = unlocked || trial ? 1 : 0.9;
       viewData.portrait.setScale(new Vec3(emphasis, emphasis, 1));
 
-      viewData.name.string = `${definition.name} · ${definition.rarity}`;
-      viewData.name.color = unlocked ? COLORS.title : COLORS.muted;
+      viewData.name.string = trial
+        ? `${definition.name} · 试住中`
+        : `${definition.name} · ${definition.rarity}`;
+      viewData.name.color = unlocked ? COLORS.title : trial ? COLORS.trialText : COLORS.muted;
 
       // 未解锁用短条件（名牌一行放得下），完整提示交给点击后的 Toast。
-      viewData.status.string = unlocked
-        ? `Lv.${progress.level} · ${equipped ? '已装备' : '已解锁'}`
-        : definition.unlockShort;
-      viewData.status.color = equipped ? COLORS.orange : unlocked ? COLORS.green : COLORS.muted;
+      viewData.status.string = trial
+        ? `剩余试住 ${trialStatus!.remainingGames} 局`
+        : unlocked
+          ? `Lv.${progress.level} · ${equipped ? '已装备' : '已解锁'}`
+          : definition.unlockShort;
+      viewData.status.color = trial
+        ? COLORS.trialText
+        : equipped ? COLORS.orange : unlocked ? COLORS.green : COLORS.muted;
 
       viewData.slot.setScale(new Vec3(0.96, 0.96, 1));
       if (this.active) {
@@ -419,6 +434,10 @@ export class CatCollectionScreen {
     });
 
     if (this.countLabel) this.countLabel.string = `已收集 ${unlockedCount}/${CAT_DEFINITIONS.length}`;
+  }
+
+  private trialCatId(): CatId | null {
+    return this.options.getCatTrialStatus?.()?.catId ?? null;
   }
 
   private drawPlaque(graphics: Graphics, width: number, height: number, fill: Color, stroke: Color) {

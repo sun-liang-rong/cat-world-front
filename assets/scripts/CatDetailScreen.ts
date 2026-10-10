@@ -25,13 +25,15 @@ import {
   getCatUpgradeCost,
   MAX_CAT_LEVEL,
 } from './GameContent';
-import { CatId, CatInteraction, CatProgress, CatUpgradeResult } from './PlayerTypes';
+import { CatId, CatInteraction, CatProgress, CatTrialStatus, CatUpgradeResult } from './PlayerTypes';
 
 export interface CatDetailScreenOptions {
   onPlaySound: (effect: AudioEffect) => void;
   getCoins: () => number;
   getCat: (id: CatId) => CatProgress;
   getEquippedCat: () => CatId | null;
+  /** 试住快照：试住期的猫咪详情按只读「试住中」模式展示 */
+  getCatTrialStatus?: () => CatTrialStatus | null;
   onInteract: (id: CatId, interaction: CatInteraction) => { ok: boolean; message: string };
   onUpgrade: (id: CatId) => CatUpgradeResult;
   onEquip: (id: CatId) => { ok: boolean; message: string };
@@ -50,6 +52,13 @@ type StatCardView = {
   titleLabel: Label;
   bar: Graphics;
   barLabel: Label;
+};
+
+type MilestoneChipView = {
+  level: number;
+  graphics: Graphics;
+  label: Label;
+  check: Graphics;
 };
 
 // 统一暖色奶油风色板（与工程其它页面一致）
@@ -86,6 +95,8 @@ export class CatDetailScreen {
   private equipLabel: Label | null = null;
   private equipOpacity: UIOpacity | null = null;
   private interactionViews: InteractionView[] = [];
+  private trialBadge: Node | null = null;
+  private readonly milestoneChips: MilestoneChipView[] = [];
   private idleAnimationStarted = false;
   private active = false;
 
@@ -131,6 +142,7 @@ export class CatDetailScreen {
 
   destroy() {
     this.interactionViews.length = 0;
+    this.milestoneChips.length = 0;
     if (this.portrait) Tween.stopAllByTarget(this.portrait);
     this.statCards = null;
     this.detailUI?.destroy();
@@ -165,6 +177,7 @@ export class CatDetailScreen {
     this.portrait = this.image(panel, 'cats/cat_orange', 0, 300, 220, 220);
     if (!this.assets.getFrame('cats/cat_orange')) this.drawCatFallback(this.portrait, 'orange', 1.4);
     this.equippedBadge = this.buildEquippedBadge(panel, 0, 430);
+    this.trialBadge = this.buildTrialBadge(panel, 0, 430);
 
     // 名字铭带 + 稀有度胶囊
     const ribbon = this.image(panel, 'shop/hint_ribbon', 0, 158, 340, 76);
@@ -248,10 +261,24 @@ export class CatDetailScreen {
     this.equipLabel = equipNode.getChildByName('Label')?.getComponent(Label) ?? null;
     this.equipOpacity = equipNode.addComponent(UIOpacity);
 
-    this.unlockLabel = this.label(this.detailUI, '', 0, -540, 22, Color.WHITE);
+    this.unlockLabel = this.label(this.detailUI, '', 0, -508, 21, COLOR_BODY);
     this.unlockLabel.isBold = true;
-    this.unlockLabel.outlineWidth = 4;
-    this.unlockLabel.outlineColor = new Color(90, 61, 38);
+
+    // 成长路线：9 个里程碑一排小签，已达成金色 + 对勾，未达成灰剪影
+    CAT_MILESTONES.forEach((milestone, index) => {
+      const chip = new Node(`Milestone_${milestone.level}`);
+      this.detailUI!.addChild(chip);
+      chip.setPosition(-278 + index * 70, -552);
+      chip.addComponent(UITransform).setContentSize(62, 44);
+      const graphics = chip.addComponent(Graphics);
+      const label = this.label(chip, `Lv.${milestone.level}`, 0, 4, 15, COLOR_MUTED);
+      label.isBold = true;
+      const checkNode = new Node('Check');
+      chip.addChild(checkNode);
+      checkNode.setPosition(0, -11);
+      const check = checkNode.addComponent(Graphics);
+      this.milestoneChips.push({ level: milestone.level, graphics, label, check });
+    });
     this.refresh();
   }
 
@@ -291,6 +318,20 @@ export class CatDetailScreen {
     label.isBold = true;
     label.outlineWidth = 3;
     label.outlineColor = new Color(47, 84, 17);
+    node.active = false;
+    return node;
+  }
+
+  // 试住徽章：与出战中徽章同位互斥，黄色强调「临时体验」
+  private buildTrialBadge(parent: Node, x: number, y: number) {
+    const node = new Node('TrialBadge');
+    parent.addChild(node);
+    node.setPosition(x, y);
+    node.addComponent(UITransform).setContentSize(168, 44);
+    const graphics = node.addComponent(Graphics);
+    this.drawCapsule(graphics, 168, 44, new Color(255, 224, 108), new Color(201, 148, 47), 3);
+    const label = this.label(node, '试住体验中', 0, 0, 20, new Color(111, 62, 28));
+    label.isBold = true;
     node.active = false;
     return node;
   }
@@ -361,6 +402,10 @@ export class CatDetailScreen {
     const definition = getCatDefinition(this.catId);
     const progress = this.options.getCat(this.catId);
     const unlocked = !!progress?.unlocked;
+    const trialStatus = this.options.getCatTrialStatus?.() ?? null;
+    // 试住模式：猫咪尚未正式解锁、但正处于试住期 → 只读展示，不允许升级/互动/换装
+    const trialMode = !unlocked && trialStatus?.catId === this.catId;
+    const showAsUnlocked = unlocked || trialMode;
     const equipped = this.options.getEquippedCat() === this.catId;
     const interactionCounts = progress?.interactionCounts || { pet: 0, feed: 0, play: 0 };
     const coins = this.options.getCoins();
@@ -371,39 +416,44 @@ export class CatDetailScreen {
       const sprite = this.portrait.getComponent(Sprite);
       if (frame && sprite) sprite.spriteFrame = frame;
       const opacity = this.portrait.getComponent(UIOpacity) || this.portrait.addComponent(UIOpacity);
-      opacity.opacity = unlocked ? 255 : 110;
-      this.refreshIdleAnimation(unlocked, progress?.level ?? 1);
+      opacity.opacity = showAsUnlocked ? 255 : 110;
+      this.refreshIdleAnimation(showAsUnlocked, progress?.level ?? 1);
     }
     if (this.nameLabel) this.nameLabel.string = definition.name;
     if (this.rarityPill && this.rarityLabel) {
-      this.rarityLabel.string = unlocked ? definition.rarity : '尚未解锁';
-      this.rarityLabel.color = unlocked ? COLOR_TITLE : COLOR_MUTED;
+      this.rarityLabel.string = trialMode ? '试住中' : unlocked ? definition.rarity : '尚未解锁';
+      this.rarityLabel.color = trialMode ? new Color(166, 110, 34) : unlocked ? COLOR_TITLE : COLOR_MUTED;
       this.drawCapsule(
         this.rarityPill,
         180,
         44,
-        unlocked ? new Color(255, 224, 108) : new Color(228, 216, 198),
-        unlocked ? COLOR_ACCENT_STROKE : new Color(204, 190, 168),
+        trialMode ? new Color(255, 239, 188) : unlocked ? new Color(255, 224, 108) : new Color(228, 216, 198),
+        trialMode ? new Color(224, 154, 51) : unlocked ? COLOR_ACCENT_STROKE : new Color(204, 190, 168),
         2.5,
       );
     }
     if (this.equippedBadge) this.equippedBadge.active = unlocked && equipped;
+    if (this.trialBadge) this.trialBadge.active = trialMode;
     if (this.coinLabel) this.coinLabel.string = `${coins}`;
 
     const cards = this.statCards;
     if (cards) {
-      cards.level.titleLabel.string = unlocked ? `等级 Lv.${progress.level}` : '等级 --';
-      const experience = unlocked ? progress.experience : 0;
-      cards.level.barLabel.string = unlocked ? `${experience}/${EXPERIENCE_MAX}` : '--';
-      this.drawBar(cards.level.bar, unlocked ? experience / EXPERIENCE_MAX : 0);
+      cards.level.titleLabel.string = showAsUnlocked ? `等级 Lv.${progress.level}` : '等级 --';
+      const experience = showAsUnlocked ? progress.experience : 0;
+      cards.level.barLabel.string = showAsUnlocked ? `${experience}/${EXPERIENCE_MAX}` : '--';
+      this.drawBar(cards.level.bar, showAsUnlocked ? experience / EXPERIENCE_MAX : 0);
       cards.affection.titleLabel.string = '好感度';
-      const affection = unlocked ? progress.affection : 0;
-      cards.affection.barLabel.string = unlocked ? `${affection}/${AFFECTION_MAX}` : '--';
-      this.drawBar(cards.affection.bar, unlocked ? affection / AFFECTION_MAX : 0);
+      const affection = showAsUnlocked ? progress.affection : 0;
+      cards.affection.barLabel.string = showAsUnlocked ? `${affection}/${AFFECTION_MAX}` : '--';
+      this.drawBar(cards.affection.bar, showAsUnlocked ? affection / AFFECTION_MAX : 0);
     }
 
     if (this.skillDescLabel) {
-      if (!unlocked) {
+      if (trialMode) {
+        const required = getCatSkillChargeRequired(this.catId, progress.level);
+        const skillText = definition.skill.replace(/\d+/, `${required}`);
+        this.skillDescLabel.string = `${skillText}\n试住期间每局自动充满，可发动 1 次`;
+      } else if (!unlocked) {
         this.skillDescLabel.string = definition.unlockHint;
       } else {
         const required = getCatSkillChargeRequired(this.catId, progress.level);
@@ -412,14 +462,18 @@ export class CatDetailScreen {
       }
     }
     if (this.skillCooldownLabel) {
-      this.skillCooldownLabel.string = unlocked ? `冷却 ${formatCatSkillCooldown(progress.level)}` : '';
+      this.skillCooldownLabel.string = trialMode
+        ? '试住免冷却'
+        : unlocked ? `冷却 ${formatCatSkillCooldown(progress.level)}` : '';
     }
     if (this.skillIcon) {
       const opacity = this.skillIcon.getComponent(UIOpacity) || this.skillIcon.addComponent(UIOpacity);
-      opacity.opacity = unlocked ? 255 : 120;
+      opacity.opacity = showAsUnlocked ? 255 : 120;
     }
     if (this.unlockLabel) {
-      if (!unlocked) {
+      if (trialMode) {
+        this.unlockLabel.string = `剩余试住 ${trialStatus!.remainingGames} 局 · 完成流浪猫小屋装饰即可正式解锁`;
+      } else if (!unlocked) {
         this.unlockLabel.string = definition.unlockHint;
       } else {
         const next = CAT_MILESTONES.find(milestone => milestone.level > progress.level);
@@ -428,40 +482,71 @@ export class CatDetailScreen {
           : '成长里程碑全部完成 · 专属头像框与称号已收藏';
       }
     }
+    this.milestoneChips.forEach(chip => {
+      this.drawMilestoneChip(chip, showAsUnlocked && (progress?.level ?? 1) >= chip.level);
+    });
 
     this.interactionViews.forEach(viewData => {
       const used = interactionCounts[viewData.id] >= 1;
       const costsCoins = viewData.id !== 'pet';
       const affordable = !costsCoins || coins >= INTERACTION_COST;
-      viewData.status.string = !unlocked
+      viewData.status.string = !showAsUnlocked
         ? '解锁后开放'
-        : used
-          ? '今日已用'
-          : costsCoins && !affordable ? '金币不足' : viewData.id === 'pet' ? '免费' : `${INTERACTION_COST} 金币`;
-      viewData.status.color = used || !unlocked
+        : trialMode
+          ? '试住后开放'
+          : used
+            ? '今日已用'
+            : costsCoins && !affordable ? '金币不足' : viewData.id === 'pet' ? '免费' : `${INTERACTION_COST} 金币`;
+      viewData.status.color = used || !showAsUnlocked || trialMode
         ? COLOR_MUTED
         : costsCoins && !affordable ? new Color(190, 59, 51) : COLOR_BODY;
-      viewData.button.interactable = unlocked && !used && affordable;
-      viewData.opacity.opacity = unlocked && !used && affordable ? 255 : 160;
+      viewData.button.interactable = showAsUnlocked && !trialMode && !used && affordable;
+      viewData.opacity.opacity = viewData.button.interactable ? 255 : 160;
     });
 
     if (this.upgradeButton && this.upgradeLabel && this.upgradeOpacity) {
       const upgradeCost = unlocked ? getCatUpgradeCost(progress.level) : 0;
       const affordable = unlocked && coins >= upgradeCost;
-      this.upgradeButton.interactable = unlocked && progress.level < MAX_CAT_LEVEL && affordable;
-      this.upgradeLabel.string = !unlocked
-        ? '解锁后可升级'
-        : progress.level >= MAX_CAT_LEVEL
+      this.upgradeButton.interactable = unlocked && !trialMode && progress.level < MAX_CAT_LEVEL && affordable;
+      this.upgradeLabel.string = trialMode
+        ? '试住结束后可升级'
+        : !unlocked
+          ? '解锁后可升级'
+          : progress.level >= MAX_CAT_LEVEL
             ? '已是最高等级'
-          : !affordable
-            ? `还差 ${upgradeCost - coins} 金币`
-            : `升级 · ${upgradeCost} 金币`;
+            : !affordable
+              ? `还差 ${upgradeCost - coins} 金币`
+              : `升级 · ${upgradeCost} 金币`;
       this.upgradeOpacity.opacity = this.upgradeButton.interactable ? 255 : 160;
     }
     if (this.equipButton && this.equipLabel && this.equipOpacity) {
-      this.equipButton.interactable = unlocked && !equipped;
-      this.equipLabel.string = !unlocked ? '解锁后可装备' : equipped ? '当前装备' : '装备出战';
-      this.equipOpacity.opacity = unlocked && !equipped ? 255 : 160;
+      this.equipButton.interactable = unlocked && !trialMode && !equipped;
+      this.equipLabel.string = trialMode
+        ? '试住中自动出战'
+        : !unlocked ? '解锁后可装备' : equipped ? '当前装备' : '装备出战';
+      this.equipOpacity.opacity = this.equipButton.interactable ? 255 : 160;
+    }
+  }
+
+  // 成长路线小签：达成金色 + 绿勾，未达成灰剪影
+  private drawMilestoneChip(view: MilestoneChipView, reached: boolean) {
+    view.graphics.clear();
+    view.graphics.fillColor = reached ? new Color(255, 224, 108) : new Color(241, 235, 224);
+    view.graphics.strokeColor = reached ? new Color(201, 148, 47) : new Color(206, 192, 172);
+    view.graphics.lineWidth = 2.5;
+    view.graphics.roundRect(-31, -22, 62, 44, 14);
+    view.graphics.fill();
+    view.graphics.stroke();
+    view.label.string = `Lv.${view.level}`;
+    view.label.color = reached ? COLOR_TITLE : COLOR_MUTED;
+    view.check.clear();
+    if (reached) {
+      view.check.strokeColor = new Color(78, 139, 50);
+      view.check.lineWidth = 3;
+      view.check.moveTo(-5, 0);
+      view.check.lineTo(-1, -4);
+      view.check.lineTo(5, 4);
+      view.check.stroke();
     }
   }
 

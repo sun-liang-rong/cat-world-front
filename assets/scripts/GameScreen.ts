@@ -22,11 +22,10 @@ import { ComboTracker } from './ComboTracker';
 import { getCatDefinition, getCatSkillChargeRequired, getCatSkillConfig } from './GameContent';
 import { SettlementPopup } from './SettlementPopup';
 import { Toast } from './Toast';
-import type { RewardedAdResult } from './RewardedAdService';
 import { EndlessDirector } from './level/EndlessDirector';
 import { LevelRules } from './level/LevelSolver';
 import { LevelDefinition, LevelGoal, PlayerRun, TileDefinition, TileGeometry } from './level/LevelTypes';
-import { CatId, GamePetPosition, ItemId } from './PlayerTypes';
+import { CatId, CatTrialStatus, GamePetPosition, ItemId, ShareCardType, ShareOffer } from './PlayerTypes';
 import { SettingsPopup } from './SettingsPopup';
 import { BuildTargetInfo, MAX_MAIN_LEVEL, themeIndexForLevel } from './TownContent';
 import { PerformanceManager } from './PerformanceManager';
@@ -60,6 +59,8 @@ type ToolButtonView = {
   node: Node;
   button: Button;
   countLabel: Label;
+  badgeNode: Node;
+  badgeGraphics: Graphics;
   icon: Node;
   activeFrame: Node;
 };
@@ -84,6 +85,7 @@ type CatSkillPanelView = {
   chargeLabel: Label;
   statusLabel: Label;
   chargeFill: Graphics;
+  trialBadge: Node;
 };
 
 // 通用元素皮肤（game/tiles/tile_7..21）：未配套主题时的默认皮肤，也是主题皮肤缺图时的回退
@@ -187,11 +189,15 @@ export interface GameScreenOptions {
   onStarsGranted: (stars: number) => void;
   getItemCount: (id: ItemId) => number;
   onConsumeItem: (id: ItemId) => boolean;
+  /** 道具用完时点击格子 → 分享好友补领（Main 处理平台可用性与每日限领）；不传时空道具保持禁用 */
+  onToolShareGet?: (id: ItemId) => void;
   getEquippedCat: () => CatId | null;
   /** 是否至少解锁了一只猫咪：宠物浮窗区分「去装备」和「先解锁建筑」两种提示 */
   hasAnyUnlockedCat?: () => boolean;
-  /** 临时猫咪试住：仅主线真正 startPlay 时消耗一局，挑战/无尽不传。 */
+  /** 临时猫咪试住：仅主线玩家第一次真正操作时消耗一局，挑战/无尽不传。 */
   onMainRunStarted?: () => void;
+  /** 试住状态快照入口：主线开局时读取一次，驱动浮窗「试住中」角标与结算埋点。 */
+  getCatTrialStatus?: () => CatTrialStatus | null;
   /** 对局内设置弹窗的音频开关（Main 注入 AudioManager；缺省时弹窗按开启兜底） */
   getMusicEnabled?: () => boolean;
   getSoundEnabled?: () => boolean;
@@ -235,7 +241,13 @@ export interface GameScreenOptions {
   getBuildTargetInfo?: () => BuildTargetInfo | null;
   /** 点击「去建设」：关闭对局并跳转小镇 */
   onGoBuild?: () => void;
-  onWatchAd?: (scene?: 'revive' | 'double_coins' | 'home_coins' | 'shop_item') => Promise<RewardedAdResult>;
+  /** 满足重要节点时显示的好友分享入口；分享奖励由 Main 统一幂等发放。 */
+  getShareOffer?: (context?: { isNewRecord?: boolean }) => ShareOffer | null;
+  onShare?: (type: ShareCardType) => void;
+  /** 失败结算「分享好友清出一对」：Main 拉起微信分享，成功 resolve true。 */
+  onReviveShare?: () => Promise<boolean>;
+  /** 胜利/无尽结算「分享好友×2金币」：Main 拉起微信分享，成功 resolve true。 */
+  onDoubleRewardShare?: () => Promise<boolean>;
   onTrack?: (name: TrackEventName, props?: TrackProps) => void;
   /**
    * 启动预创建：只搭好关卡 UI，等 startPlay() 再开始计时和显示。
@@ -329,6 +341,8 @@ export class GameScreen {
   // 棋盘清除类技能处于选择模式时剩余的可选目标数（大橘/白猫 1 个，极光猫 2 个）
   private catSkillPicksLeft = 0;
   private catSkillDockSide: 'left' | 'right' = 'right';
+  /** 宠物可停靠的最高 y（气泡不得压到关卡目标横幅），create 时按 headerY 计算 */
+  private catSkillMaxY = Number.POSITIVE_INFINITY;
   private catSkillDragActive = false;
   private catSkillDragMoved = false;
   private catSkillDragOffset = new Vec3();
@@ -337,6 +351,10 @@ export class GameScreen {
   private boardTutorial: BoardTutorial | null = null;
   private settingsPopup: SettingsPopup | null = null;
   private endlessRecorded = false;
+  /** 开局时的试住快照：剩余次数（含本局）；null 表示本局与试住无关。 */
+  private trialStartRemaining: number | null = null;
+  /** 本局是否已经扣过试住次数（玩家第一次真正操作时扣）。 */
+  private trialConsumedForRun = false;
 
   constructor(root: Node, assets: AssetStore, options: GameScreenOptions) {
     this.assets = assets;
@@ -365,7 +383,9 @@ export class GameScreen {
   }
 
   loadAndCreate(onReady?: () => void) {
-    this.assets.loadImages(buildGameScreenImagePaths(this.options.level, this.options.theme), () => {
+    // 以对局自身为 owner 登记图片归属：对局销毁（Main.releaseScreen/离场）时
+    // 这些图片可被回收，不再无条件常驻（需求 C-2）。共享图片由引用计数保护。
+    this.assets.loadImagesFor(this, buildGameScreenImagePaths(this.options.level, this.options.theme), () => {
       if (this.destroyed) return;
       this.create();
       if (!this.options.deferStart || this.pendingStart) this.startPlay();
@@ -375,6 +395,20 @@ export class GameScreen {
 
   hasStartedPlay() {
     return this.playStarted;
+  }
+
+  // Main 在分享补领等异步流程发放道具后调用，立即刷新工具按钮数量
+  refreshInventoryHud() {
+    if (this.destroyed || !this.created) return;
+    this.refreshToolButtons();
+  }
+
+  // 试住次数扣减：点牌 / 用道具 / 发动技能都算「真正开始操作」；
+  // 每局最多扣一次，超萌挑战和无尽不经过这里。
+  private consumeTrialIfNeeded() {
+    if (this.trialConsumedForRun || this.options.challenge || this.options.endless) return;
+    this.trialConsumedForRun = true;
+    this.options.onMainRunStarted?.();
   }
 
   matchesPreparedLevel(level: number) {
@@ -407,8 +441,11 @@ export class GameScreen {
       this.catSkill = null;
       this.catSkillConfig = null;
     }
-    // 在读取本局猫咪状态之后再扣试住次数，保证第 3 局仍然拿到大橘技能。
-    if (!this.options.challenge && !this.options.endless) this.options.onMainRunStarted?.();
+    // 开局快照试住状态：本局猫咪/技能已在上面读取（试住期间每局自动满充能）。
+    // 次数不在这里扣——等玩家第一次真正点牌/用道具/发技能再扣，纯看棋盘退出不消耗。
+    const trialStatus = this.options.getCatTrialStatus?.() ?? null;
+    this.trialStartRemaining = trialStatus ? Math.max(1, trialStatus.remainingGames) : null;
+    this.trialConsumedForRun = false;
     this.refreshToolButtons();
     this.refreshCatSkillPanel();
     this.gameUI.active = true;
@@ -600,7 +637,10 @@ export class GameScreen {
       ? -visibleSize.width / 2 + 78
       : visibleSize.width / 2 - 78;
     const minPetY = -visibleSize.height / 2 + 88;
-    const maxPetY = belowWeChatCapsule(visibleSize.height / 2, 156);
+    // 宠物气泡（顶部 petY+97）不得压到关卡目标横幅（顶边 headerY-181.5）：
+    // 上限留 6px 余量；拖拽上限共用同一字段，避免拖回顶部时再次遮挡。
+    const maxPetY = headerY - 285;
+    this.catSkillMaxY = maxPetY;
     const defaultPetY = Math.max(220, headerY - 300);
     const petY = Math.max(
       minPetY,
@@ -836,6 +876,27 @@ export class GameScreen {
     chargeFillNode.setPosition(34, -51);
     chargeFillNode.addComponent(UITransform).setContentSize(66, 10);
     const chargeFill = chargeFillNode.addComponent(Graphics);
+
+    // 试住角标：宠物浮窗下方的黄色小胶囊（「试住中 第N/3局」），非试住对局隐藏
+    const trialBadge = new Node('CatTrialBadge');
+    panel.addChild(trialBadge);
+    trialBadge.setPosition(0, -106);
+    trialBadge.addComponent(UITransform).setContentSize(140, 32);
+    const trialBadgeGraphics = trialBadge.addComponent(Graphics);
+    trialBadgeGraphics.fillColor = new Color(255, 224, 108, 248);
+    trialBadgeGraphics.strokeColor = new Color(201, 148, 47, 255);
+    trialBadgeGraphics.lineWidth = 3;
+    trialBadgeGraphics.roundRect(-70, -16, 140, 32, 16);
+    trialBadgeGraphics.fill();
+    trialBadgeGraphics.stroke();
+    const trialBadgeLabel = this.label(trialBadge, '', 0, 0, 15, new Color(111, 62, 28));
+    trialBadgeLabel.isBold = true;
+    trialBadgeLabel.overflow = Label.Overflow.SHRINK;
+    trialBadgeLabel.enableWrapText = false;
+    trialBadgeLabel.verticalAlign = Label.VerticalAlign.CENTER;
+    trialBadgeLabel.node.getComponent(UITransform)!.setContentSize(130, 24);
+    trialBadge.active = false;
+
     const statusLabel = this.label(panel, '', 0, -92, 1, Color.TRANSPARENT);
     statusLabel.node.active = false;
 
@@ -872,7 +933,7 @@ export class GameScreen {
       const nextY = touchPosition.y + this.catSkillDragOffset.y;
       panel.setPosition(
         Math.max(-visibleSize.width / 2 + halfWidth, Math.min(visibleSize.width / 2 - halfWidth, nextX)),
-        Math.max(-visibleSize.height / 2 + 88, Math.min(visibleSize.height / 2 - 118, nextY)),
+        Math.max(-visibleSize.height / 2 + 88, Math.min(this.catSkillMaxY, nextY)),
       );
       const nextSide = panel.position.x < 0 ? 'left' : 'right';
       if (nextSide !== this.catSkillDockSide) this.updateCatSkillBubbleSide(nextSide);
@@ -918,6 +979,7 @@ export class GameScreen {
       chargeLabel,
       statusLabel,
       chargeFill,
+      trialBadge,
     };
     this.updateCatSkillBubbleSide('right');
     this.refreshCatSkillPanel();
@@ -1000,6 +1062,7 @@ export class GameScreen {
       panel.cooldownOverlay.active = false;
       panel.button.interactable = true;
       panel.chargeFill.clear();
+      panel.trialBadge.active = false;
       return;
     }
     panel.lockMark.active = false;
@@ -1015,9 +1078,19 @@ export class GameScreen {
       && !this.catSkillUsed
       && chargeReady
       && cooldownRemaining === 0;
+    const trialRun = this.trialStartRemaining !== null;
 
     panel.portrait.active = true;
-    panel.nameLabel.string = definition.name;
+    panel.nameLabel.string = trialRun ? `${definition.name} · 试住` : definition.name;
+    if (trialRun) {
+      panel.trialBadge.active = true;
+      const badgeLabel = panel.trialBadge.getChildByName('Label')?.getComponent(Label);
+      if (badgeLabel) {
+        badgeLabel.string = `试住中 第${Math.max(1, 4 - this.trialStartRemaining!)}/3局`;
+      }
+    } else {
+      panel.trialBadge.active = false;
+    }
     panel.descriptionLabel.string = this.activeTool === 'cat_skill'
       ? `点选要清除的元素${this.catSkillPicksLeft > 1 ? `（可选 ${this.catSkillPicksLeft} 个）` : ''}`
       : cooldownRemaining > 0
@@ -1025,7 +1098,7 @@ export class GameScreen {
         : this.catSkillUsed
           ? '本局技能已使用'
           : canFire
-            ? '点击我使用技能！'
+            ? trialRun ? '本局可用！点击大橘发动技能' : '点击我使用技能！'
             : `技能充能 ${charge}/${required}`;
     panel.cooldownLabel.string = cooldownRemaining > 0
       ? this.formatCatSkillRemaining(cooldownRemaining)
@@ -1471,6 +1544,7 @@ export class GameScreen {
 
   private onTileTap(tile: Tile) {
     if (this.gameOver || this.boardIntroActive) return;
+    this.consumeTrialIfNeeded();
     if (tile.inTray) {
       this.onTrayTileTap(tile);
       return;
@@ -2291,6 +2365,24 @@ export class GameScreen {
       revive_used: this.reviveUsed,
       used_items: Array.from(this.usedTools),
     });
+    // 试住对局结算：有效对局结束上报结果；第 3 局结束再补 expire
+    //（建筑完成转正走 syncUnlocks 的 cat_trial_converted，这里不重复）。
+    if (!this.options.challenge && !this.options.endless && this.trialStartRemaining !== null) {
+      const remainingGames = Math.max(
+        0,
+        this.trialConsumedForRun ? this.trialStartRemaining - 1 : this.trialStartRemaining,
+      );
+      const trialResult = win ? 'win' : 'fail';
+      this.trackEvent('cat_trial_game_end', {
+        level: this.options.level,
+        remaining_games: remainingGames,
+        trial_result: trialResult,
+        skill_used: this.catSkillUsed,
+      });
+      if (remainingGames <= 0) {
+        this.trackEvent('cat_trial_expire', { level: this.options.level, trial_result: trialResult });
+      }
+    }
     this.options.onPlaySound(this.options.endless || win ? 'win' : 'fail');
     this.options.onVibrate();
     if (this.options.endless) {
@@ -2338,16 +2430,28 @@ export class GameScreen {
         this.trackEvent('level_replay', this.levelTrackProps());
         this.options.onReplay();
       },
-      onWatchAd: this.options.onWatchAd,
+      onDoubleRewardShare: this.options.onDoubleRewardShare,
       onTrack: this.options.onTrack,
-      // 广告复活每局只开放一次；复活后再次失败时不再展示无效按钮。
-      onRevive: win || this.reviveUsed ? undefined : () => this.reviveFromAd(),
-      // 连败中打难关（spike）失败送一次免费复活（不看广告，走同一套清对子逻辑）：
-      // 连败 1 次不再取消难关后，需要这个兜底避免难关变成纯劝退点；
-      // 无连败时此标记为空，难关失败仍走广告复活（变现高峰不白送）。
+      // 分享复活每局只开放一次；复活后再次失败时不再展示无效按钮。
+      onRevive: win || this.reviveUsed ? undefined : () => this.reviveFromShare(),
+      onReviveShare: this.options.onReviveShare,
+      // 连败中打难关（spike）失败送一次免费复活（不看广告不分享，走同一套清对子逻辑）：
+      // 连败 1 次不再取消难关后，需要这个兜底避免难关变成纯劝退点。
       freeRevive: !win && !this.reviveUsed && this.options.levelDefinition?.freeRevive === true,
       hadTrayPair: !win ? failHadPair : undefined,
-      onDoubleReward: win ? () => this.doubleRewardFromAd() : undefined,
+      onDoubleReward: win ? () => this.doubleRewardFromShare() : undefined,
+      share: win
+        ? (() => {
+          const offer = this.options.getShareOffer?.();
+          return offer ? {
+            ...offer,
+            onShare: () => {
+              this.options.onPlaySound('click');
+              this.options.onShare?.(offer.type);
+            },
+          } : undefined;
+        })()
+        : undefined,
       buildTarget: win && !challenge ? this.composeBuildTarget() : undefined,
       onGoBuild: () => {
         this.options.onPlaySound('click');
@@ -2430,14 +2534,26 @@ export class GameScreen {
         this.trackEvent('level_replay', this.levelTrackProps());
         this.options.onReplay();
       },
-      onWatchAd: result.coins > 0 ? this.options.onWatchAd : undefined,
+      onDoubleRewardShare: result.coins > 0 ? this.options.onDoubleRewardShare : undefined,
       onTrack: this.options.onTrack,
-      onDoubleReward: result.coins > 0 ? () => this.doubleRewardFromAd() : undefined,
+      onDoubleReward: result.coins > 0 ? () => this.doubleRewardFromShare() : undefined,
+      share: result.isNewRecord
+        ? (() => {
+          const offer = this.options.getShareOffer?.({ isNewRecord: true });
+          return offer ? {
+            ...offer,
+            onShare: () => {
+              this.options.onPlaySound('click');
+              this.options.onShare?.(offer.type);
+            },
+          } : undefined;
+        })()
+        : undefined,
     });
     this.trackEvent('page_view', { page_id: 'settlement', ...this.levelTrackProps(), result: 'endless' });
   }
 
-  private reviveFromAd() {
+  private reviveFromShare() {
     if (!this.gameOver || this.reviveUsed || this.trayTiles.length === 0) return;
     const pairKind = this.pickRevivePairKind();
     const pair = pairKind === null
@@ -2482,11 +2598,10 @@ export class GameScreen {
     if (!this.options.endless && !this.options.challenge) {
       this.options.onAdFunnel?.({
         level: this.options.level,
-        adRevive: !freeRevive,
         freeRevive,
       });
     }
-    const prefix = freeRevive ? '免费复活成功' : '广告复活成功';
+    const prefix = freeRevive ? '免费复活成功' : '分享复活成功';
     this.toast(returned
       ? `${prefix}，清出一对并把一张放回棋盘`
       : removed.length >= 2
@@ -2547,17 +2662,11 @@ export class GameScreen {
       .start();
   }
 
-  private doubleRewardFromAd() {
+  private doubleRewardFromShare() {
     if (!this.settlementWin || this.doubleRewardUsed || this.settlementCoinReward <= 0) return;
     this.doubleRewardUsed = true;
     this.addCoins(this.settlementCoinReward);
-    if (!this.options.endless && !this.options.challenge) {
-      this.options.onAdFunnel?.({
-        level: this.options.level,
-        doubleCoins: true,
-      });
-    }
-    this.toast(`广告奖励：金币 +${this.settlementCoinReward}`);
+    this.toast(`分享奖励：金币 +${this.settlementCoinReward}`);
   }
 
   // 星星固定 3 颗后，结算评价按底部空闲槽位区分表现（沿用原星级分档边界）
@@ -2613,9 +2722,24 @@ export class GameScreen {
     const button = buttonNode.addComponent(Button);
     button.transition = Button.Transition.SCALE;
     button.zoomScale = 0.93;
-    this.toolButtonViews.set(itemId, { node: buttonNode, button, countLabel: count, icon, activeFrame });
+    this.toolButtonViews.set(itemId, {
+      node: buttonNode,
+      button,
+      countLabel: count,
+      badgeNode: countBadge,
+      badgeGraphics: countBackground,
+      icon,
+      activeFrame,
+    });
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
+      this.consumeTrialIfNeeded();
+      // 道具用完：不再直接吃掉点击，改为拉起「分享好友补领」
+      if (this.options.getItemCount(itemId) <= 0) {
+        this.options.onToolShareGet?.(itemId);
+        this.refreshToolButtons();
+        return;
+      }
       callback();
       this.refreshToolButtons();
     });
@@ -2624,17 +2748,48 @@ export class GameScreen {
   }
 
   private refreshToolButtons() {
+    const shareEnabled = !!this.options.onToolShareGet;
     this.toolButtonViews.forEach((viewData, itemId) => {
       const count = Math.max(0, this.options.getItemCount(itemId));
       const used = this.usedTools.has(itemId);
-      viewData.countLabel.string = used ? '✓' : `${count}`;
-      viewData.button.interactable = count > 0 && !used && !this.gameOver && !this.boardIntroActive;
+      // 数量为 0 且可分享补领：不置灰，改用金色「+」角标表达「点我获取」
+      const shareable = count <= 0 && shareEnabled && !used;
+      viewData.countLabel.string = used ? '✓' : shareable ? '+' : `${count}`;
+      viewData.countLabel.fontSize = shareable ? 34 : 22;
+      viewData.countLabel.lineHeight = shareable ? 40 : 30;
+      viewData.countLabel.color = Color.WHITE;
+      // 数量为 0 时仍可点击（走分享补领）；已用过 / 结算中才禁用
+      viewData.button.interactable = (count > 0 || (shareEnabled && !used))
+        && !this.gameOver
+        && !this.boardIntroActive;
       viewData.activeFrame.active = itemId === 'hammer' && this.activeTool === 'hammer';
       const sprite = viewData.icon.getComponent(Sprite);
       if (sprite) {
-        sprite.color = count > 0 && !used
-          ? Color.WHITE
-          : new Color(178, 169, 150, 220);
+        // 图标永远保持全彩（除非本局已用），避免「置灰 = 不能点」的误解
+        sprite.color = used ? new Color(178, 169, 150, 220) : Color.WHITE;
+      }
+      // 角标状态：红底数字（有货）/ 金底加号（空了可分享补领）/ 灰底对勾（本局已用）
+      const badgeGraphics = viewData.badgeGraphics;
+      badgeGraphics.clear();
+      badgeGraphics.fillColor = used
+        ? new Color(205, 197, 180, 235)
+        : shareable ? new Color(255, 187, 47) : new Color(190, 59, 51);
+      badgeGraphics.strokeColor = Color.WHITE;
+      badgeGraphics.lineWidth = 3;
+      badgeGraphics.circle(0, 0, 20);
+      badgeGraphics.fill();
+      badgeGraphics.stroke();
+      // 可补领的「+」角标轻微呼吸，把「还能拿到」的信号顶出来
+      Tween.stopAllByTarget(viewData.badgeNode);
+      viewData.badgeNode.setScale(new Vec3(1, 1, 1));
+      if (shareable) {
+        tween(viewData.badgeNode)
+          .repeatForever(
+            tween()
+              .to(0.6, { scale: new Vec3(1.12, 1.12, 1) }, { easing: 'sineInOut' })
+              .to(0.6, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+          )
+          .start();
       }
     });
   }
@@ -2776,6 +2931,8 @@ export class GameScreen {
         : `装饰完成「${this.options.getBuildTargetInfo?.()?.buildingName ?? '小镇建筑'}」解锁猫咪，装备后技能帮你闯关`);
       return;
     }
+    // 有宠物可点 = 玩家开始操作，试住次数在此时才消耗
+    this.consumeTrialIfNeeded();
     // 选择目标阶段再点一次宠物 = 取消；已确认过目标则结束选择、放弃剩余次数
     if (this.activeTool === 'cat_skill') {
       const consumed = this.catSkillUsed;

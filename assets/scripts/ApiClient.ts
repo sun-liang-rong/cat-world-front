@@ -1,5 +1,8 @@
 export const API_BASE_URL = 'https://hongshu.sale/cat_world_service_api';
 
+/** 与微信 wx.request 的 timeout 保持一致的统一请求超时（毫秒）。 */
+export const API_TIMEOUT_MS = 8000;
+
 export type RankBoardType = 1 | 2 | 3;
 
 export interface ApiResponse<T> {
@@ -55,9 +58,13 @@ export interface TrackBatchPayload {
   events: TrackEventPayload[];
 }
 
+/** 入库回执：inserted = 数据库本次实际新插入；duplicated = 批内重复 + 与库内 event_id 冲突；dropped = 非法/未知事件拒收。 */
 export interface TrackIngestResult {
-  accepted: number;
+  inserted: number;
+  duplicated: number;
   dropped: number;
+  /** @deprecated 过渡期兼容字段，恒等于 inserted，后续移除。 */
+  accepted: number;
 }
 
 interface WechatRequestTask {
@@ -76,14 +83,21 @@ interface WechatApi {
   }) => WechatRequestTask;
 }
 
+/** 失败原因细分：超时 / 网络失败 / HTTP 非成功（status > 0）/ 服务端业务错误码。 */
+export type ApiErrorKind = 'timeout' | 'network' | 'http' | 'server_code';
+
 export class ApiError extends Error {
+  readonly kind: ApiErrorKind;
+
   constructor(
     message: string,
     readonly status = 0,
     readonly code = 0,
+    kind?: ApiErrorKind,
   ) {
     super(message);
     this.name = 'ApiError';
+    this.kind = kind ?? (status > 0 ? 'http' : code > 0 ? 'server_code' : 'network');
   }
 }
 
@@ -108,9 +122,20 @@ export class ApiClient {
     return this.request<TrackIngestResult>('POST', '/track', payload);
   }
 
-  private request<T>(method: 'GET' | 'POST', path: string, body?: unknown) {
+  private request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     const url = `${this.baseUrl}${path}`;
-    return this.send(method, url, body).then(payload => this.unwrap<T>(payload));
+    // 幂等 GET 在超时/网络失败时最多重试 1 次；POST 不自动重试（由调用方按业务决定）。
+    const attempts = method === 'GET' ? 2 : 1;
+    const run = (attempt: number): Promise<T> => this.send(method, url, body)
+      .then(payload => this.unwrap<T>(payload))
+      .catch(error => {
+        const retryable = attempt < attempts
+          && error instanceof ApiError
+          && (error.kind === 'timeout' || error.kind === 'network');
+        if (!retryable) throw error;
+        return run(attempt + 1);
+      });
+    return run(1);
   }
 
   private send(method: 'GET' | 'POST', url: string, body?: unknown): Promise<unknown> {
@@ -122,15 +147,15 @@ export class ApiClient {
           method,
           header: { 'Content-Type': 'application/json' },
           data: body,
-          timeout: 8000,
+          timeout: API_TIMEOUT_MS,
           success: result => {
             if ((result.statusCode ?? 0) >= 400) {
-              reject(this.toError(result.data, result.statusCode ?? 0));
+              reject(this.toHttpError(result.data, result.statusCode ?? 0));
               return;
             }
             resolve(result.data);
           },
-          fail: error => reject(new ApiError(this.errorMessage(error), 0)),
+          fail: error => reject(this.toTransportError(error)),
         });
       });
     }
@@ -139,18 +164,35 @@ export class ApiClient {
       return Promise.reject(new ApiError('当前环境无法请求排行榜服务'));
     }
 
+    // H5：AbortController 超时控制，定时器在 finally 清理，不留下悬挂计时器。
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+    if (controller) {
+      timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    }
+
     return fetch(url, {
       method,
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller?.signal,
     }).then(async response => {
       const payload = await this.parseBody(response);
-      if (!response.ok) throw this.toError(payload, response.status);
+      if (!response.ok) throw this.toHttpError(payload, response.status);
       return payload;
     }).catch(error => {
       if (error instanceof ApiError) throw error;
-      throw new ApiError(this.errorMessage(error));
-    });
+      if (controller && error?.name === 'AbortError') {
+        throw new ApiError('请求超时，请稍后重试', 0, 0, 'timeout');
+      }
+      throw this.toTransportError(error);
+    }).finally(finish);
   }
 
   private unwrap<T>(payload: unknown): T {
@@ -162,7 +204,7 @@ export class ApiClient {
       throw new ApiError('服务返回数据异常');
     }
     if (response.code !== 200) {
-      throw new ApiError(response.message || '请求失败', response.code, response.code);
+      throw new ApiError(response.message || '请求失败', response.code, response.code, 'server_code');
     }
     return response.data;
   }
@@ -177,22 +219,30 @@ export class ApiClient {
     }
   }
 
-  private toError(payload: unknown, status: number) {
+  private toHttpError(payload: unknown, status: number) {
     if (payload && typeof payload === 'object' && 'message' in payload) {
       const message = (payload as { message?: unknown }).message;
       if (typeof message === 'string' && message) {
         return new ApiError(message, status, typeof (payload as { code?: unknown }).code === 'number'
           ? (payload as { code?: unknown }).code as number
-          : status);
+          : status, 'http');
       }
     }
-    return new ApiError(status >= 500 ? '服务器开小差了，请稍后重试' : '请求失败', status);
+    return new ApiError(status >= 500 ? '服务器开小差了，请稍后重试' : '请求失败', status, 0, 'http');
   }
 
-  private errorMessage(error: unknown) {
-    if (error instanceof Error && error.message) return error.message;
-    if (typeof error === 'string' && error) return error;
-    return '网络异常，请稍后重试';
+  private toTransportError(error: unknown) {
+    if (error instanceof ApiError) return error;
+    if (error instanceof Error && error.message === 'request:fail timeout') {
+      return new ApiError('请求超时，请稍后重试', 0, 0, 'timeout');
+    }
+    if (error instanceof Error && error.message) {
+      return new ApiError(error.message, 0, 0, 'network');
+    }
+    if (typeof error === 'string' && error) {
+      return new ApiError(error, 0, 0, 'network');
+    }
+    return new ApiError('网络异常，请稍后重试', 0, 0, 'network');
   }
 
   private getWechatApi() {

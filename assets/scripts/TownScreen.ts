@@ -15,10 +15,11 @@ import {
   view,
 } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
+import { Theme, TITLE_SIGN } from './Theme';
 import { AudioEffect } from './AudioManager';
 import { getCatDefinition } from './GameContent';
 import { BuildCellResult, BuildingView, CELL_STAR_COST } from './TownContent';
-import { TownDailyClaimResult, TownDailySnapshot, TownDailyTaskId } from './PlayerTypes';
+import { ShareCardType, ShareOffer, TownDailyClaimResult, TownDailySnapshot, TownDailyTaskId } from './PlayerTypes';
 import { Toast } from './Toast';
 
 export interface TownScreenOptions {
@@ -37,6 +38,9 @@ export interface TownScreenOptions {
   getTownDaily: () => TownDailySnapshot;
   onClaimTownDaily: () => TownDailyClaimResult;
   onTownDailyAction?: (taskId: TownDailyTaskId, buildingId?: BuildingView['id']) => void;
+  /** 建筑/阶段完成时显示的好友分享入口；仅微信环境返回 offer。 */
+  getShareOffer?: (type: ShareCardType) => ShareOffer | null;
+  onShare?: (type: ShareCardType) => void;
   onStartGame?: () => void;
   onReturnHome: () => void;
 }
@@ -116,7 +120,7 @@ export class TownScreen {
       'town/town_bg',
       COMMON_UI_ASSETS.backButton,
       COMMON_UI_ASSETS.coinIcon,
-      'town/town_title',
+      TITLE_SIGN.path,
       'town/panel',
       'town/button_action',
       COMMON_UI_ASSETS.starIcon,
@@ -147,6 +151,7 @@ export class TownScreen {
       'town/fountain_stage_1',
       'town/fountain_stage_2',
       'town/fountain_stage_3',
+      'cats/cat_orange',
     ];
     this.assets.loadImagesFor(this, paths, () => {
       this.create();
@@ -228,11 +233,14 @@ export class TownScreen {
   private buildHeader(top: number) {
     const y = top - 120;
     this.buildBackButton(this.townUI!, -322, y);
-    this.image(this.townUI!, 'town/town_title', -90, y, 280, 96);
+    // 统一标题吊牌：偏左放（右缘 86），给星星/金币资源胶囊让位。
+    const sign = this.image(this.townUI!, TITLE_SIGN.path, -84, top - 106, TITLE_SIGN.width, TITLE_SIGN.height);
+    const signTitle = this.label(sign, '小镇建设', 0, TITLE_SIGN.titleOffsetY, TITLE_SIGN.titleFontSize, Theme.title);
+    signTitle.isBold = true;
 
     this.buildResourceChip(
       this.townUI!,
-      148,
+      180,
       y,
       156,
       COMMON_UI_ASSETS.starIcon,
@@ -251,34 +259,50 @@ export class TownScreen {
   }
 
   private buildDailyCard(top: number) {
+    // 整体下移：离顶部标题/资源胶囊更远，也给下方建筑展示区留出呼吸空间
     this.dailyCard = this.roundPanel(
       this.townUI!,
       0,
-      top - 228,
+      top - 283,
       660,
       124,
       26,
       new Color(255, 248, 226, 246),
       new Color(235, 205, 158),
     );
-    const icon = this.dailyCard;
-    const iconGraphics = icon.getComponent(Graphics);
+    // 下移后卡片与建筑展示热区有重叠：卡片自身吞掉触摸，防止点卡片空隙误触建筑对白
+    this.dailyCard.addComponent(BlockInputEvents);
+    const iconGraphics = this.dailyCard.getComponent(Graphics);
     if (iconGraphics) {
       iconGraphics.lineWidth = 4;
       iconGraphics.strokeColor = new Color(244, 185, 63);
     }
-    this.dailyTitle = this.label(this.dailyCard, '', -220, 34, 24, new Color(111, 62, 28));
+    // 左侧大橘立绘：每日问候的「猫在等你」视觉锚点，轻轻呼吸
+    const dailyCat = this.image(this.dailyCard, 'cats/cat_orange', -296, 2, 68, 68);
+    tween(dailyCat)
+      .repeatForever(
+        tween()
+          .to(1.2, { scale: new Vec3(1.05, 1.05, 1) }, { easing: 'sineInOut' })
+          .to(1.2, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
+    // 文案列统一「左锚点 + 左对齐」，从立绘右侧 16px 起，任何状态都不会压到猫身上
+    this.dailyTitle = this.label(this.dailyCard, '', -246, 36, 22, new Color(111, 62, 28));
     this.dailyTitle.isBold = true;
     this.dailyTitle.horizontalAlign = Label.HorizontalAlign.LEFT;
-    this.dailyDescription = this.label(this.dailyCard, '', -220, 3, 18, new Color(136, 94, 63));
+    this.dailyTitle.overflow = Label.Overflow.CLAMP;
+    this.anchorLeft(this.dailyTitle, 390, 28);
+    this.dailyDescription = this.label(this.dailyCard, '', -246, 8, 17, new Color(136, 94, 63));
     this.dailyDescription.horizontalAlign = Label.HorizontalAlign.LEFT;
-    this.dailyDescription.node.getComponent(UITransform)!.setContentSize(420, 36);
     this.dailyDescription.overflow = Label.Overflow.CLAMP;
-    this.dailyProgress = this.label(this.dailyCard, '', -220, -30, 17, new Color(157, 112, 74));
+    this.anchorLeft(this.dailyDescription, 400, 24);
+    this.dailyProgress = this.label(this.dailyCard, '', -246, -22, 16, new Color(157, 112, 74));
     this.dailyProgress.horizontalAlign = Label.HorizontalAlign.LEFT;
-    this.dailyReward = this.label(this.dailyCard, '', 80, -30, 17, new Color(191, 125, 27));
+    this.anchorLeft(this.dailyProgress, 250, 22);
+    this.dailyReward = this.label(this.dailyCard, '', 10, -22, 16, new Color(191, 125, 27));
     this.dailyReward.isBold = true;
     this.dailyReward.horizontalAlign = Label.HorizontalAlign.LEFT;
+    this.anchorLeft(this.dailyReward, 160, 22);
 
     this.dailyActionNode = this.roundPanel(
       this.dailyCard,
@@ -308,8 +332,8 @@ export class TownScreen {
     this.dailyTitle.string = snapshot.unlocked ? `今日小事 · ${snapshot.title}` : snapshot.title;
     this.dailyDescription.string = snapshot.description;
     this.dailyProgress.string = snapshot.unlocked
-      ? snapshot.claimed ? '今日已完成' : `${snapshot.progress}/${snapshot.target}`
-      : '建设后开放';
+      ? snapshot.claimed ? '今日已完成，明天再来' : snapshot.completed ? '小事办完啦，可以领奖' : '进行中，去完成它'
+      : '点亮流浪猫小屋第一格后开启';
     this.dailyReward.string = `奖励：${snapshot.rewardText}`;
     this.dailyActionLabel.string = snapshot.actionLabel;
     this.dailyActionButton.interactable = snapshot.unlocked && !snapshot.claimed;
@@ -332,6 +356,20 @@ export class TownScreen {
     this.dailyActionLabel.color = snapshot.claimed
       ? new Color(157, 145, 127)
       : new Color(112, 69, 40);
+    // 可以领奖时按钮里的文字轻轻呼吸（循环动画放内层节点，不和按钮按压缩放打架）
+    if (this.dailyActionLabel) {
+      Tween.stopAllByTarget(this.dailyActionLabel.node);
+      this.dailyActionLabel.node.setScale(new Vec3(1, 1, 1));
+      if (snapshot.canClaim) {
+        tween(this.dailyActionLabel.node)
+          .repeatForever(
+            tween()
+              .to(0.75, { scale: new Vec3(1.08, 1.08, 1) }, { easing: 'sineInOut' })
+              .to(0.75, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+          )
+          .start();
+      }
+    }
   }
 
   private handleDailyAction() {
@@ -1091,6 +1129,7 @@ export class TownScreen {
     const building = this.selected;
     if (!this.townUI) return;
     this.closeCelebration();
+    const shareOffer = this.options.getShareOffer?.('cat_unlock');
     const overlay = new Node('CatUnlockCelebration');
     this.townUI.addChild(overlay);
     this.celebrationNode = overlay;
@@ -1105,8 +1144,9 @@ export class TownScreen {
     backdropGraphics.fill();
     backdrop.addComponent(BlockInputEvents);
 
+    const panelHeight = shareOffer ? 700 : 620;
     const panel = this.roundPanel(
-      overlay, 0, 0, 580, 620, 34,
+      overlay, 0, 0, 580, panelHeight, 34,
       new Color(255, 248, 226), new Color(235, 205, 158),
     );
     panel.setScale(new Vec3(0.8, 0.8, 1));
@@ -1141,8 +1181,27 @@ export class TownScreen {
     const catLabel = this.label(panel, `「${catDefinition.name}」加入了你的小镇！`, 0, -158, 22, new Color(136, 94, 63));
     catLabel.isBold = true;
 
+    if (shareOffer) {
+      const shareNode = this.roundPanel(
+        panel, 0, -218, 440, 72, 36,
+        new Color(244, 131, 165), new Color(184, 74, 110),
+      );
+      const shareLabel = this.label(shareNode, shareOffer.label, 0, -1, 25, Color.WHITE);
+      shareLabel.isBold = true;
+      shareLabel.outlineWidth = 3;
+      shareLabel.outlineColor = new Color(150, 28, 62);
+      const shareButton = shareNode.addComponent(Button);
+      shareButton.transition = Button.Transition.SCALE;
+      shareButton.zoomScale = 0.93;
+      shareButton.node.on(Button.EventType.CLICK, () => {
+        this.options.onPlaySound('click');
+        this.options.onShare?.(shareOffer.type);
+      });
+    }
+
+    const actionY = shareOffer ? -304 : -232;
     const primary = this.roundPanel(
-      panel, -95, -232, 250, 76, 38,
+      panel, -95, actionY, 250, 76, 38,
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const primaryLabel = this.label(primary, '去装备', 0, -1, 27, new Color(111, 62, 28));
@@ -1157,7 +1216,7 @@ export class TownScreen {
     });
 
     const secondary = this.roundPanel(
-      panel, 125, -232, 190, 76, 38,
+      panel, 125, actionY, 190, 76, 38,
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const secondaryLabel = this.label(secondary, '留在这里', 0, -1, 24, new Color(135, 104, 76));
@@ -1299,6 +1358,14 @@ export class TownScreen {
       }
     }
     return node;
+  }
+
+  // 左锚点行：文本从节点 x 向右排，多状态切换时不会因居中锚点向两侧外溢
+  private anchorLeft(label: Label, width: number, height: number) {
+    const transform = label.node.getComponent(UITransform)!;
+    transform.anchorX = 0;
+    transform.anchorY = 0.5;
+    transform.setContentSize(width, height);
   }
 
   private label(parent: Node, text: string, x: number, y: number, size: number, color: Color) {

@@ -42,6 +42,7 @@ export class RankScreen {
   private selfStarsLabel: Label | null = null;
   private selfCaptionLabel: Label | null = null;
   private selfNameLabel: Label | null = null;
+  private retryButton: Node | null = null;
   private tabButtons: Array<{ id: LeaderboardTab; node: Node; label: Label }> = [];
   private currentTab: LeaderboardTab = 'level';
   private loadToken = 0;
@@ -98,6 +99,7 @@ export class RankScreen {
     this.selfStarsLabel = null;
     this.selfCaptionLabel = null;
     this.selfNameLabel = null;
+    this.retryButton = null;
     this.tabButtons = [];
   }
 
@@ -118,6 +120,7 @@ export class RankScreen {
     this.buildListView(top, bottom);
     this.buildSelfCard(bottom);
     this.buildEmptyState(top, bottom);
+    this.buildRetryButton(top);
     this.reloadList();
   }
 
@@ -225,6 +228,7 @@ export class RankScreen {
     const token = ++this.loadToken;
     // 重进页面或切换页签时先回到顶部，避免拉取期间停留在上次的滚动位置
     this.scrollView.scrollToTop(0, false);
+    if (this.retryButton) this.retryButton.active = false;
     this.mockCaption!.string = '正在拉取排行榜...';
     this.mockCaption!.node.active = true;
     this.options.fetchEntries(this.currentTab).then(data => {
@@ -237,9 +241,36 @@ export class RankScreen {
       this.listContent!.destroyAllChildren();
       this.emptyState!.active = false;
       this.listContent!.parent!.active = false;
-      this.mockCaption!.string = '排行榜暂时连不上，请稍后重试';
+      this.mockCaption!.string = '网络暂不可用，请稍后重试';
       this.mockCaption!.node.active = true;
+      if (this.retryButton) this.retryButton.active = true;
     });
+  }
+
+  // 拉取失败（含排行榜入口生成身份失败）时提供显式重试入口（需求 A-3）
+  private buildRetryButton(top: number) {
+    const node = new Node('RankRetryButton');
+    this.rankUI!.addChild(node);
+    node.setPosition(0, top - 390);
+    node.addComponent(UITransform).setContentSize(200, 72);
+    const graphics = node.addComponent(Graphics);
+    graphics.fillColor = new Color(255, 224, 108);
+    graphics.strokeColor = new Color(221, 158, 28);
+    graphics.lineWidth = 3;
+    graphics.roundRect(-100, -36, 200, 72, 36);
+    graphics.fill();
+    graphics.stroke();
+    const label = this.label(node, '点击重试', 0, 0, 24, new Color(112, 69, 40));
+    label.isBold = true;
+    const button = node.addComponent(Button);
+    button.transition = Button.Transition.SCALE;
+    button.zoomScale = 0.93;
+    node.active = false;
+    button.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      this.reloadList();
+    });
+    this.retryButton = node;
   }
 
   private renderList(data: LeaderboardData) {

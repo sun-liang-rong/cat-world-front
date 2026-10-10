@@ -1,7 +1,17 @@
-import { ApiClient, RankBoardType, RankEntry, SubmitRankPayload } from './ApiClient';
+import { ApiClient, ApiError, RankBoardType, RankEntry, SubmitRankPayload } from './ApiClient';
+import { getAnalyticsPlatform } from './Analytics';
+import { ShareCardType } from './PlayerTypes';
 
 export type LeaderboardSource = 'server' | 'empty';
 export type LeaderboardTab = 'level' | 'endless' | 'challenge';
+
+export interface ShareCard {
+  type: ShareCardType;
+  title: string;
+  query?: string;
+}
+
+export type ShareResult = 'success' | 'cancelled' | 'failed' | 'unsupported';
 
 export interface LeaderboardEntry {
   id: string;
@@ -32,7 +42,12 @@ const AVATAR_PATHS = [
 ];
 
 interface WechatApi {
-  shareAppMessage?: (options: { title: string }) => void;
+  shareAppMessage?: (options: {
+    title: string;
+    query?: string;
+    success?: () => void;
+    fail?: (error?: unknown) => void;
+  }) => void;
 }
 
 export class LeaderboardService {
@@ -48,7 +63,8 @@ export class LeaderboardService {
 
   fetchBoard(tab: LeaderboardTab, userId: string, date?: string): Promise<LeaderboardData> {
     if (!userId) {
-      return Promise.resolve({ source: 'empty', tab, entries: [] });
+      // 身份缺失必须以错误呈现，绝不能渲染成「还没有人上榜」（需求 A-3）。
+      return Promise.reject(new ApiError('玩家身份尚未就绪'));
     }
     return this.api.listRank(this.tabType(tab), userId, date).then(entries => ({
       source: 'server' as const,
@@ -86,9 +102,40 @@ export class LeaderboardService {
 
   invite(): boolean {
     const wxApi = this.getWechatApi();
-    if (!wxApi?.shareAppMessage) return false;
+    if (!wxApi?.shareAppMessage || getAnalyticsPlatform() !== 'wechat') return false;
     wxApi.shareAppMessage({ title: INVITE_TITLE });
     return true;
+  }
+
+  canShare() {
+    return getAnalyticsPlatform() === 'wechat' && !!this.getWechatApi()?.shareAppMessage;
+  }
+
+  share(card: ShareCard): Promise<ShareResult> {
+    const wxApi = this.getWechatApi();
+    const shareAppMessage = wxApi?.shareAppMessage;
+    if (getAnalyticsPlatform() !== 'wechat' || !shareAppMessage) {
+      return Promise.resolve('unsupported');
+    }
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = (result: ShareResult) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      try {
+        shareAppMessage({
+          title: card.title,
+          query: card.query,
+          success: () => finish('success'),
+          fail: () => finish('cancelled'),
+        });
+      } catch (error) {
+        console.error('[CatWorld] Failed to share card', error);
+        finish('failed');
+      }
+    });
   }
 
   private submit(payload: SubmitRankPayload) {

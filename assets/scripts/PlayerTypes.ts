@@ -10,6 +10,9 @@ export type CatInteraction = 'pet' | 'feed' | 'play';
 
 export type TownDailyTaskId = 'pet_cat' | 'complete_level' | 'light_cell' | 'enter_building' | 'view_dialogue';
 
+export type ShareCardType = 'level_win' | 'town_stage' | 'cat_unlock' | 'challenge_record'
+  | 'endless_record' | 'journey_complete' | 'campaign_complete' | 'tool_request';
+
 export type ActivityTaskId = 'complete_levels' | 'make_matches' | 'interact_cats';
 
 export type ActivityRewardId = 'activity_reward_100' | 'activity_reward_300' | 'activity_reward_500'
@@ -46,6 +49,26 @@ export interface CatJourneyClaimResult {
   message: string;
   rewardText?: string;
   completed?: boolean;
+}
+
+export interface ShareDailyState {
+  /** 当前上海时区自然日。 */
+  dateKey: string;
+  /** 当天是否已经因为成功分享领取过奖励。 */
+  rewardClaimed: boolean;
+  /** 最近一次成功分享的场景，仅用于幂等与埋点上下文。 */
+  lastCardType: ShareCardType | '';
+}
+
+export interface ShareRewardResult {
+  ok: boolean;
+  message: string;
+  rewardText?: string;
+}
+
+export interface ShareOffer {
+  type: ShareCardType;
+  label: string;
 }
 
 export interface TownDailyState {
@@ -90,6 +113,13 @@ export interface CatTrialState {
   offerShown: boolean;
   /** 是否至少真正开始过一局试住。 */
   started: boolean;
+}
+
+/** 试住状态的只读快照：猫咪社 / 详情页 / 对局浮窗用它区分「试住」与「未解锁」。 */
+export interface CatTrialStatus {
+  active: boolean;
+  catId: CatId;
+  remainingGames: number;
 }
 
 export interface CatMilestoneSnapshot {
@@ -197,7 +227,7 @@ export interface GamePetPosition {
 }
 
 export interface PlayerState {
-  version: 5;
+  version: 6;
   /** 后端生成的展示昵称，加载页拿到后写入本地 */
   userName: string;
   /** 后端生成的用户 ID，排行榜上报和查询都用它 */
@@ -218,6 +248,8 @@ export interface PlayerState {
   catJourney: CatJourneyState;
   /** 点亮流浪猫小屋第一格后开放的每日小事。 */
   townDaily: TownDailyState;
+  /** 微信好友分享每日奖励状态；H5/预览不会发放奖励。 */
+  shareDaily: ShareDailyState;
   /** 仅记录非数值的收藏徽章，不参与经济计算。 */
   unlockedBadges: string[];
   /** 每只猫咪已触发过的升级里程碑等级。 */
@@ -253,6 +285,12 @@ export interface PlayerState {
    * 只弹一次；与第 1 关棋盘教学相互独立。
    */
   collectGoalHintDone: boolean;
+  /** 「超萌挑战解锁」一次性提示是否已展示（旧档首次启动补弹一次作功能公告）。 */
+  challengeUnlockSeen: boolean;
+  /** 各道具最后一次通过分享好友补领的日期；同一天同一道具只补 1 个。 */
+  toolShareDates: Record<ItemId, string>;
+  /** 最后一次通过分享好友领取首页金币的日期；每天 1 次。 */
+  coinShareDate: string;
 }
 
 export interface PlayerExperienceInfo {

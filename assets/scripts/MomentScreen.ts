@@ -16,6 +16,7 @@ import {
   view,
 } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
+import { Theme } from './Theme';
 import { MomentCategory, MomentSnapshot, MOMENT_DEFINITIONS } from './MomentContent';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
@@ -82,9 +83,10 @@ const MOMENT_ASSETS = [
 ];
 
 const COLORS = {
-  title: new Color(111, 62, 28),
-  body: new Color(112, 69, 40),
+  ...Theme,
+  // 本页辅助文字、照片墙专属色
   muted: new Color(140, 116, 88),
+  outline: Theme.outlineBrown,
   barTextLocked: new Color(255, 250, 235),
   ring: new Color(226, 188, 96),
   shelf: new Color(219, 172, 112),
@@ -92,8 +94,6 @@ const COLORS = {
   trackEmpty: new Color(240, 221, 186),
   trackFill: new Color(190, 154, 90),
   photoBacking: new Color(255, 243, 210),
-  outline: new Color(90, 61, 38),
-  shadow: new Color(92, 54, 22, 80),
 };
 
 const CATEGORY_NAMES: Record<Exclude<MomentCategory, 'all'>, string> = {

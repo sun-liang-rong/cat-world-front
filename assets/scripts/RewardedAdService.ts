@@ -34,21 +34,13 @@ export class RewardedAdService {
   private listenersBound = false;
   private pending: ((result: RewardedAdResult) => void) | null = null;
 
-  constructor(private readonly adUnitId = TAP_REWARDED_AD_UNIT_ID) {
-    console.log('[CatWorld] 激励广告初始化', {
-      enabled: REWARDED_AD_ENABLED,
-      platform: getAnalyticsPlatform(),
-      adUnitId: this.adUnitId,
-      hasTap: !!getTapApi(),
-    });
-  }
+  constructor(private readonly adUnitId = TAP_REWARDED_AD_UNIT_ID) {}
 
   watch(): Promise<RewardedAdResult> {
     const platform = getAnalyticsPlatform();
     const tapApi = getTapApi();
     if (!tapApi) {
       if (platform === 'preview') {
-        console.log('[CatWorld] 激励广告预览模拟完成');
         return Promise.resolve({ completed: true, simulated: true });
       }
       console.error('[CatWorld] TapTap 广告 SDK 不可用');
@@ -93,9 +85,7 @@ export class RewardedAdService {
   private bindListeners(ad: TapRewardedVideoAd) {
     if (this.listenersBound) return;
     this.listenersBound = true;
-    ad.onLoad(() => {
-      console.log('[CatWorld] 激励视频广告加载成功');
-    });
+    ad.onLoad(() => {});
     ad.onError(error => {
       console.error('[CatWorld] Rewarded ad failed', error);
       this.finish(false);

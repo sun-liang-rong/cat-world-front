@@ -166,6 +166,56 @@ function testTownDailyLife() {
   }
 }
 
+function testShareDailyReward() {
+  const key = 'player-store-share-daily';
+  const store = new PlayerStore(key);
+  store.load();
+  assert(store.getState().version === 6, 'new saves should use player state version 6');
+  assert(!store.getShareDailyState().rewardClaimed, 'share reward should be available on a new day');
+
+  const beforeCoins = store.getCoins();
+  const first = store.claimShareReward('level_win');
+  assert(first.ok && store.getCoins() === beforeCoins + 30, 'first successful share should grant 30 coins');
+  assert(store.getShareDailyState().rewardClaimed, 'share reward should be marked claimed after success');
+  assert(store.getShareDailyState().lastCardType === 'level_win', 'last share card type should be persisted');
+
+  const duplicate = store.claimShareReward('town_stage');
+  assert(!duplicate.ok && store.getCoins() === beforeCoins + 30, 'second share reward on the same day should be rejected');
+
+  const reloaded = new PlayerStore(key);
+  reloaded.load();
+  assert(reloaded.getShareDailyState().rewardClaimed, 'share reward claim should survive reload');
+  assert(reloaded.getShareDailyState().lastCardType === 'level_win', 'share card type should survive reload');
+
+  const legacyKey = 'player-store-share-daily-legacy';
+  sys.localStorage.setItem(legacyKey, JSON.stringify({ version: 5, coins: 123, level: 4 }));
+  const legacy = new PlayerStore(legacyKey);
+  legacy.load();
+  assert(legacy.getState().version === 6, 'legacy saves should be upgraded to version 6');
+  assert(!legacy.getShareDailyState().rewardClaimed, 'legacy saves without share state should get a fresh share day');
+
+  const invalidCardKey = 'player-store-share-daily-invalid-card';
+  sys.localStorage.setItem(invalidCardKey, JSON.stringify({
+    version: 6,
+    shareDaily: {
+      dateKey: legacy.getShareDailyState().dateKey,
+      rewardClaimed: true,
+      lastCardType: 'not-a-card',
+    },
+  }));
+  const invalidCard = new PlayerStore(invalidCardKey);
+  invalidCard.load();
+  assert(invalidCard.getShareDailyState().rewardClaimed, 'valid share claim flag should be normalized');
+  assert(invalidCard.getShareDailyState().lastCardType === '', 'invalid share card type should be cleared');
+
+  const invalidVersionKey = 'player-store-share-daily-invalid-version';
+  sys.localStorage.setItem(invalidVersionKey, JSON.stringify({ version: 999, coins: 999 }));
+  const invalidVersion = new PlayerStore(invalidVersionKey);
+  invalidVersion.load();
+  assert(invalidVersion.getState().version === 6, 'invalid save versions should reset to current defaults');
+  assert(invalidVersion.getCoins() === 100, 'invalid save versions should reset economy defaults');
+}
+
 function testCatInteractionsAndChallengeReward() {
   const store = new PlayerStore('player-store-cats');
   store.load();
@@ -400,6 +450,7 @@ testDefaultsAndRewards();
 testBuildingAndCatUnlock();
 testBuildTargetsAndGuideFlag();
 testTownDailyLife();
+testShareDailyReward();
 testBoardTutorialFlag();
 testCollectGoalHintFlag();
 testLateThemesDoNotAddBuildings();
@@ -413,4 +464,4 @@ testEndlessProgress();
 testAdFunnelAndRunFields();
 testSaveNormalization();
 testLegacyBuildingSave();
-  process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, collect hint, late themes, collect schedule, shop, daily tasks, cats, cat trial, challenge gate/marker, cat milestones, endless, ad funnel, town daily, normalization, legacy building save.\n');
+  process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, collect hint, late themes, collect schedule, shop, daily tasks, cats, cat trial, challenge gate/marker, cat milestones, endless, ad funnel, town daily, share daily, normalization, legacy building save.\n');

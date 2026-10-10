@@ -29,9 +29,13 @@ import {
   CatJourneySnapshot,
   CatJourneyState,
   CatTrialState,
+  CatTrialStatus,
   CatMilestoneSnapshot,
   CatUpgradeResult,
   CatSkillFireResult,
+  ShareCardType,
+  ShareDailyState,
+  ShareRewardResult,
   CatInteraction,
   TownDailyClaimResult,
   TownDailySnapshot,
@@ -156,7 +160,7 @@ function levelFromTotalExp(total: number) {
   return level;
 }
 
-// 存档反序列化用的宽松形状：version 允许 1/2/3（旧档读入后迁移补新字段）
+// 存档反序列化用的宽松形状：version 允许 1~6（旧档读入后迁移补新字段）
 type SavedPlayerState = Omit<Partial<PlayerState>, 'version'> & { version?: number };
 
 export class PlayerStore {
@@ -175,10 +179,10 @@ export class PlayerStore {
       const serialized = sys.localStorage.getItem(this.storageKey);
       if (serialized) {
         const parsed = JSON.parse(serialized) as SavedPlayerState | null;
-        if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5)) {
+        if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5 && parsed.version !== 6)) {
           console.error('[CatWorld] Invalid player save, reset to defaults');
         } else {
-          // v1/v2 旧档走同一套逐字段校验，新增字段保持默认值，写回时升级为 v5
+          // v1~v5 旧档走同一套逐字段校验，新增字段保持默认值，写回时升级为 v6
           this.state = this.normalize(parsed);
         }
       }
@@ -315,6 +319,32 @@ export class PlayerStore {
   getCatTrial(): CatTrialState {
     this.resetDailyState();
     return this.clone(this.state.catTrial);
+  }
+
+  // 试住快照：猫咪社/详情页用它把大橘显示为「试住中」而不是未解锁灰态
+  getCatTrialStatus(): CatTrialStatus | null {
+    this.resetDailyState();
+    if (!this.isCatTrialActive()) return null;
+    return {
+      active: true,
+      catId: this.state.catTrial.catId,
+      remainingGames: this.state.catTrial.remainingGames,
+    };
+  }
+
+  // —— 超萌挑战解锁提示 ——
+  // 通关第 5 关后回首页展示一次；旧档（已过第 5 关）首次启动也补弹一次作功能公告。
+  shouldShowChallengeUnlockNotice() {
+    return this.isChallengeUnlocked() && !this.state.challengeUnlockSeen;
+  }
+
+  markChallengeUnlockNoticeShown() {
+    if (this.state.challengeUnlockSeen) return;
+    this.state.challengeUnlockSeen = true;
+    this.save();
+    this.analytics?.track('challenge_unlock_show', {
+      current_level: this.state.level,
+    });
   }
 
   isCatTrialActive() {
@@ -527,6 +557,14 @@ export class PlayerStore {
       stage_completed: stageJustCompleted,
       building_completed: buildingCompleted,
     });
+    // 大节点完成（装饰完成=建成）单独成事件，方便看板算「建筑阶段完成率」
+    if (stageJustCompleted) {
+      this.analytics?.track('town_stage_complete', {
+        building_id: id,
+        stage: stage + 1,
+        building_completed: buildingCompleted,
+      });
+    }
     const stageName = definition.stageNames[stage] ?? '';
     return {
       ok: true,
@@ -657,6 +695,24 @@ export class PlayerStore {
     this.save();
   }
 
+  getShareDailyState(): ShareDailyState {
+    this.resetDailyState();
+    return this.clone(this.state.shareDaily);
+  }
+
+  claimShareReward(cardType: ShareCardType): ShareRewardResult {
+    this.resetDailyState(false);
+    if (this.state.shareDaily.rewardClaimed) {
+      return { ok: false, message: '今天的分享奖励已经领取过啦' };
+    }
+    this.state.shareDaily.rewardClaimed = true;
+    this.state.shareDaily.lastCardType = cardType;
+    this.applyReward({ coins: 30 });
+    this.save();
+    this.analytics?.track('share_reward_claim', { card_type: cardType, reward: '金币 ×30' });
+    return { ok: true, message: '分享成功，金币 +30', rewardText: '金币 ×30' };
+  }
+
   getTownDailySnapshot(): TownDailySnapshot {
     this.syncTownDailyState(true);
     if (!this.hasStartedCatHouse()) {
@@ -664,7 +720,7 @@ export class PlayerStore {
         unlocked: false,
         taskId: null,
         title: '小镇每日生活',
-        description: '点亮流浪猫小屋第一格后，每天都会有一件小事等你回来。',
+        description: '每天都会有一件小事等你回来。',
         actionLabel: '建设后开启',
         progress: 0,
         target: 1,
@@ -718,6 +774,7 @@ export class PlayerStore {
 
   markTownDialogueViewed(id: BuildingId) {
     if (!this.isBuildingUnlocked(id)) return false;
+    this.analytics?.track('town_cat_dialogue_show', { building_id: id });
     return this.completeTownDailyTask('view_dialogue');
   }
 
@@ -1085,6 +1142,41 @@ export class PlayerStore {
     return true;
   }
 
+  // —— 空道具分享补领：道具用完时点格子拉起分享好友，成功后补 1 个；
+  // 微信分享回调较宽松，按「每种道具每天 1 个」限领，防止刷道具。 ——
+  canClaimToolByShare(id: ItemId) {
+    this.resetDailyState(false);
+    return this.state.toolShareDates[id] !== this.todayKey();
+  }
+
+  claimToolByShare(id: ItemId): { ok: boolean; message: string } {
+    this.resetDailyState(false);
+    if (this.state.toolShareDates[id] === this.todayKey()) {
+      return { ok: false, message: '今天已经分享领取过这个道具啦，明天再来' };
+    }
+    if (this.state.inventory[id] === undefined) {
+      return { ok: false, message: '道具类型异常' };
+    }
+    this.state.toolShareDates[id] = this.todayKey();
+    this.state.inventory[id] += 1;
+    this.save();
+    this.analytics?.track('tool_share_claim', { item_id: id });
+    return { ok: true, message: '分享成功，道具已放进背包' };
+  }
+
+  // —— 首页金币分享：原「观看广告领 888 金币」改为分享好友，每天 1 次 ——
+  canClaimCoinByShare() {
+    this.resetDailyState(false);
+    return this.state.coinShareDate !== this.todayKey();
+  }
+
+  markCoinShareClaimed() {
+    this.resetDailyState(false);
+    if (this.state.coinShareDate === this.todayKey()) return;
+    this.state.coinShareDate = this.todayKey();
+    this.save();
+  }
+
   claimTask(id: DailyTaskId) {
     this.resetDailyState(false);
     const definition = DAILY_TASK_DEFINITIONS.find(item => item.id === id);
@@ -1164,6 +1256,7 @@ export class PlayerStore {
     this.recordActivityInteraction();
     if (interaction === 'pet') this.completeTownDailyTask('pet_cat');
     this.save();
+    this.analytics?.track('cat_interact', { cat_id: id, interaction });
     const catName = getCatDefinition(id).name;
     const message = interaction === 'pet'
       ? cat.level >= 8
@@ -1192,6 +1285,12 @@ export class PlayerStore {
       }
     });
     this.save();
+    this.analytics?.track('cat_upgrade', {
+      cat_id: id,
+      level: cat.level,
+      cost,
+      milestone_unlocked: milestones.length > 0,
+    });
     if (milestones.length > 0) {
       this.analytics?.track('cat_milestone_unlock', {
         cat_id: id,
@@ -1219,6 +1318,10 @@ export class PlayerStore {
     }
     if (!this.state.shop || this.state.shop.dateKey !== today) {
       this.state.shop = this.createShopDailyState(today);
+      changed = true;
+    }
+    if (!this.state.shareDaily || this.state.shareDaily.dateKey !== today) {
+      this.state.shareDaily = this.createShareDailyState();
       changed = true;
     }
     changed = this.resetCatInteractionState(today) || changed;
@@ -1285,7 +1388,7 @@ export class PlayerStore {
       };
     });
     return {
-      version: 5,
+      version: 6,
       userName: '',
       userId: '',
       coins: 100,
@@ -1306,6 +1409,7 @@ export class PlayerStore {
       buildings: this.createBuildingStates(),
       daily: this.createDailyState(this.todayKey()),
       townDaily: this.createTownDailyState(),
+      shareDaily: this.createShareDailyState(),
       shop: this.createShopDailyState(this.todayKey()),
       activity: createActivityState(getCurrentActivity(), this.todayKey()),
       recentRuns: [],
@@ -1314,6 +1418,9 @@ export class PlayerStore {
       firstTownGuideDone: false,
       boardTutorialDone: false,
       collectGoalHintDone: false,
+      challengeUnlockSeen: false,
+      toolShareDates: { hammer: '', glove: '', dice: '', extra_slot: '' },
+      coinShareDate: '',
     };
   }
 
@@ -1441,6 +1548,14 @@ export class PlayerStore {
     });
   }
 
+  private createShareDailyState(): ShareDailyState {
+    return {
+      dateKey: this.todayKey(),
+      rewardClaimed: false,
+      lastCardType: '',
+    };
+  }
+
   private createTownDailyState(): TownDailyState {
     return {
       dateKey: '',
@@ -1518,7 +1633,7 @@ export class PlayerStore {
 
   private normalize(value: SavedPlayerState): PlayerState {
     const state = this.createDefaultState();
-    if (!value || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5)) return state;
+    if (!value || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5 && value.version !== 6)) return state;
     state.userName = typeof value.userName === 'string' ? value.userName.trim() : '';
     state.userId = typeof value.userId === 'string' ? value.userId.trim() : '';
     state.coins = this.nonNegativeInteger(value.coins, state.coins);
@@ -1673,6 +1788,22 @@ export class PlayerStore {
         claimed: savedTownDaily.claimed === true,
       };
     }
+    const savedShareDaily = value.shareDaily;
+    if (savedShareDaily && typeof savedShareDaily === 'object' && savedShareDaily.dateKey === this.todayKey()) {
+      state.shareDaily = {
+        dateKey: savedShareDaily.dateKey,
+        rewardClaimed: savedShareDaily.rewardClaimed === true,
+        lastCardType: savedShareDaily.lastCardType === 'level_win'
+          || savedShareDaily.lastCardType === 'town_stage'
+          || savedShareDaily.lastCardType === 'cat_unlock'
+          || savedShareDaily.lastCardType === 'challenge_record'
+          || savedShareDaily.lastCardType === 'endless_record'
+          || savedShareDaily.lastCardType === 'journey_complete'
+          || savedShareDaily.lastCardType === 'campaign_complete'
+          ? savedShareDaily.lastCardType
+          : '',
+      };
+    }
     if (value.daily?.dateKey && value.daily.dateKey === this.todayKey()) {
       (Object.keys(state.daily.tasks) as DailyTaskId[]).forEach(id => {
         const savedTask = value.daily?.tasks?.[id];
@@ -1742,6 +1873,13 @@ export class PlayerStore {
     state.firstTownGuideDone = value.firstTownGuideDone === true;
     state.boardTutorialDone = value.boardTutorialDone === true;
     state.collectGoalHintDone = value.collectGoalHintDone === true;
+    state.challengeUnlockSeen = value.challengeUnlockSeen === true;
+    (Object.keys(state.toolShareDates) as ItemId[]).forEach(id => {
+      state.toolShareDates[id] = typeof value.toolShareDates?.[id] === 'string'
+        ? value.toolShareDates[id]
+        : '';
+    });
+    state.coinShareDate = typeof value.coinShareDate === 'string' ? value.coinShareDate : '';
     return state;
   }
 

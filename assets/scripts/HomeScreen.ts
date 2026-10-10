@@ -4,9 +4,8 @@ import { ActivitySnapshot } from './ActivityContent';
 import { AssetStore, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { SettingsPopup } from './SettingsPopup';
-import { PlayerExperienceInfo } from './PlayerTypes';
+import { PlayerExperienceInfo, CatTrialStatus } from './PlayerTypes';
 import { Toast } from './Toast';
-import { RewardedAdResult } from './RewardedAdService';
 
 type SettingsFrameKey =
   | 'popupPanel' | 'btnClose' | 'rowCard'
@@ -98,6 +97,11 @@ export interface HomeScreenOptions {
   shouldShowCatTrialOffer?: () => boolean;
   onCatTrialOfferShown?: () => void;
   onStartCatTrial?: () => void;
+  /** 试住快照：首页猫咪群上方的「试住中 · 剩余 X/3 局」气泡数据源 */
+  getCatTrialStatus?: () => CatTrialStatus | null;
+  /** 通关第 5 关后的一次性「超萌挑战解锁」提示（回首页时展示） */
+  shouldShowChallengeUnlockNotice?: () => boolean;
+  onChallengeUnlockNoticeShown?: () => void;
   onOpenTown: () => void;
   shouldShowTownBuildHint: () => boolean;
   /** 第 1 关一次性引导：过关且从未点亮过建设格子时，首页弹引导蒙层 */
@@ -116,7 +120,10 @@ export interface HomeScreenOptions {
   getDailyTaskBadgeCount: () => number;
   getChapterInfo: () => HomeChapterInfo;
   getPlayerName: () => string;
-  onWatchAd?: (scene?: 'revive' | 'double_coins' | 'home_coins' | 'shop_item') => Promise<RewardedAdResult>;
+  /** 首页金币弹窗：分享好友换 888 金币（Main 处理平台可用性与每日限领） */
+  onShareForCoins?: () => Promise<boolean>;
+  /** 今天是否还能通过分享领取金币（弹窗内据此切换按钮/文案） */
+  canShareForCoins?: () => boolean;
   onAddCoins?: (amount: number) => void;
   onTrack?: (name: TrackEventName, props?: TrackProps) => void;
 }
@@ -138,6 +145,13 @@ export class HomeScreen {
   private challengeLockLabel: Label | null = null;
   private catTrialUI: Node | null = null;
   private catTrialLoading = false;
+  private catTrialPill: Node | null = null;
+  private catTrialPillLabel: Label | null = null;
+  private challengeUnlockUI: Node | null = null;
+  private challengeUnlockLoading = false;
+  private challengeLockUI: Node | null = null;
+  private challengeLockIcon: Node | null = null;
+  private challengeTagGraphics: Graphics | null = null;
   private endlessLabel: Label | null = null;
   private homeChapterTitleLabel: Label | null = null;
   private moreBadge: Node | null = null;
@@ -152,6 +166,10 @@ export class HomeScreen {
   private selectedNavIndex = -1;
   private guideLoading = false;
   private coinAdPopup: Node | null = null;
+  private coinAdButton: Button | null = null;
+  private coinAdButtonLabel: Label | null = null;
+  private coinAdHintLabel: Label | null = null;
+  private coinShareBadge: Node | null = null;
   private adRewardBusy = false;
 
   constructor(
@@ -173,8 +191,8 @@ export class HomeScreen {
     this.assets.loadImages([
       ...buildGuideImagePaths(),
       ...buildSettingsImagePaths(),
-      // 金币广告弹窗的按钮底图（复用商店素材），否则没进过商店的用户点开是无底图按钮
-      'shop/button_ad',
+      // 金币弹窗的分享按钮底图（复用结算弹窗的绿色胶囊），否则没进过商店/结算的用户点开是无底图按钮
+      'popup/btn_green',
     ], () => {
       if (this.homeUI && !this.guideUI) this.buildGuide();
       onReady?.();
@@ -190,7 +208,11 @@ export class HomeScreen {
     }
     if (!active && this.guideUI) this.guideUI.active = false;
     if (!active && this.moreUI) this.moreUI.active = false;
-    if (!active) this.closeCatTrialOffer();
+    if (!active) {
+      this.closeCatTrialOffer();
+      this.closeChallengeUnlockNotice();
+      this.closeChallengeLockPanel();
+    }
     if (active) {
       if (this.homeUI.parent) {
         this.homeUI.setSiblingIndex(this.homeUI.parent.children.length - 1);
@@ -204,10 +226,13 @@ export class HomeScreen {
       this.refreshMoreEntries();
       this.refreshTownHintBubble();
       this.refreshCatEquipHintBubble();
+      this.refreshCatTrialPill();
+      this.refreshCoinShareBadge();
       this.maybeShowFirstTownGuide();
       this.maybeShowCatTrialOffer();
+      this.maybeShowChallengeUnlockNotice();
     } else {
-      this.closeFirstTownGuide();
+      this.closeFirstTownGuide(false);
     }
   }
 
@@ -227,8 +252,20 @@ export class HomeScreen {
     this.challengeRewardCoin = null;
     this.challengeEntry = null;
     this.challengeLockLabel = null;
+    this.coinAdPopup = null;
+    this.coinAdButton = null;
+    this.coinAdButtonLabel = null;
+    this.coinAdHintLabel = null;
+    this.coinShareBadge = null;
     this.catTrialUI = null;
     this.catTrialLoading = false;
+    this.catTrialPill = null;
+    this.catTrialPillLabel = null;
+    this.challengeUnlockUI = null;
+    this.challengeUnlockLoading = false;
+    this.challengeLockUI = null;
+    this.challengeLockIcon = null;
+    this.challengeTagGraphics = null;
     this.endlessLabel = null;
     this.homeChapterTitleLabel = null;
     this.moreBadge = null;
@@ -468,6 +505,9 @@ export class HomeScreen {
 
     this.image(holder, 'home/home_cats_group', 0, 0, catWidth, catHeight);
     this.addTapFeedback(holder, this.options.onOpenCatCollection, 0.98);
+    // 试住期间猫咪群下方挂「试住中」状态气泡；非试住对局自动隐藏
+    this.buildCatTrialPill(holder, -catHeight / 2 - 34);
+    this.refreshCatTrialPill();
 
     holder.setScale(new Vec3(0, 0, 1));
     const opacity = holder.addComponent(UIOpacity);
@@ -600,17 +640,18 @@ export class HomeScreen {
     backdrop.addComponent(BlockInputEvents);
 
     this.roundedShape(
-      overlay, 'CatTrialOfferShadow', 0, -22, 560, 420, 34,
+      overlay, 'CatTrialOfferShadow', 0, -28, 560, 460, 34,
       new Color(69, 48, 29, 88), new Color(69, 48, 29, 0), 0,
     );
     const panel = this.creamPanel(
-      overlay, 0, -12, 540, 408, 32,
+      overlay, 0, -18, 540, 456, 32,
       new Color(255, 248, 226), new Color(235, 205, 158),
     );
     panel.setScale(new Vec3(0.76, 0.76, 1));
     tween(panel).to(0.28, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' }).start();
 
-    const mascot = this.image(panel, 'cats/cat_orange', 0, 178, 126, 126);
+    // 吉祥物溢出面板顶边，与玩法介绍/建设引导同一套「探头」视觉
+    const mascot = this.image(panel, 'cats/cat_orange', 0, 196, 126, 126);
     tween(mascot)
       .repeatForever(
         tween()
@@ -618,42 +659,283 @@ export class HomeScreen {
           .to(1, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
       )
       .start();
-    const title = this.label(panel, '大橘来陪你闯关！', 0, 94, 30, new Color(111, 62, 28));
+
+    const title = this.label(panel, '大橘想陪你冒险 3 局！', 0, 110, 29, new Color(111, 62, 28));
     title.isBold = true;
-    const body = this.label(
-      panel,
-      '先试住 3 局，每局都有一次大橘技能。\n建好流浪猫小屋后，大橘就会正式入住！',
-      0,
-      28,
-      21,
-      new Color(112, 69, 40),
-    );
-    body.enableWrapText = true;
-    body.node.getComponent(UITransform)!.setContentSize(450, 72);
+
+    // 三条试住权益行：序号徽章 + 文案，替代原来的两行小字
+    const perks = [
+      { text: '每局可发动 1 次大橘专属技能' },
+      { text: '开局自动充满技能能量' },
+      { text: '建好流浪猫小屋，大橘正式留下' },
+    ];
+    perks.forEach((perk, index) => {
+      const row = this.creamPanel(
+        panel, 0, 52 - index * 54, 480, 46, 16,
+        new Color(255, 252, 241), new Color(235, 215, 180, 220),
+      );
+      const badge = new Node('PerkBadge');
+      row.addChild(badge);
+      badge.setPosition(-212, 0);
+      badge.addComponent(UITransform).setContentSize(26, 26);
+      const badgeGraphics = badge.addComponent(Graphics);
+      badgeGraphics.fillColor = new Color(255, 224, 108);
+      badgeGraphics.strokeColor = new Color(184, 119, 36);
+      badgeGraphics.lineWidth = 2;
+      badgeGraphics.circle(0, 0, 13);
+      badgeGraphics.fill();
+      badgeGraphics.stroke();
+      const num = this.label(badge, `${index + 1}`, 0, -1, 15, new Color(111, 62, 28));
+      num.isBold = true;
+      const perkLabel = this.label(row, perk.text, -190, 0, 19, new Color(112, 69, 40));
+      perkLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+      perkLabel.verticalAlign = Label.VerticalAlign.CENTER;
+      const perkTransform = perkLabel.node.getComponent(UITransform)!;
+      perkTransform.anchorX = 0;
+      perkTransform.anchorY = 0.5;
+      perkTransform.setContentSize(380, 26);
+    });
 
     const startButton = this.creamPanel(
-      panel, -112, -112, 196, 88, 44,
+      panel, -112, -148, 196, 88, 44,
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
-    const startLabel = this.label(startButton, '现在试住', 0, -1, 25, new Color(111, 62, 28));
+    const startLabel = this.label(startButton, '立即试住', 0, -1, 25, new Color(111, 62, 28));
     startLabel.isBold = true;
     this.addTapFeedback(startButton, () => {
+      this.options.onTrack?.('cat_trial_offer_click', { accepted: true });
       this.closeCatTrialOffer();
       this.options.onStartCatTrial?.();
     });
 
     const laterButton = this.creamPanel(
-      panel, 112, -112, 196, 88, 44,
+      panel, 112, -148, 196, 88, 44,
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
-    const laterLabel = this.label(laterButton, '以后再说', 0, -1, 23, new Color(135, 104, 76));
+    const laterLabel = this.label(laterButton, '稍后再说', 0, -1, 23, new Color(135, 104, 76));
     laterLabel.isBold = true;
-    this.addTapFeedback(laterButton, () => this.closeCatTrialOffer(), 0.95);
+    this.addTapFeedback(laterButton, () => {
+      this.options.onTrack?.('cat_trial_offer_click', { accepted: false });
+      this.closeCatTrialOffer();
+    }, 0.95);
   }
 
   private closeCatTrialOffer() {
     this.catTrialUI?.destroy();
     this.catTrialUI = null;
+    // 试住邀请关闭后补上「挑战解锁」提示，保持一次只弹一个蒙层的节奏
+    this.maybeShowChallengeUnlockNotice();
+  }
+
+  // —— 首页试住气泡：猫咪群上方「大橘试住中 · 剩余 X/3 局」 ——
+  private buildCatTrialPill(parent: Node, y: number) {
+    const pill = new Node('CatTrialPill');
+    parent.addChild(pill);
+    pill.setPosition(0, y);
+    const text = '大橘试住中 · 剩余 3/3 局';
+    const width = Math.max(250, text.length * 17 + 40);
+    pill.addComponent(UITransform).setContentSize(width, 46);
+    const graphics = pill.addComponent(Graphics);
+    graphics.fillColor = new Color(255, 248, 226, 246);
+    graphics.strokeColor = new Color(214, 151, 38);
+    graphics.lineWidth = 3;
+    graphics.roundRect(-width / 2, -23, width, 46, 23);
+    graphics.fill();
+    graphics.stroke();
+    // 左侧大橘头像位：黄底圆 + 猫耳三角，暗示这是大橘的状态条
+    graphics.fillColor = new Color(255, 224, 108);
+    graphics.circle(-width / 2 + 26, 0, 16);
+    graphics.fill();
+    const label = this.label(pill, text, 14, 0, 17, new Color(111, 62, 28));
+    label.isBold = true;
+    label.overflow = Label.Overflow.SHRINK;
+    label.enableWrapText = false;
+    label.verticalAlign = Label.VerticalAlign.CENTER;
+    label.node.getComponent(UITransform)!.setContentSize(width - 58, 30);
+    pill.active = false;
+    this.catTrialPill = pill;
+    this.catTrialPillLabel = label;
+  }
+
+  private refreshCatTrialPill() {
+    if (!this.catTrialPill || !this.catTrialPillLabel) return;
+    const status = this.options.getCatTrialStatus?.() ?? null;
+    this.catTrialPill.active = !!status;
+    if (status) {
+      this.catTrialPillLabel.string = `大橘试住中 · 剩余 ${status.remainingGames}/3 局`;
+    }
+  }
+
+  // 金币入口红点：当天还能通过分享好友领金币时亮起
+  private refreshCoinShareBadge() {
+    if (!this.coinShareBadge) return;
+    this.coinShareBadge.active = this.options.canShareForCoins?.() ?? false;
+  }
+
+  // —— 超萌挑战解锁一次性提示：优先级排在试住邀请之后 ——
+  private maybeShowChallengeUnlockNotice() {
+    if (
+      !this.options.shouldShowChallengeUnlockNotice?.()
+      || !this.homeUI
+      || !this.homeUI.active
+      || this.townGuideUI
+      || this.townGuideLoading
+      || this.catTrialUI
+      || this.catTrialLoading
+      || this.challengeUnlockUI
+      || this.challengeUnlockLoading
+    ) return;
+    this.challengeUnlockLoading = true;
+    this.assets.loadImages(['home_crops/side_challenge'], () => {
+      this.challengeUnlockLoading = false;
+      if (!this.options.shouldShowChallengeUnlockNotice?.()) return;
+      this.options.onChallengeUnlockNoticeShown?.();
+      this.buildChallengeUnlockNotice();
+    });
+  }
+
+  private buildChallengeUnlockNotice() {
+    if (!this.homeUI || !this.homeUI.active || this.challengeUnlockUI) return;
+    const overlay = new Node('ChallengeUnlockNotice');
+    this.homeUI.addChild(overlay);
+    this.challengeUnlockUI = overlay;
+    const visibleSize = view.getVisibleSize();
+    const backdrop = new Node('ChallengeUnlockMask');
+    overlay.addChild(backdrop);
+    backdrop.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
+    const backdropGraphics = backdrop.addComponent(Graphics);
+    backdropGraphics.fillColor = new Color(22, 18, 13, 190);
+    backdropGraphics.rect(-visibleSize.width / 2, -visibleSize.height / 2, visibleSize.width, visibleSize.height);
+    backdropGraphics.fill();
+    backdrop.addComponent(BlockInputEvents);
+
+    this.roundedShape(
+      overlay, 'ChallengeUnlockShadow', 0, -24, 560, 440, 34,
+      new Color(69, 48, 29, 88), new Color(69, 48, 29, 0), 0,
+    );
+    const panel = this.creamPanel(
+      overlay, 0, -14, 540, 424, 32,
+      new Color(255, 248, 226), new Color(235, 205, 158),
+    );
+    panel.setScale(new Vec3(0.76, 0.76, 1));
+    tween(panel).to(0.28, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' }).start();
+
+    const mascot = this.image(panel, 'home_crops/side_challenge', 0, 150, 132, 126);
+    tween(mascot)
+      .repeatForever(
+        tween()
+          .to(1, { scale: new Vec3(1.05, 1.05, 1) }, { easing: 'sineInOut' })
+          .to(1, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
+
+    const title = this.label(panel, '超萌挑战解锁！', 0, 62, 30, new Color(111, 62, 28));
+    title.isBold = true;
+    const body = this.label(
+      panel,
+      '每天首次通关可获得大量金币。\n准备好挑战高压棋盘了吗？',
+      0,
+      10,
+      21,
+      new Color(112, 69, 40),
+    );
+    body.enableWrapText = true;
+    body.node.getComponent(UITransform)!.setContentSize(440, 64);
+
+    const goButton = this.creamPanel(
+      panel, -100, -130, 190, 88, 44,
+      new Color(255, 224, 108), new Color(201, 148, 47),
+    );
+    const goLabel = this.label(goButton, '去看看', 0, -1, 25, new Color(111, 62, 28));
+    goLabel.isBold = true;
+    this.addTapFeedback(goButton, () => {
+      this.closeChallengeUnlockNotice();
+      this.options.onStartChallenge();
+    });
+
+    const laterButton = this.creamPanel(
+      panel, 104, -130, 168, 88, 44,
+      new Color(255, 252, 241), new Color(228, 215, 193),
+    );
+    const laterLabel = this.label(laterButton, '稍后再说', 0, -1, 22, new Color(135, 104, 76));
+    laterLabel.isBold = true;
+    this.addTapFeedback(laterButton, () => this.closeChallengeUnlockNotice(), 0.95);
+  }
+
+  private closeChallengeUnlockNotice() {
+    this.challengeUnlockUI?.destroy();
+    this.challengeUnlockUI = null;
+  }
+
+  // —— 超萌挑战锁定说明面板：未解锁点击入口时展示玩法与解锁条件 ——
+  private toggleChallengeLockPanel(open: boolean) {
+    if (!open) {
+      this.closeChallengeLockPanel();
+      return;
+    }
+    if (this.challengeLockUI || !this.homeUI) return;
+    this.options.onTrack?.('challenge_lock_show', {
+      current_level: this.options.getChapterInfo().level,
+    });
+    const overlay = new Node('ChallengeLockPanel');
+    this.homeUI.addChild(overlay);
+    this.challengeLockUI = overlay;
+    const visibleSize = view.getVisibleSize();
+    const backdrop = new Node('ChallengeLockMask');
+    overlay.addChild(backdrop);
+    backdrop.addComponent(UITransform).setContentSize(visibleSize.width, visibleSize.height);
+    const backdropGraphics = backdrop.addComponent(Graphics);
+    backdropGraphics.fillColor = new Color(22, 18, 13, 190);
+    backdropGraphics.rect(-visibleSize.width / 2, -visibleSize.height / 2, visibleSize.width, visibleSize.height);
+    backdropGraphics.fill();
+    backdrop.addComponent(BlockInputEvents);
+    backdrop.on(Node.EventType.TOUCH_END, () => this.closeChallengeLockPanel());
+
+    this.roundedShape(
+      overlay, 'ChallengeLockShadow', 0, -20, 560, 440, 34,
+      new Color(69, 48, 29, 88), new Color(69, 48, 29, 0), 0,
+    );
+    const panel = this.creamPanel(
+      overlay, 0, -10, 540, 420, 32,
+      new Color(255, 248, 226), new Color(235, 205, 158),
+    );
+    panel.setScale(new Vec3(0.8, 0.8, 1));
+    tween(panel).to(0.26, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' }).start();
+
+    const mascot = this.image(panel, 'home_crops/side_challenge', 0, 148, 120, 114);
+    tween(mascot)
+      .repeatForever(
+        tween()
+          .to(1, { scale: new Vec3(1.04, 1.04, 1) }, { easing: 'sineInOut' })
+          .to(1, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
+
+    const title = this.label(panel, '超萌挑战', 0, 66, 28, new Color(111, 62, 28));
+    title.isBold = true;
+    this.label(panel, '这里是给熟练玩家的高压挑战。', 0, 22, 20, new Color(112, 69, 40));
+
+    const specPill = this.creamPanel(
+      panel, 0, -24, 400, 46, 23,
+      new Color(255, 239, 188), new Color(244, 209, 126),
+    );
+    const specLabel = this.label(specPill, '69 张牌 · 15 种元素 · 5 格槽位', 0, 0, 19, new Color(166, 110, 34));
+    specLabel.isBold = true;
+
+    this.label(panel, '先完成前 5 关，熟悉收集规则后再来挑战。', 0, -74, 19, new Color(136, 94, 63));
+
+    const okButton = this.creamPanel(
+      panel, 0, -150, 220, 82, 41,
+      new Color(255, 224, 108), new Color(201, 148, 47),
+    );
+    const okLabel = this.label(okButton, '知道了', 0, -1, 24, new Color(111, 62, 28));
+    okLabel.isBold = true;
+    this.addTapFeedback(okButton, () => this.closeChallengeLockPanel(), 0.95);
+  }
+
+  private closeChallengeLockPanel() {
+    this.challengeLockUI?.destroy();
+    this.challengeLockUI = null;
   }
 
   // 第 1 关一次性建设引导：半透明蒙层 + 小镇入口高亮副本 + 脉冲光环 + 指引面板。
@@ -781,6 +1063,8 @@ export class HomeScreen {
     if (this.townEntry) this.townEntry.active = true;
     this.refreshTownHintBubble();
     if (showTrial) this.maybeShowCatTrialOffer();
+    // 建设引导结束后没有试住邀请可弹时，轮到「挑战解锁」提示
+    this.maybeShowChallengeUnlockNotice();
   }
 
   private buildCatSocietyEntry() {
@@ -825,6 +1109,7 @@ export class HomeScreen {
       challenge, 0, -88, 128, 32, 16,
       new Color(255, 224, 108), new Color(166, 110, 34),
     );
+    this.challengeTagGraphics = tag.getComponent(Graphics);
     this.challengeRewardCoin = this.image(tag, COMMON_UI_ASSETS.coinIcon, -46, 0, 20, 20);
     this.challengeRewardLabel = this.label(tag, this.challengeRewardText(), 10, -1, 16, new Color(111, 62, 28));
     this.challengeRewardLabel.isBold = true;
@@ -832,11 +1117,20 @@ export class HomeScreen {
     this.challengeRewardLabel.enableWrapText = false;
     this.challengeRewardLabel.verticalAlign = Label.VerticalAlign.CENTER;
     this.challengeRewardLabel.node.getComponent(UITransform)!.setContentSize(92, 28);
-    this.challengeLockLabel = this.label(tag, '', 0, -1, 14, new Color(111, 62, 28));
+    // 锁定态：小挂锁图标 + 「第 5 关解锁」，底色换成米灰以区分奖励金字签
+    this.challengeLockIcon = this.buildLockIcon(tag, -46);
+    this.challengeLockLabel = this.label(tag, '', 10, -1, 14, new Color(135, 104, 76));
     this.challengeLockLabel.isBold = true;
-    this.challengeLockLabel.node.getComponent(UITransform)!.setContentSize(120, 28);
+    this.challengeLockLabel.node.getComponent(UITransform)!.setContentSize(110, 28);
     this.challengeLockLabel.node.active = false;
-    this.addTapFeedback(challenge, this.options.onStartChallenge, 0.93);
+    // 未解锁点击只弹说明面板，不进关卡；解锁校验仍在 Main.startChallenge 兜底
+    this.addTapFeedback(challenge, () => {
+      if (this.options.isChallengeUnlocked()) {
+        this.options.onStartChallenge();
+      } else {
+        this.toggleChallengeLockPanel(true);
+      }
+    }, 0.93);
     this.popIn(challenge, 0.30);
     this.refreshPlayEntries();
 
@@ -923,13 +1217,35 @@ export class HomeScreen {
     this.homeCoinLabel.verticalAlign = Label.VerticalAlign.CENTER;
     this.homeCoinLabel.isBold = true;
     this.addTapFeedback(coin, () => {
-      // 广告总开关关闭时金币广告弹窗不开放（弹窗内的观看按钮依赖 onWatchAd）
-      if (!this.options.onWatchAd) {
-        this.toast('广告功能暂未开放');
+      // 金币弹窗走分享好友链路（Main 注入 onShareForCoins；缺失时提示不可用）
+      if (!this.options.onShareForCoins) {
+        this.toast('分享功能暂未开放');
         return;
       }
       this.toggleCoinAdPopup();
     });
+    // 可分享领金币提醒：金币入口右上角的红点，领完当天金币后消失
+    this.coinShareBadge = new Node('CoinShareBadge');
+    coin.addChild(this.coinShareBadge);
+    this.coinShareBadge.setPosition(78, 24);
+    this.coinShareBadge.addComponent(UITransform).setContentSize(26, 26);
+    const badgeGraphics = this.coinShareBadge.addComponent(Graphics);
+    badgeGraphics.fillColor = new Color(244, 72, 74);
+    badgeGraphics.strokeColor = Color.WHITE;
+    badgeGraphics.lineWidth = 2.5;
+    badgeGraphics.circle(0, 0, 11);
+    badgeGraphics.fill();
+    badgeGraphics.stroke();
+    this.coinShareBadge.active = false;
+    tween(this.coinShareBadge)
+      .repeatForever(
+        tween()
+          .delay(1.4)
+          .to(0.2, { scale: new Vec3(1.25, 1.25, 1) }, { easing: 'sineOut' })
+          .to(0.2, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' }),
+      )
+      .start();
+    this.refreshCoinShareBadge();
 
     const settings = this.homeCrop(this.homeUI!, 'hud_settings', 312, hudY, 72, 72);
     settings.getComponent(UITransform)!.setContentSize(88, 88);
@@ -1104,21 +1420,55 @@ export class HomeScreen {
     const challengeUnlocked = this.options.isChallengeUnlocked();
     const claimed = this.options.isChallengeRewardClaimed();
     if (this.challengeEntry) this.challengeEntry.setScale(new Vec3(challengeUnlocked ? 1 : 0.92, challengeUnlocked ? 1 : 0.92, 1));
+    if (this.challengeTagGraphics) {
+      // 锁定态金字签换米灰底，避免「奖励」和「锁定」两套信息挤在同一视觉里
+      const graphics = this.challengeTagGraphics;
+      graphics.clear();
+      graphics.lineWidth = 3;
+      graphics.fillColor = challengeUnlocked ? new Color(255, 224, 108) : new Color(240, 231, 214);
+      graphics.strokeColor = challengeUnlocked ? new Color(166, 110, 34) : new Color(203, 188, 164);
+      graphics.roundRect(-64, -16, 128, 32, 16);
+      graphics.fill();
+      graphics.stroke();
+    }
     if (this.challengeRewardLabel) {
       this.challengeRewardLabel.string = this.challengeRewardText();
       this.challengeRewardLabel.node.setPosition(claimed || !challengeUnlocked ? 0 : 10, -1);
       this.challengeRewardLabel.node.active = challengeUnlocked;
     }
     if (this.challengeRewardCoin) this.challengeRewardCoin.active = challengeUnlocked && !claimed;
+    if (this.challengeLockIcon) this.challengeLockIcon.active = !challengeUnlocked;
     if (this.challengeLockLabel) {
       this.challengeLockLabel.string = challengeUnlocked ? '' : '第 5 关解锁';
       this.challengeLockLabel.node.active = !challengeUnlocked;
+      this.challengeLockLabel.node.setPosition(14, -1);
     }
     if (this.endlessLabel) {
       const unlocked = this.options.isEndlessUnlocked();
       this.endlessLabel.string = unlocked ? '无尽模式' : '无尽未解锁';
       this.endlessLabel.color = unlocked ? new Color(255, 251, 238) : new Color(255, 236, 206);
     }
+  }
+
+  // 小挂锁图标（挑战锁定态金字签左侧），与 GameScreen 的宠物位锁标同一画法
+  private buildLockIcon(parent: Node, x: number) {
+    const node = new Node('LockIcon');
+    parent.addChild(node);
+    node.setPosition(x, 0);
+    node.addComponent(UITransform).setContentSize(26, 28);
+    const graphics = node.addComponent(Graphics);
+    graphics.strokeColor = new Color(135, 104, 76);
+    graphics.lineWidth = 3;
+    graphics.arc(0, 3, 7, Math.PI, 0, false);
+    graphics.stroke();
+    graphics.fillColor = new Color(135, 104, 76);
+    graphics.roundRect(-11, -11, 22, 16, 4);
+    graphics.fill();
+    graphics.fillColor = new Color(255, 248, 226);
+    graphics.circle(0, -3, 2.4);
+    graphics.fill();
+    node.active = false;
+    return node;
   }
 
   private refreshMoreEntries() {
@@ -1617,8 +1967,16 @@ export class HomeScreen {
     if (!this.coinAdPopup) this.buildCoinAdPopup();
     if (!this.coinAdPopup) return;
     this.coinAdPopup.active = true;
-    this.options.onTrack?.('ad_entrance_show', { scene: 'home_coins' });
-
+    this.options.onTrack?.('share_entrance_show', { scene: 'home_coins' });
+    // 今日已领取时切换按钮与文案，避免玩家点了才知道领不了
+    const canClaim = this.options.canShareForCoins?.() ?? true;
+    if (this.coinAdHintLabel) {
+      this.coinAdHintLabel.string = canClaim ? '分享给好友即可领取金币奖励' : '今日已领取，明天再来';
+    }
+    if (this.coinAdButtonLabel) {
+      this.coinAdButtonLabel.string = canClaim ? '分享好友' : '明天再来';
+    }
+    if (this.coinAdButton) this.coinAdButton.interactable = canClaim;
     const panel = this.coinAdPopup.getChildByName('AdPanel');
     if (panel) {
       panel.setScale(new Vec3(0.86, 0.86, 1));
@@ -1674,63 +2032,67 @@ export class HomeScreen {
     rewardLabel.shadowOffset = new Vec2(0, -4);
 
     // 提示文字
-    const hint = this.label(panel, '观看广告即可领取金币奖励', 0, -90, 20, new Color(112, 69, 40));
+    const hint = this.label(panel, '分享给好友即可领取金币奖励', 0, -90, 20, new Color(112, 69, 40));
     hint.isBold = true;
+    this.coinAdHintLabel = hint;
 
-    // 广告按钮（使用商店同款按钮图片）
-    const adButtonNode = this.image(panel, 'shop/button_ad', 0, -150, 236, 88);
-    const adButtonLabel = this.label(adButtonNode, '观看广告', 26, 0, 24, new Color(150, 78, 20));
-    adButtonLabel.isBold = true;
-    const adButton = adButtonNode.addComponent(Button);
-    adButton.transition = Button.Transition.SCALE;
-    adButton.zoomScale = 0.93;
-    adButton.node.on(Button.EventType.CLICK, () => {
+    // 分享按钮（复用结算弹窗的绿色胶囊底图）
+    const shareButtonNode = this.image(panel, 'popup/btn_green', 0, -150, 236, 88);
+    const shareLabel = this.label(shareButtonNode, '分享好友', 0, 0, 24, Color.WHITE);
+    shareLabel.isBold = true;
+    shareLabel.outlineWidth = 3;
+    shareLabel.outlineColor = new Color(43, 94, 34);
+    const shareButton = shareButtonNode.addComponent(Button);
+    shareButton.transition = Button.Transition.SCALE;
+    shareButton.zoomScale = 0.93;
+    shareButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
-      this.handleWatchAdForCoins();
+      this.handleShareForCoins();
     });
+    this.coinAdButton = shareButton;
+    this.coinAdButtonLabel = shareLabel;
 
     // 关闭按钮（使用图片资源）
     const close = this.image(panel, 'home_settings/btn_close', 230, 170, 88, 88);
     this.addTapFeedback(close, () => this.toggleCoinAdPopup(false), 0.93);
   }
 
-  private async handleWatchAdForCoins() {
+  private async handleShareForCoins() {
     if (this.adRewardBusy) return;
-    if (!this.options.onWatchAd || !this.options.onAddCoins) {
-      this.toast('广告功能暂未开放');
+    if (!this.options.onShareForCoins || !this.options.onAddCoins) {
+      this.toast('分享功能暂未开放');
       return;
     }
 
     this.adRewardBusy = true;
-    this.toast('正在准备广告...');
+    this.toast('正在拉起分享...');
 
-    let result: RewardedAdResult;
+    let shareOk = false;
     try {
-      result = await this.options.onWatchAd('home_coins');
+      shareOk = await this.options.onShareForCoins();
     } catch (error) {
-      console.error('[CatWorld] Watch ad for coins failed', error);
-      result = { completed: false, simulated: false };
+      console.error('[CatWorld] Share for coins failed', error);
+      shareOk = false;
     }
 
     this.adRewardBusy = false;
 
-    if (!result.completed) {
-      this.toast('广告未完整观看，未获得奖励');
+    if (!shareOk) {
+      this.toast('分享未完成，未获得奖励');
       return;
     }
 
-    // 发放奖励
     this.options.onAddCoins(888);
     if (this.homeCoinLabel) {
       this.homeCoinLabel.string = `${this.options.getCoins()}`;
     }
+    this.refreshCoinShareBadge();
 
-    this.toast(`获得 888 金币${result.simulated ? '（预览模拟）' : ''}`);
+    this.toast('获得 888 金币');
     this.toggleCoinAdPopup(false);
   }
 
-  private toggleSettings(open = !this.settingsPopup) {
-    if (!open) {
+  private toggleSettings(open = !this.settingsPopup) {    if (!open) {
       this.settingsPopup?.close();
       this.settingsPopup = null;
       return;

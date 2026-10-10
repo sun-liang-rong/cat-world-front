@@ -1,4 +1,5 @@
 import { _decorator, Camera, Color, Component, Node, ResolutionPolicy, UITransform, view } from 'cc';
+import { PREVIEW } from 'cc/env';
 import { ActivityScreen } from './ActivityScreen';
 import { AssetStore } from './AssetStore';
 import { CatCollectionScreen } from './CatCollectionScreen';
@@ -7,6 +8,7 @@ import { DailyTaskScreen } from './DailyTaskScreen';
 import { GameScreen, buildGameScreenImagePaths } from './GameScreen';
 import { HomeScreen, buildHomeScreenImagePaths } from './HomeScreen';
 import { PlayerStore } from './PlayerStore';
+import { ProfileCoordinator } from './ProfileCoordinator';
 import { isCampaignComplete, LEVELS_PER_THEME, MAX_MAIN_LEVEL, themeIndexForLevel } from './TownContent';
 import { ShopScreen } from './ShopScreen';
 import { TownScreen } from './TownScreen';
@@ -23,6 +25,7 @@ import { MomentScreen } from './MomentScreen';
 import { AdventureScreen, THEME_INFO } from './AdventureScreen';
 import { LoadingOverlay } from './LoadingOverlay';
 import { AdScene, Analytics, AnalyticsPageId } from './Analytics';
+import { SharePromoter } from './SharePromoter';
 
 const { ccclass, property } = _decorator;
 
@@ -54,6 +57,10 @@ export class Main extends Component {
   private launchedAt = 0;
   private audio!: AudioManager;
   private rewardedAd!: RewardedAdService;
+  /** 远程 profile 单飞协调器（在 onLoad 装配）。 */
+  private profile!: ProfileCoordinator;
+  /** 分享适配层（在 onLoad 装配）。 */
+  private sharePromoter!: SharePromoter;
   private homeScreen!: HomeScreen;
   private townScreen: TownScreen | null = null;
   private catCollectionScreen: CatCollectionScreen | null = null;
@@ -82,17 +89,24 @@ export class Main extends Component {
   private challengeSpareToken = 0;
   private challengeSparePreparing = false;
   private startingGame = false;
+  /** 首页本地资源是否存在加载失败（用于进首页后的可见提示）。 */
+  private homeLoadFailed = false;
   private readonly loadedScreens = new Set<object>();
   private readonly readyScreens = new Set<object>();
   private readonly screenLoadWaiters = new Map<object, Array<() => void>>();
+  /** 预览环境的冷页面首次打开观测：页面构造名 → 首次就绪时间戳。 */
+  private readonly screenFirstReadyAt = new Map<string, number>();
   // 结算页「去建设」跳转暂存的目标建筑 id，由 TownScreen.setActive 一次性消费
   private townFocusBuildingId: BuildingId | null = null;
   // 二级页面的常驻上限与最近使用顺序。超出上限时淘汰最久未用的页面：
-  // 释放它加载的图片（AssetStore.releaseOwner）并销毁它的 UI，下次进入时重新加载+重建。
-  // 首页始终 pin；后台预载（loadScreen pin）的菜单页面也不进入这个列表、常驻内存；
-  // 该淘汰只对预载完成前玩家抢先打开、且未被 pin 的页面生效。
+  // 先停页面自身的定时器/补间并销毁 UI（Screen.destroy），再清 Main 的加载/就绪记录，
+  // 最后按归属释放独占图片（AssetStore.releaseOwner）。
+  // 首页始终常驻；二级页面全部按需创建，就绪后进入这个 LRU 列表。
   private static readonly RESIDENT_SCREEN_LIMIT = 2;
   private readonly residentScreens: object[] = [];
+  /** 当前关卡资源的预热归属：关卡图片不再无 owner 永久常驻（见 preloadGameResources）。 */
+  private readonly levelPreloadOwner = { role: 'main-level-preload' };
+  private preloadedLevel = 0;
 
   onLoad() {
     // Protect startup when a stale scene cache contains duplicate Main components.
@@ -104,16 +118,25 @@ export class Main extends Component {
     view.setDesignResolutionSize(750, 1334, ResolutionPolicy.FIXED_WIDTH);
     this.launchedAt = Date.now();
     this.playerStore.load();
+    // 埋点上下文只带匿名身份：金币、星星、关卡、猫咪等本机存档状态不再随事件上传。
     this.analytics.setContext(() => ({
       userId: this.playerStore.getUserId(),
-      level: this.playerStore.getLevel(),
-      coins: this.playerStore.getCoins(),
-      stars: this.playerStore.getStars(),
-      expLevel: this.playerStore.getExperienceInfo().level,
-      equippedCat: this.playerStore.getEquippedCat(),
     }));
     this.playerStore.bindAnalytics(this.analytics);
     if (this.playerStore.hasProfile()) this.analytics.setUserId(this.playerStore.getUserId());
+    this.profile = new ProfileCoordinator({
+      playerStore: this.playerStore,
+      leaderboard: this.leaderboard,
+      analytics: this.analytics,
+      isAlive: () => this.node.isValid,
+    });
+    this.sharePromoter = new SharePromoter({
+      analytics: this.analytics,
+      leaderboard: this.leaderboard,
+      playerStore: this.playerStore,
+      getRoot: () => this.root,
+      refreshGameInventory: () => this.gameScreen?.refreshInventoryHud(),
+    });
     this.analytics.track('app_launch', {
       is_new_user: !this.playerStore.hasProfile() && this.playerStore.getLevel() === 1 && this.playerStore.getTotalStarsEarned() === 0,
       has_profile: this.playerStore.hasProfile(),
@@ -175,6 +198,9 @@ export class Main extends Component {
       shouldShowCatTrialOffer: () => this.playerStore.shouldShowCatTrialOffer(),
       onCatTrialOfferShown: () => this.playerStore.markCatTrialOfferShown(),
       onStartCatTrial: () => this.startCatTrial(),
+      getCatTrialStatus: () => this.playerStore.getCatTrialStatus(),
+      shouldShowChallengeUnlockNotice: () => this.playerStore.shouldShowChallengeUnlockNotice(),
+      onChallengeUnlockNoticeShown: () => this.playerStore.markChallengeUnlockNoticeShown(),
       onOpenTown: () => this.openTown(),
       // 气泡条件 =「从未建设过」或「星星已够点亮下一格」（小节点机制的建设提醒）
       shouldShowTownBuildHint: () =>
@@ -216,7 +242,8 @@ export class Main extends Component {
           campaignComplete: complete,
         };
       },
-      onWatchAd: this.buildWatchAdHandler(),
+      onShareForCoins: () => this.sharePromoter.shareForCoins(),
+      canShareForCoins: () => this.playerStore.canClaimCoinByShare(),
       onAddCoins: amount => this.playerStore.addReward({ coins: amount }),
     });
   }
@@ -240,6 +267,11 @@ export class Main extends Component {
         if (taskId === 'enter_building') this.playerStore.markTownBuildingEntered(buildingId);
         if (taskId === 'view_dialogue') this.playerStore.markTownDialogueViewed(buildingId);
       },
+      getShareOffer: type => this.sharePromoter.buildShareOffer(
+        type,
+        type === 'cat_unlock' ? '分享解锁成果 · 领金币×30' : '分享小镇进度 · 领金币×30',
+      ),
+      onShare: type => this.sharePromoter.shareCard(type),
       onStartGame: () => {
         this.townScreen?.setActive(false);
         this.startGame();
@@ -255,6 +287,7 @@ export class Main extends Component {
       onPlaySound: effect => this.audio.playEffect(effect),
       getCats: () => this.playerStore.getState().cats,
       getEquippedCat: () => this.playerStore.getEquippedCat(false),
+      getCatTrialStatus: () => this.playerStore.getCatTrialStatus(),
       onOpenCat: id => this.openCatDetail(id),
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
@@ -268,6 +301,7 @@ export class Main extends Component {
       getCoins: () => this.playerStore.getCoins(),
       getCat: id => this.playerStore.getCat(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(false),
+      getCatTrialStatus: () => this.playerStore.getCatTrialStatus(),
       onInteract: (id, interaction) => this.playerStore.interactWithCat(id, interaction),
       onUpgrade: id => this.playerStore.upgradeCat(id),
       onEquip: id => this.playerStore.equipCat(id),
@@ -289,6 +323,8 @@ export class Main extends Component {
       getCatJourney: () => this.playerStore.getCatJourneySnapshot(),
       onClaimCatJourney: () => this.playerStore.claimCatJourney(),
       onJourneyOpened: () => this.analytics.track('journey_open'),
+      getShareOffer: () => this.sharePromoter.buildShareOffer('journey_complete', '分享旅程完成 · 领金币×30'),
+      onShare: type => this.sharePromoter.shareCard(type),
       onStartGame: () => this.startGame(),
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
@@ -352,11 +388,13 @@ export class Main extends Component {
     if (this.rankScreen) return;
     this.rankScreen = new RankScreen(this.root, this.assets, {
       onPlaySound: effect => this.audio.playEffect(effect),
-      fetchEntries: tab => this.leaderboard.fetchBoard(
+      // 排行榜入口补齐身份（A-3）：没有/生成失败时先走单飞生成，失败让页面
+      // 展示「网络暂不可用，可重试」，而不是把身份缺失渲染成空榜。
+      fetchEntries: tab => this.profile.ensure().then(() => this.leaderboard.fetchBoard(
         tab,
         this.playerStore.getUserId(),
         tab === 'challenge' ? this.playerStore.getDailyDateKey() : undefined,
-      ),
+      )),
       onInvite: () => this.leaderboard.invite(),
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
@@ -368,40 +406,40 @@ export class Main extends Component {
     this.createHomeScreen();
     this.loadingScreen?.bringToFront();
 
-    const level = this.playerStore.getLevel();
-    // ✅ 只加载首页资源，游戏资源延迟到后台加载
+    // 远程 profile 完全后台化：失败/超时不阻塞首屏、不占加载进度，
+    // 排行榜入口会通过同一条单飞请求显式重试（见 ProfileCoordinator.ensure）。
+    this.profile.ensure().catch(() => {
+      // 失败日志已在协调器内输出，后台路径静默即可。
+    });
+
+    // ✅ 只加载首页资源，游戏资源延迟到后台加载。
+    // 首屏完成条件只看本地：首页图片就绪 + 首页 UI 创建成功（A-1），
+    // 加载进度 0–100% 只反映本地首页任务。
     const homeOnlyPaths = buildHomeScreenImagePaths();
 
     let imagesReady = false;
-    let profileReady = this.playerStore.hasProfile();
     let homeReady = false;
     let finished = false;
 
     const updateProgress = () => {
       let progress = 0;
-      if (imagesReady) progress += 0.7;
-      if (profileReady) progress += 0.3;
+      if (imagesReady) progress += 0.8;
+      if (homeReady) progress += 0.2;
       this.loadingScreen?.setProgress(progress);
     };
 
     const maybeFinish = () => {
-      if (finished || !profileReady || !homeReady) return;
+      if (finished || !imagesReady || !homeReady) return;
       finished = true;
       this.loadingScreen?.finish();
     };
 
-    this.ensureRemoteProfile().then(() => {
-      if (!this.node.isValid) return;
-      profileReady = true;
-      updateProgress();
-      maybeFinish();
-    });
-
-    // 只加载首页资源
     this.assets.loadImages(
       homeOnlyPaths,
       () => {
         if (!this.node.isValid) return;
+        // 记录本地首页资源是否有加载失败，进首页后给出可见提示（A-1）。
+        this.homeLoadFailed = this.assets.takeLoadFailures().length > 0;
         imagesReady = true;
         updateProgress();
 
@@ -409,11 +447,11 @@ export class Main extends Component {
           homeReady = true;
           updateProgress();
           maybeFinish();
-        }, true);
+        });
       },
       (loaded, total) => {
         const imageShare = total > 0 ? loaded / total : 1;
-        this.loadingScreen?.setProgress(imageShare * 0.7);
+        this.loadingScreen?.setProgress(imageShare * 0.8);
       },
     );
   }
@@ -426,6 +464,10 @@ export class Main extends Component {
     this.trackPage('home');
     this.loadingScreen?.destroy();
     this.loadingScreen = null;
+    if (this.homeLoadFailed) {
+      this.homeLoadFailed = false;
+      Toast.show(this.root, '部分资源加载失败，界面可能不完整，重启小游戏可恢复');
+    }
 
     // ✅ 阶段2：首页显示后，启动后台预加载
     this.startBackgroundPreload();
@@ -451,26 +493,27 @@ export class Main extends Component {
     }, 500);
   }
 
-  // 预加载游戏资源
+  // 预加载当前关卡的游戏资源（C-2）：以 levelPreloadOwner 归属加载，
+  // 不再无 owner 地把关卡图片标记为永久常驻；换关卡预热时先释放上一份。
+  // GameScreen 打开时仍会以自己为 owner 再登记一次，对局期间图片不会被误释放。
   private preloadGameResources(level: number) {
     const gamePaths = buildGameScreenImagePaths(level);
+    this.assets.releaseOwner(this.levelPreloadOwner);
+    this.preloadedLevel = level;
 
-    this.assets.loadImages(
-      gamePaths,
-      () => {
-        if (!this.node.isValid) return;
+    this.assets.loadImagesFor(this.levelPreloadOwner, gamePaths, () => {
+      if (!this.node.isValid) return;
 
-        // 游戏资源加载完成后，准备当前关卡
-        this.prepareCurrentLevel();
+      // 游戏资源加载完成后，准备当前关卡
+      this.prepareCurrentLevel();
 
-        // 继续预加载其他页面
-        setTimeout(() => {
-          if (this.node.isValid) {
-            this.preloadSecondaryScreens();
-          }
-        }, 500);
-      }
-    );
+      // 关卡资源就绪后，预热首页自身浮层与超萌挑战关卡（不再预载九个菜单页面）
+      setTimeout(() => {
+        if (this.node.isValid) {
+          this.preloadSecondaryScreens();
+        }
+      }, 500);
+    });
   }
 
   // 延迟准备当前关卡
@@ -493,59 +536,21 @@ export class Main extends Component {
       });
   }
 
-  // 首页和关卡就绪后，先预热首页自己的浮层（设置/玩法介绍）与超萌挑战关卡，
-  // 再在后台逐个预载其余菜单页面（见 preloadMenuScreens）。
+  // 关卡资源就绪后，只预热首页自身浮层（设置/玩法介绍）与超萌挑战关卡。
+  // 九个二级菜单页面一律改为首次点击时按需创建（C-1），
+  // 就绪后进入 RESIDENT_SCREEN_LIMIT 的 LRU 管理，不再后台 pin 常驻。
   private preloadSecondaryScreens() {
     this.homeScreen.preloadOverlays();
     if (this.playerStore.isChallengeUnlocked() && !this.challengeLevelDefinition && !this.challengePreparing) {
       this.prepareChallengeLevel();
     }
-    this.preloadMenuScreens();
   }
 
-  // 后台自动加载其他菜单页面：图片加载 + UI 预建都在玩家看到首页后悄悄完成，
-  // 页面保持隐藏（各 Screen 的 active 默认为 false，setActive(true) 时会刷新数据），
-  // 玩家第一次点开任意菜单时无需等待「准备中」LoadingOverlay，直接秒开。
-  // 逐页串行 + 页间间隔，把图片解码压力摊平；对局进行中暂停，避免抢占主线程掉帧。
-  // 预载完成的页面以 pin 方式常驻，不参与 RESIDENT_SCREEN_LIMIT 的 LRU 淘汰。
-  private preloadMenuScreens() {
-    const steps: Array<() => { loadAndCreate: (onReady?: () => void) => void } | null> = [
-      () => { this.createTownScreen(); return this.townScreen; },
-      () => { this.createAdventureScreen(); return this.adventureScreen; },
-      () => { this.createDailyTaskScreen(); return this.dailyTaskScreen; },
-      () => { this.createCatCollectionScreen(); return this.catCollectionScreen; },
-      () => { this.createShopScreen(); return this.shopScreen; },
-      () => { this.createActivityScreen(); return this.activityScreen; },
-      () => { this.createRankScreen(); return this.rankScreen; },
-      () => { this.createMomentScreen(); return this.momentScreen; },
-      () => { this.createCatDetailScreen(); return this.catDetailScreen; },
-    ];
-    const loadNext = (index: number) => {
-      if (!this.node.isValid || index >= steps.length) return;
-      // 对局进行中延后预载：图片解码不要和玩法抢主线程
-      if (this.gameScreen?.hasStartedPlay()) {
-        setTimeout(() => loadNext(index), 3000);
-        return;
-      }
-      const screen = steps[index]();
-      const advance = () => {
-        setTimeout(() => loadNext(index + 1), 350);
-      };
-      // 页面已被玩家提前打开过（已就绪）时直接跳过；加载中的会被 loadScreen 挂上等待回调
-      if (!screen || this.readyScreens.has(screen)) {
-        advance();
-        return;
-      }
-      this.loadScreen(screen, advance, true);
-    };
-    loadNext(0);
-  }
-
-  // pin = true 表示后台预载：页面常驻内存，不进入 LRU 淘汰（否则预载页面会互相踢掉）。
+  // 按需加载页面：重复点击复用同一条加载请求；就绪后按 LRU 记录归属。
+  // 迟到的资源回调不得复活已淘汰的页面（loadedScreens 已被 releaseScreen 清除时直接忽略）。
   private loadScreen(
     screen: { loadAndCreate: (onReady?: () => void) => void },
     onReady?: () => void,
-    pin = false,
   ) {
     if (this.readyScreens.has(screen)) return true;
     if (onReady) {
@@ -555,11 +560,15 @@ export class Main extends Component {
     }
     if (this.loadedScreens.has(screen)) return false;
     this.loadedScreens.add(screen);
+    const startedAt = Date.now();
     screen.loadAndCreate(() => {
       if (!this.node.isValid) return;
+      // 页面在等待加载期间被淘汰/销毁时，迟到回调不能把它标记为就绪
+      if (!this.loadedScreens.has(screen)) return;
       this.readyScreens.add(screen);
-      if (!pin && screen !== this.homeScreen) this.touchResidentScreen(screen);
+      if (screen !== this.homeScreen) this.touchResidentScreen(screen);
       this.loadingScreen?.bringToFront();
+      this.logColdOpen(screen, startedAt);
       const waiters = this.screenLoadWaiters.get(screen) || [];
       this.screenLoadWaiters.delete(screen);
       waiters.forEach(waiter => waiter());
@@ -567,7 +576,19 @@ export class Main extends Component {
     return this.readyScreens.has(screen);
   }
 
+  // 预览环境观测（C-3）：冷页面首次打开耗时与当前缓存 SpriteFrame 数量，
+  // 仅在编辑器预览渠道输出，不进入线上包日志。
+  private logColdOpen(screen: object, startedAt: number) {
+    if (!PREVIEW) return;
+    const name = (screen as { constructor?: { name?: string } }).constructor?.name ?? 'Screen';
+    const isFirst = !this.screenFirstReadyAt.has(name);
+    if (!isFirst) return;
+    this.screenFirstReadyAt.set(name, Date.now());
+    console.log(`[CatWorld][Preview] ${name} 首次就绪 ${Date.now() - startedAt}ms，缓存 SpriteFrame ${this.assets.cachedFrameCount()} 张`);
+  }
+
   // 记录页面为「最近使用」，超出常驻上限就淘汰最久未用的那个。
+  // 只有真正访问过且就绪的页面会进入列表；正在加载中的页面不在其中，不会被淘汰。
   private touchResidentScreen(screen: object) {
     if (screen === this.homeScreen) return;
     const index = this.residentScreens.indexOf(screen);
@@ -579,17 +600,18 @@ export class Main extends Component {
     }
   }
 
-  // 释放页面加载的图片并销毁它的 UI：下次进入会重新加载图片、重建节点。
-  // 共用资源（多个页面都加载的图）由 AssetStore 的引用计数保护，不会被误删。
+  // 淘汰顺序（C-2）：先销毁页面 UI（Screen.destroy 内部停定时器/补间）并清掉 Main
+  // 的引用与加载/就绪记录，再按 owner 释放独占图片。共用素材（首页或其他页面
+  // 仍引用的图）由 AssetStore 的引用计数保护，不会被误删。
   private releaseScreen(screen: object) {
     if (screen === this.homeScreen) return;
-    if (this.readyScreens.has(screen)) this.assets.releaseOwner(screen);
-    this.readyScreens.delete(screen);
-    this.loadedScreens.delete(screen);
-    this.screenLoadWaiters.delete(screen);
     const destroy = (screen as { destroy?: () => void }).destroy;
     if (typeof destroy === 'function') destroy.call(screen);
     this.clearScreenField(screen);
+    this.readyScreens.delete(screen);
+    this.loadedScreens.delete(screen);
+    this.screenLoadWaiters.delete(screen);
+    this.assets.releaseOwner(screen);
   }
 
   // 淘汰时必须把 Main 持有的引用置空，否则 createXxxScreen() 会因字段非空而不再重建页面。
@@ -603,6 +625,14 @@ export class Main extends Component {
     else if (this.momentScreen === screen) this.momentScreen = null;
     else if (this.adventureScreen === screen) this.adventureScreen = null;
     else if (this.rankScreen === screen) this.rankScreen = null;
+  }
+
+  // 激活二级页面的统一入口：先把该页面刷到 LRU 头部（可能顺手淘汰更早的隐藏页面），
+  // 再显示。重复进入已就绪页面时 loadScreen 不会刷新 LRU，若不在这里补一次 touch，
+  // 「当前可见页」可能仍排在队尾，被下一个新页面的就绪回调淘汰释放掉正在使用的资源。
+  private showScreen(screen: { setActive: (active: boolean) => void }) {
+    this.touchResidentScreen(screen);
+    screen.setActive(true);
   }
 
   private startGame() {
@@ -676,9 +706,11 @@ export class Main extends Component {
   }
 
   private openGame(onReady?: () => void, deferStart = false) {
-    this.gameScreen?.destroy();
+    const level = this.playerStore.getLevel();
+    const previous = this.gameScreen;
+    previous?.destroy();
     this.gameScreen = new GameScreen(this.root, this.assets, {
-      level: this.playerStore.getLevel(),
+      level,
       levelDefinition: this.currentLevelDefinition || undefined,
       getCoins: () => this.playerStore.getCoins(),
       onCoinsChanged: coins => this.playerStore.setCoins(coins),
@@ -689,11 +721,13 @@ export class Main extends Component {
       },
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
+      onToolShareGet: id => this.sharePromoter.shareForTool(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(),
       hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(),
       onMainRunStarted: () => {
         this.playerStore.consumeCatTrialGame();
       },
+      getCatTrialStatus: () => this.playerStore.getCatTrialStatus(),
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
       onGamePetPositionChanged: position => this.playerStore.setGamePetPosition(position),
       getCatSkillState: id => this.playerStore.getCatSkillState(id),
@@ -728,11 +762,27 @@ export class Main extends Component {
       onCollectGoalHintShown: () => this.playerStore.markCollectGoalHintDone(),
       getBuildTargetInfo: () => this.playerStore.getNextBuildableInfo(),
       onGoBuild: () => this.goBuildFromGame(),
-      onWatchAd: this.buildWatchAdHandler(),
+      onDoubleRewardShare: () => this.sharePromoter.shareForDouble(),
+      onReviveShare: () => this.sharePromoter.shareForRevive(),
       onTrack: (name, props) => this.analytics.track(name, props),
+      getShareOffer: () => {
+        if (level >= MAX_MAIN_LEVEL) {
+          return this.sharePromoter.buildShareOffer('campaign_complete', '分享冒险完成 · 领金币×30');
+        }
+        if (level === 5) {
+          return this.sharePromoter.buildShareOffer('level_win', '分享第 5 关通关 · 领金币×30');
+        }
+        return null;
+      },
+      onShare: type => this.sharePromoter.shareCard(type),
       deferStart,
     });
-    this.gameScreen.loadAndCreate(onReady);
+    this.gameScreen.loadAndCreate(() => {
+      // 新对局资源以自己为 owner 就绪后，再释放旧对局的独占图片；
+      // 同关卡共享的图片由引用计数保护不会销毁，重玩不产生整包重载。
+      if (previous) this.assets.releaseOwner(previous);
+      onReady?.();
+    });
   }
 
   // 结算页「去建设」：记住目标建筑 → 关闭对局回首页 → 直开小镇并选中该建筑
@@ -867,7 +917,8 @@ export class Main extends Component {
   }
 
   private openChallengeGame(onReady?: () => void) {
-    this.gameScreen?.destroy();
+    const previous = this.gameScreen;
+    previous?.destroy();
     // 大奖每日限领一次：当天已领过就按普通过关金币发放
     const challengeCoinReward = this.playerStore.isChallengeRewardClaimed()
       ? CHALLENGE_REPEAT_COIN_REWARD
@@ -884,10 +935,11 @@ export class Main extends Component {
       onStarsGranted: () => {},
       onChallengeWin: durationMs => {
         this.playerStore.markChallengeRewardClaimed();
-        this.submitChallengeRank(durationMs);
+        this.profile.submitChallenge(durationMs);
       },
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
+      onToolShareGet: id => this.sharePromoter.shareForTool(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(false),
       hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(false),
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
@@ -908,10 +960,16 @@ export class Main extends Component {
       onNextLevel: () => this.returnHomeFromGame(),
       onReturnHome: () => this.returnHomeFromGame(),
       onReplay: () => this.replayChallenge(),
-      onWatchAd: this.buildWatchAdHandler(),
+      onReviveShare: () => this.sharePromoter.shareForRevive(),
+      onDoubleRewardShare: () => this.sharePromoter.shareForDouble(),
       onTrack: (name, props) => this.analytics.track(name, props),
+      getShareOffer: () => this.sharePromoter.buildShareOffer('challenge_record', '分享挑战成果 · 领金币×30'),
+      onShare: type => this.sharePromoter.shareCard(type),
     });
-    this.gameScreen.loadAndCreate(onReady);
+    this.gameScreen.loadAndCreate(() => {
+      if (previous) this.assets.releaseOwner(previous);
+      onReady?.();
+    });
   }
 
   // 重试换一副元素排布（难度曲线不变）；压满模式要跑完全部尝试挑最残酷棋盘，
@@ -932,7 +990,8 @@ export class Main extends Component {
   }
 
   private openEndlessGame(onReady?: () => void) {
-    this.gameScreen?.destroy();
+    const previous = this.gameScreen;
+    previous?.destroy();
     const endlessSeed = (Date.now() ^ 0x45e21a9b) | 0;
     this.gameScreen = new GameScreen(this.root, this.assets, {
       level: this.playerStore.getLevel(),
@@ -942,7 +1001,7 @@ export class Main extends Component {
         bestEliminated: this.playerStore.getEndlessProgress().bestEliminated,
         onFinish: result => {
           const recorded = this.playerStore.recordEndlessRun(result);
-          this.submitEndlessRank(result.eliminated, result.durationMs);
+          this.profile.submitEndless(result.eliminated, result.durationMs);
           return recorded;
         },
       },
@@ -951,6 +1010,7 @@ export class Main extends Component {
       onStarsGranted: () => {},
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
+      onToolShareGet: id => this.sharePromoter.shareForTool(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(false),
       hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(false),
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
@@ -971,10 +1031,17 @@ export class Main extends Component {
       onNextLevel: () => this.returnHomeFromGame(),
       onReturnHome: () => this.returnHomeFromGame(),
       onReplay: () => this.replayEndless(),
-      onWatchAd: this.buildWatchAdHandler(),
+      onDoubleRewardShare: () => this.sharePromoter.shareForDouble(),
       onTrack: (name, props) => this.analytics.track(name, props),
+      getShareOffer: context => context?.isNewRecord
+        ? this.sharePromoter.buildShareOffer('endless_record', '分享新纪录 · 领金币×30')
+        : null,
+      onShare: type => this.sharePromoter.shareCard(type),
     });
-    this.gameScreen.loadAndCreate(onReady);
+    this.gameScreen.loadAndCreate(() => {
+      if (previous) this.assets.releaseOwner(previous);
+      onReady?.();
+    });
   }
 
   private replayEndless() {
@@ -1051,7 +1118,7 @@ export class Main extends Component {
     this.shopScreen?.setActive(false);
     this.activityScreen?.setActive(false);
     this.momentScreen?.setActive(false);
-    this.catCollectionScreen!.setActive(true);
+    this.showScreen(this.catCollectionScreen!);
     this.trackPage('cats');
   }
 
@@ -1063,7 +1130,7 @@ export class Main extends Component {
     if (!this.loadScreen(this.catDetailScreen!, () => this.openCatDetail(id))) return;
     this.catCollectionScreen?.setActive(false);
     this.catDetailScreen!.setCat(id);
-    this.catDetailScreen!.setActive(true);
+    this.showScreen(this.catDetailScreen!);
     this.trackPage('cat_detail');
   }
 
@@ -1112,7 +1179,7 @@ export class Main extends Component {
     this.shopScreen?.setActive(false);
     this.activityScreen?.setActive(false);
     this.momentScreen?.setActive(false);
-    this.dailyTaskScreen!.setActive(true);
+    this.showScreen(this.dailyTaskScreen!);
     this.trackPage('daily');
   }
 
@@ -1155,7 +1222,7 @@ export class Main extends Component {
     this.dailyTaskScreen?.setActive(false);
     this.activityScreen?.setActive(false);
     this.momentScreen?.setActive(false);
-    this.shopScreen!.setActive(true);
+    this.showScreen(this.shopScreen!);
     this.trackPage('shop');
   }
 
@@ -1198,7 +1265,7 @@ export class Main extends Component {
     this.dailyTaskScreen?.setActive(false);
     this.shopScreen?.setActive(false);
     this.momentScreen?.setActive(false);
-    this.activityScreen!.setActive(true);
+    this.showScreen(this.activityScreen!);
     this.trackPage('activity');
   }
 
@@ -1236,7 +1303,7 @@ export class Main extends Component {
     this.closeGameAndTown();
     this.hideExtraPages();
     this.homeScreen.setActive(false);
-    this.momentScreen!.setActive(true);
+    this.showScreen(this.momentScreen!);
     this.trackPage('moments');
   }
 
@@ -1274,7 +1341,7 @@ export class Main extends Component {
     this.closeGameAndTown();
     this.hideExtraPages();
     this.homeScreen.setActive(false);
-    this.adventureScreen!.setActive(true);
+    this.showScreen(this.adventureScreen!);
     this.trackPage('adventure');
   }
 
@@ -1312,7 +1379,7 @@ export class Main extends Component {
     this.closeGameAndTown();
     this.hideExtraPages();
     this.homeScreen.setActive(false);
-    this.rankScreen!.setActive(true);
+    this.showScreen(this.rankScreen!);
     this.trackPage('rank');
   }
 
@@ -1324,8 +1391,12 @@ export class Main extends Component {
 
   private returnHomeFromGame() {
     this.startingGame = false;
-    this.gameScreen?.destroy();
-    this.gameScreen = null;
+    if (this.gameScreen) {
+      this.gameScreen.destroy();
+      // 离开对局即释放对局独占图片；当前关卡的预热资源（levelPreloadOwner）保留
+      this.assets.releaseOwner(this.gameScreen);
+      this.gameScreen = null;
+    }
     // 有备用就直接顶上，回到首页后再进挑战无需等待生成；
     // resumeChallengePreparation() 会补一份新的备用。
     this.challengeLevelDefinition = this.challengeSpareDefinition;
@@ -1345,6 +1416,7 @@ export class Main extends Component {
     if (!this.gameScreen?.hasStartedPlay()) return;
     this.startingGame = false;
     this.gameScreen.destroy();
+    this.assets.releaseOwner(this.gameScreen);
     this.gameScreen = null;
   }
 
@@ -1419,7 +1491,7 @@ export class Main extends Component {
     this.discardActiveGame();
     this.hideExtraPages();
     this.homeScreen.setActive(false);
-    this.townScreen!.setActive(true);
+    this.showScreen(this.townScreen!);
     this.trackPage('town');
   }
 
@@ -1490,7 +1562,7 @@ export class Main extends Component {
   private advanceMainLevelAfterWin() {
     const clearedLevel = this.playerStore.getLevel();
     this.playerStore.setLevel(clearedLevel + 1);
-    this.submitLevelRank();
+    this.profile.submitLevelBest();
     if (!isCampaignComplete(this.playerStore.getLevel())) {
       this.prepareNextMainLevel(this.playerStore.getLevel());
     }
@@ -1534,44 +1606,6 @@ export class Main extends Component {
 
   private seedForLevel(level: number) {
     return (0x4d595841 + Math.imul(level, 7919)) | 0;
-  }
-
-  private ensureRemoteProfile() {
-    if (this.playerStore.hasProfile()) {
-      return Promise.resolve();
-    }
-    return this.leaderboard.ensureProfile(
-      this.playerStore.getUserId(),
-      this.playerStore.getUserName(),
-    ).then(profile => {
-      if (!this.node.isValid) return;
-      this.playerStore.setProfile(profile.userId, profile.name);
-      this.analytics.setUserId(profile.userId);
-    }).catch(error => {
-      console.error('[CatWorld] Failed to generate player profile', error);
-    });
-  }
-
-  private submitLevelRank() {
-    const userId = this.playerStore.getUserId();
-    if (!userId) return;
-    this.leaderboard.submitLevel(
-      userId,
-      Math.max(1, this.playerStore.getLevel() - 1),
-      this.playerStore.getTotalStarsEarned(),
-    );
-  }
-
-  private submitEndlessRank(clearCount: number, durationMs: number) {
-    const userId = this.playerStore.getUserId();
-    if (!userId || clearCount <= 0) return;
-    this.leaderboard.submitEndless(userId, clearCount, durationMs);
-  }
-
-  private submitChallengeRank(durationMs: number) {
-    const userId = this.playerStore.getUserId();
-    if (!userId || durationMs <= 0) return;
-    this.leaderboard.submitChallenge(userId, durationMs, this.playerStore.getDailyDateKey());
   }
 
   private pauseNextLevelPreparation() {

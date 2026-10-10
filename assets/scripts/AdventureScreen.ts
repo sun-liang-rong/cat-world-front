@@ -1,5 +1,6 @@
 import { Button, Color, EventMouse, EventTouch, Graphics, Label, Mask, Node, Sprite, tween, Tween, UITransform, Vec3, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
+import { Theme, TITLE_SIGN } from './Theme';
 import { isCampaignComplete, LEVELS_PER_THEME, MAIN_THEME_COUNT, themeIndexForLevel } from './TownContent';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
@@ -33,8 +34,11 @@ const TAP_JITTER = 24;
 // 顶部标题栏（返回 + 标题）与主题横幅中心距屏幕顶边的距离（设计稿像素）。
 // 标题栏为避让微信胶囊下移后，横幅随之让位；地图手势区顶边取横幅底边。
 const HEADER_Y_FROM_TOP = 134;
-const TITLE_Y_FROM_TOP = 136;
-const BANNER_Y_FROM_TOP = 236;
+// 统一标题吊牌（shop/sign_board）中心的距顶距离：340×220 吊牌上提 20px，
+// 底边 (top-202) 在主题横幅顶边 (top-218) 之上 16px，不再压住横幅卡面。
+const TITLE_Y_FROM_TOP = 92;
+// 主题横幅中心距顶距离：下移 30px 让出吊牌底边；手势区顶边取横幅底边。
+const BANNER_Y_FROM_TOP = 266;
 const BANNER_HEIGHT = 96;
 // 主题（章节）定义同时被首页章节横幅使用：章节号 = 主线关卡所在主题 + 1
 export const THEME_INFO: ThemeInfo[] = [
@@ -65,30 +69,20 @@ const THEME_MAX_SCROLL = THEME_CONTENT_W - THEME_VIEW_W;
 const THEME_SWIPE_THRESHOLD = 44;
 const THEME_TAP_JITTER = 20;
 // 沿背景石板路自上而下取的 6 个节点位，y 相对地图手势区中心（设计稿像素）。
-// 标题栏下移后地图上部空间变小：顶部节点沿路下收、间距略收紧，底部节点（第 6 位）保持不动；
+// 手势区顶边贴横幅底边、底边固定在 bottom+337：横幅下移 30px 时区中心只下移 15px，
+// 因此每个 y 都含 +15 补偿，让节点钉在背景石板路的原位（路牌同理，见 buildMapDecoration）。
 // 相邻间距已按节点实际高度留出余量（完成 85 / 旗帜 136 / 锁 92）。
 const MAP_SLOTS: Array<[number, number]> = [
-  [-4, 310],
-  [4, 214],
-  [-62, 96],
-  [13, -24],
-  [-103, -135],
-  [-119, -246],
+  [-4, 325],
+  [4, 229],
+  [-62, 111],
+  [13, -9],
+  [-103, -120],
+  [-119, -231],
 ];
 
 const COLORS = {
-  title: new Color(111, 62, 28),
-  body: new Color(112, 69, 40),
-  muted: new Color(136, 94, 63),
-  cream: new Color(255, 248, 226, 246),
-  creamSoft: new Color(255, 244, 212, 235),
-  border: new Color(235, 205, 158),
-  borderDark: new Color(205, 165, 102),
-  goldDark: new Color(190, 111, 17),
-  plusGreen: new Color(139, 196, 74),
-  plusGreenDark: new Color(96, 146, 50),
-  shadow: new Color(92, 54, 22, 80),
-  chipDark: new Color(74, 58, 44, 220),
+  ...Theme,
   navSelect: new Color(250, 203, 190),
   navSelectBorder: new Color(238, 158, 138),
   navSelectText: new Color(196, 86, 60),
@@ -130,14 +124,14 @@ export class AdventureScreen {
     this.assets.loadImagesFor(this, [
       'adventure/adventure_bg',
       COMMON_UI_ASSETS.backButton,
-      'adventure/adventure_title',
+      TITLE_SIGN.path,
       'adventure/adventure_banner',
       'adventure/adventure_signpost',
       'adventure/adventure_node_done',
       'adventure/adventure_node_current',
       'adventure/adventure_node_lock',
       'adventure/adventure_cat_roof',
-      'adventure/adventure_start_btn',
+      'tasks/daily_button_primary',
       'adventure/adventure_theme_icon_1',
       'adventure/adventure_theme_icon_2',
       'adventure/adventure_theme_icon_3',
@@ -232,8 +226,8 @@ export class AdventureScreen {
     this.image(back, COMMON_UI_ASSETS.backButton, 0, 0, BACK_BUTTON_SIZE.visualWidth, BACK_BUTTON_SIZE.visualHeight);
     this.addButton(back, () => this.options.onReturnHome());
 
-    const title = this.image(this.adventureUI!, 'adventure/adventure_title', -104, top - TITLE_Y_FROM_TOP, 260, 77);
-    const titleLabel = this.label(title, '冒险地图', 8, -2, 29, COLORS.title);
+    const title = this.image(this.adventureUI!, TITLE_SIGN.path, -15, top - TITLE_Y_FROM_TOP, TITLE_SIGN.width, TITLE_SIGN.height);
+    const titleLabel = this.label(title, '冒险地图', 0, TITLE_SIGN.titleOffsetY, TITLE_SIGN.titleFontSize, COLORS.title);
     titleLabel.isBold = true;
 
     this.buildResourceChip('AdventureCoinChip', 280, COMMON_UI_ASSETS.coinIcon, () => `${this.options.getCoins()}`);
@@ -287,17 +281,17 @@ export class AdventureScreen {
     const starY = coinY - coinHeight / 2 - resourceGap - starHeight / 2;
     const starChip = this.roundedShape(
       this.adventureUI!, 'AdventureStarChip', 289, starY, 122, starHeight, 24,
-      COLORS.chipDark, new Color(255, 248, 226, 60), 2,
+      COLORS.cream, COLORS.border, 2,
     );
-    this.starCountLabel = this.label(starChip, '', -12, -1, 20, Color.WHITE);
+    this.starCountLabel = this.label(starChip, '', -12, -1, 20, COLORS.body);
     this.starCountLabel.isBold = true;
     this.starCountLabel.node.getComponent(UITransform)!.setContentSize(64, 32);
     this.image(starChip, COMMON_UI_ASSETS.starIcon, 36, 0, 30, 30);
   }
 
   private buildMapDecoration() {
-    // y 相对地图手势区中心；保持路牌在屏幕上的世界位置不变（区域中心比原来低 12px，局部 y 相应 +12）
-    this.image(this.mapLayer!, 'adventure/adventure_signpost', 238, 162, 84, 99);
+    // y 相对地图手势区中心；横幅下移 30px 后区中心下移 15px，局部 y +15 保持路牌钉在原位
+    this.image(this.mapLayer!, 'adventure/adventure_signpost', 238, 177, 84, 99);
   }
 
   private buildChapterArrows(top: number) {
@@ -532,11 +526,12 @@ export class AdventureScreen {
     const inner = new Node('AdventureStartButtonInner');
     start.addChild(inner);
     inner.addComponent(UITransform).setContentSize(204, 85);
-    this.image(inner, 'adventure/adventure_start_btn', 0, 0, 204, 85);
-    const startLabel = this.label(inner, '开始挑战', 0, -2, 30, Color.WHITE);
+    // 统一主 CTA：橙色（tasks/daily_button_primary 与每日任务页同款素材），绿色底只留给次级元素。
+    this.image(inner, 'tasks/daily_button_primary', 0, 0, 204, 85);
+    const startLabel = this.label(inner, '开始挑战', 0, -2, 30, new Color(255, 251, 238));
     startLabel.isBold = true;
-    startLabel.outlineWidth = 4;
-    startLabel.outlineColor = new Color(72, 120, 40);
+    startLabel.outlineWidth = 2;
+    startLabel.outlineColor = new Color(184, 74, 10);
     this.addButton(start, () => this.onStartPressed());
     tween(inner)
       .repeatForever(

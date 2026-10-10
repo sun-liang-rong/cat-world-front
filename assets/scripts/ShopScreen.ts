@@ -33,7 +33,7 @@ export class ShopScreen {
     hammer: [99, 106],
     glove: [87, 106],
     dice: [99, 105],
-    extra_slot: [106, 92],
+    extra_slot: [98, 86],
   };
   private readonly descriptions: Record<ItemId, string> = {
     hammer: '直接移除\n一个可收集元素。',
@@ -59,7 +59,6 @@ export class ShopScreen {
       'shop/cat_shopkeeper',
       'shop/card_frame',
       'shop/badge_green',
-      'shop/badge_blue',
       'shop/button_buy',
       'shop/button_ad',
       'shop/icon_hammer',
@@ -154,8 +153,8 @@ export class ShopScreen {
       { left: 44, right: 44, top: 44, bottom: 44 },
     );
 
-    const badgeName = id === 'hammer' || id === 'dice' ? 'shop/badge_green' : 'shop/badge_blue';
-    const badge = this.image(card, badgeName, 0, 98, 156, 156);
+    // 四个道具统一绿色圆底座，保证同一页面图标语言一致（badge_blue 已停用）。
+    const badge = this.image(card, 'shop/badge_green', 0, 98, 156, 156);
     const [iconWidth, iconHeight] = this.iconSizes[id];
     this.image(badge, 'shop/icon_' + id, 0, 0, iconWidth, iconHeight);
 
