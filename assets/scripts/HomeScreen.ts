@@ -1142,7 +1142,7 @@ export class HomeScreen {
     );
     this.challengeTagGraphics = tag.getComponent(Graphics);
     this.challengeRewardCoin = this.image(tag, COMMON_UI_ASSETS.coinIcon, -46, 0, 20, 20);
-    this.challengeRewardLabel = this.label(tag, this.challengeRewardText(), 10, -1, 16, new Color(111, 62, 28));
+    this.challengeRewardLabel = this.label(tag, this.challengeRewardText(), 10, -1, 17, new Color(111, 62, 28));
     this.challengeRewardLabel.isBold = true;
     this.challengeRewardLabel.overflow = Label.Overflow.SHRINK;
     this.challengeRewardLabel.enableWrapText = false;
@@ -1150,7 +1150,7 @@ export class HomeScreen {
     this.challengeRewardLabel.node.getComponent(UITransform)!.setContentSize(92, 28);
     // 锁定态：小挂锁图标 + 「第 5 关解锁」，底色换成米灰以区分奖励金字签
     this.challengeLockIcon = this.buildLockIcon(tag, -46);
-    this.challengeLockLabel = this.label(tag, '', 10, -1, 14, new Color(135, 104, 76));
+    this.challengeLockLabel = this.label(tag, '', 10, -1, 16, new Color(135, 104, 76));
     this.challengeLockLabel.isBold = true;
     this.challengeLockLabel.node.getComponent(UITransform)!.setContentSize(110, 28);
     this.challengeLockLabel.node.active = false;
@@ -1203,7 +1203,7 @@ export class HomeScreen {
 
     const avatar = this.topHomeCrop(this.homeUI!, 'avatar', -292, y, 96, 102);
     avatar.getComponent(UITransform)!.setContentSize(108, 108);
-    this.homeLevelLabel = this.label(avatar, '', 0, -39, 16, new Color(91, 53, 34));
+    this.homeLevelLabel = this.label(avatar, '', 0, -39, 18, new Color(91, 53, 34));
     this.homeLevelLabel.isBold = true;
     // 昵称名牌：奶油胶囊垫底 + 椭圆投影，把名字从天空背景里托出来（与侧边入口胶囊同族样式）
     const nameShadow = new Node('NameShadow');
@@ -1720,7 +1720,7 @@ export class HomeScreen {
       new Color(69, 48, 29, 88), new Color(69, 48, 29, 0), 0,
     );
     const panel = this.creamPanel(
-      overlay, 0, 0, 620, 800, 32,
+      overlay, 0, 0, 610, 800, 32,
       new Color(255, 248, 226), new Color(235, 205, 158),
     );
 
@@ -1833,12 +1833,12 @@ export class HomeScreen {
     this.guideTabItems[0].page = page;
 
     const steps: Array<{ title: string; body: string; icon: string }> = [
-      { title: '开始闯关', body: '点击首页“开始闯关”挑战当前主线关卡', icon: 'guide/step_play' },
-      { title: '获得星星', body: '每关固定得 3 星，3 星正好点亮一格建设', icon: COMMON_UI_ASSETS.starIcon },
-      { title: '建设小镇', body: '用星星逐格点亮建筑，亮满一个大节点就焕然一新', icon: 'home/house_icon' },
-      { title: '解锁猫咪', body: '建筑装饰完成后，对应猫咪加入猫咪社', icon: 'guide/step_cat' },
-      { title: '升级猫咪', body: '消耗金币升级猫咪，缩短技能冷却', icon: 'guide/step_upgrade' },
-      { title: '使用专属技能', body: '装备猫咪闯关，充能满后释放技能', icon: 'guide/step_skill' },
+      { title: '开始闯关', body: '首页点击「开始闯关」，挑战主线', icon: 'guide/step_play' },
+      { title: '获得星星', body: '通关得 3 星，正好点亮一格建设', icon: COMMON_UI_ASSETS.starIcon },
+      { title: '建设小镇', body: '用星星点亮小格，完成阶段换新貌', icon: 'home/house_icon' },
+      { title: '解锁猫咪', body: '完成小屋清理，让大橘永久安家', icon: 'guide/step_cat' },
+      { title: '升级猫咪', body: '升级猫咪，增强技能并解锁新外观', icon: 'guide/step_upgrade' },
+      { title: '使用专属技能', body: '装备猫咪，每局充能满后发动 1 次', icon: 'guide/step_skill' },
     ];
 
     steps.forEach((step, index) => {
@@ -1850,12 +1850,12 @@ export class HomeScreen {
     const row = this.creamPanel(parent, 0, y, 548, 60, 16,
       new Color(255, 253, 244, 250), new Color(224, 215, 179, 220));
 
-    this.image(row, iconPath, -246, 0, 46, 46);
+    this.image(row, iconPath, -228, 0, 46, 46);
 
     // 序号小徽章压在图标左上角，强调成长路线的先后顺序
     const badge = new Node('StepBadge');
     row.addChild(badge);
-    badge.setPosition(-260, 16);
+    badge.setPosition(-244, 16);
     badge.addComponent(UITransform).setContentSize(24, 24);
     const badgeGraphics = badge.addComponent(Graphics);
     badgeGraphics.fillColor = new Color(255, 224, 108);
@@ -1867,21 +1867,23 @@ export class HomeScreen {
     const num = this.label(badge, `${index}`, 0, -1, 14, new Color(111, 62, 28));
     num.isBold = true;
 
-    const title = this.label(row, titleText, -216, 11, 20, new Color(111, 62, 28));
+    const title = this.label(row, titleText, -194, 13, 20, new Color(111, 62, 28));
     title.isBold = true;
     title.horizontalAlign = Label.HorizontalAlign.LEFT;
     const titleTransform = title.node.getComponent(UITransform)!;
     titleTransform.anchorX = 0;
     titleTransform.anchorY = 0.5;
-    titleTransform.setContentSize(460, 24);
+    titleTransform.setContentSize(446, 28);
 
-    const body = this.label(row, bodyText, -216, -12, 17, new Color(112, 69, 40));
+    const body = this.label(row, bodyText, -194, -15, 20, new Color(112, 69, 40));
     body.horizontalAlign = Label.HorizontalAlign.LEFT;
     body.verticalAlign = Label.VerticalAlign.CENTER;
     const bodyTransform = body.node.getComponent(UITransform)!;
     bodyTransform.anchorX = 0;
     bodyTransform.anchorY = 0.5;
-    bodyTransform.setContentSize(460, 22);
+    bodyTransform.setContentSize(446, 28);
+    body.enableWrapText = false;
+    body.overflow = Label.Overflow.SHRINK;
   }
 
   private buildGuideRulesPage(parent: Node) {
@@ -1917,13 +1919,15 @@ export class HomeScreen {
     titleTransform.anchorY = 0.5;
     titleTransform.setContentSize(420, 26);
 
-    const body = this.label(row, bodyText, -188, -14, 17, new Color(112, 69, 40));
+    const body = this.label(row, bodyText, -188, -14, 20, new Color(112, 69, 40));
     body.horizontalAlign = Label.HorizontalAlign.LEFT;
     body.verticalAlign = Label.VerticalAlign.CENTER;
     const bodyTransform = body.node.getComponent(UITransform)!;
     bodyTransform.anchorX = 0;
     bodyTransform.anchorY = 0.5;
-    bodyTransform.setContentSize(420, 22);
+    bodyTransform.setContentSize(420, 28);
+    body.enableWrapText = false;
+    body.overflow = Label.Overflow.SHRINK;
   }
 
   private guideTipCard(parent: Node) {

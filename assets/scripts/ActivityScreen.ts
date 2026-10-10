@@ -250,9 +250,9 @@ export class ActivityScreen {
 
     const title = this.leftLabel(hero, activity.definition.heroTitle, -282, 78, 330, 30, 22, DARK_BROWN);
     title.isBold = true;
-    this.leftLabel(hero, activity.definition.description, -282, 48, 330, 22, 15, MUTED_BROWN);
+    this.leftLabel(hero, activity.definition.description, -282, 48, 330, 26, 17, MUTED_BROWN);
 
-    const caption = this.leftLabel(hero, '当前春游积分', -282, 12, 180, 20, 14, MUTED_BROWN);
+    const caption = this.leftLabel(hero, '当前春游积分', -282, 12, 180, 26, 17, MUTED_BROWN);
     caption.isBold = true;
     // Single label keeps the current and target numbers in one size, tightly grouped.
     this.heroPointsLabel = this.leftLabel(hero, '', -282, -28, 220, 40, 30, CORAL);
@@ -266,7 +266,7 @@ export class ActivityScreen {
     progressNode.addComponent(UITransform).setContentSize(280, 16);
     this.heroProgressGraphics = progressNode.addComponent(Graphics);
 
-    this.heroStatusLabel = this.leftLabel(hero, '', -282, -88, 340, 20, 14, MUTED_BROWN);
+    this.heroStatusLabel = this.leftLabel(hero, '', -282, -88, 340, 26, 17, MUTED_BROWN);
     this.heroStatusLabel.isBold = true;
 
     // Picnic cats on the right side of the card (gray behind, orange in front).
@@ -302,11 +302,11 @@ export class ActivityScreen {
       marker.addComponent(UITransform).setContentSize(32, 32);
       const markerGraphics = marker.addComponent(Graphics);
 
-      const threshold = this.labelBox(item, `${reward.threshold}`, 0, -28, 96, 24, 17, DARK_BROWN);
+      const threshold = this.labelBox(item, `${reward.threshold}`, 0, -28, 96, 26, 18, DARK_BROWN);
       threshold.isBold = true;
-      const name = this.labelBox(item, reward.name, 0, -56, 132, 28, 18, MUTED_BROWN);
+      const name = this.labelBox(item, reward.name, 0, -56, 132, 30, 19, MUTED_BROWN);
       name.overflow = Label.Overflow.SHRINK;
-      const status = this.labelBox(item, '', 0, -82, 132, 26, 18, MUTED_BROWN);
+      const status = this.labelBox(item, '', 0, -82, 132, 28, 19, MUTED_BROWN);
       status.isBold = true;
 
       const button = item.addComponent(Button);
@@ -411,7 +411,7 @@ export class ActivityScreen {
       this.options.onPlaySound('click');
       this.toggleRules(true);
     });
-    const rulesLabel = this.labelBox(this.contentUI!, '活动规则', 225, -572, 140, 24, 15, CREAM);
+    const rulesLabel = this.labelBox(this.contentUI!, '活动规则', 225, -572, 140, 28, 17, CREAM);
     rulesLabel.isBold = true;
     rulesLabel.outlineWidth = 3;
     rulesLabel.outlineColor = GREEN_DARK;

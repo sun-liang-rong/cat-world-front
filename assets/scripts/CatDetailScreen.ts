@@ -1,4 +1,4 @@
-import { styleActionNode, ensureButtonControl } from './Theme';
+import { styleActionNode, ensureButtonControl, createVerticalContent } from './Theme';
 import {
   Button,
   Color,
@@ -171,7 +171,12 @@ export class CatDetailScreen {
     this.coinLabel = this.label(coinChip, '', 18, 0, 23, COLOR_BODY);
     this.coinLabel.isBold = true;
 
-    const panel = this.creamPanel(this.detailUI, 0, -70, 680, 1030, 30, new Color(255, 248, 226, 245), COLOR_STROKE);
+    // 保留详情字号和按钮热区；短屏只滚动内容，不让头像顶进 HUD 或操作压住 Home 条。
+    const panelHeight = 1064;
+    const contentTop = Math.min(445, top - 244);
+    const contentBottom = -top + 68;
+    const content = createVerticalContent(this.detailUI, contentTop, contentBottom, 696, panelHeight + 8);
+    const panel = this.creamPanel(content, 0, -panelHeight / 2, 680, panelHeight, 30, new Color(255, 248, 226, 245), COLOR_STROKE);
 
     // 头像区：光晕徽章 + 立绘 + 出战中角标
     this.buildPortraitBadge(panel, 0, 300);

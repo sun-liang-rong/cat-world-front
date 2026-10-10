@@ -55,16 +55,22 @@ export class Toast {
     state.node.setPosition(0, y);
     state.node.setSiblingIndex(parent.children.length - 1);
 
-    const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, estimateWidth(text) * FONT_SIZE + PAD_X * 2));
+    const maxWidth = Math.min(MAX_WIDTH, view.getVisibleSize().width - 48);
+    const textWidth = estimateWidth(text) * FONT_SIZE;
+    const width = Math.min(maxWidth, Math.max(MIN_WIDTH, textWidth + PAD_X * 2));
+    const lines = Math.min(3, Math.max(1, Math.ceil(textWidth / (width - PAD_X * 2))));
+    const height = Math.max(PANEL_HEIGHT, lines * (FONT_SIZE + 8) + 24);
+    state.node.getComponent(UITransform)!.setContentSize(width, height);
+    state.label.node.getComponent(UITransform)!.setContentSize(width - PAD_X * 2, height - 24);
     state.shadow.clear();
     state.shadow.fillColor = DROP_SHADOW;
-    state.shadow.ellipse(0, -PANEL_HEIGHT / 2 - 8, width * 0.44, 13);
+    state.shadow.ellipse(0, -height / 2 - 8, width * 0.44, 13);
     state.shadow.fill();
     state.panel.clear();
     state.panel.lineWidth = 3;
     state.panel.fillColor = PANEL_FILL;
     state.panel.strokeColor = PANEL_STROKE;
-    state.panel.roundRect(-width / 2, -PANEL_HEIGHT / 2, width, PANEL_HEIGHT, PANEL_HEIGHT / 2);
+    state.panel.roundRect(-width / 2, -height / 2, width, height, 24);
     state.panel.fill();
     state.panel.stroke();
     state.label.string = text;
@@ -134,6 +140,9 @@ export class Toast {
     label.color = TEXT_COLOR;
     label.isBold = true;
     label.horizontalAlign = Label.HorizontalAlign.CENTER;
+    label.verticalAlign = Label.VerticalAlign.CENTER;
+    label.enableWrapText = true;
+    label.overflow = Label.Overflow.SHRINK;
     label.enableShadow = true;
     label.shadowColor = TEXT_SHADOW;
     label.shadowOffset = new Vec2(0, -3);

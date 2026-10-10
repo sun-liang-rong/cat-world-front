@@ -182,7 +182,7 @@ export class ShopScreen {
       card, 84, 158, 68, 30, 15,
       new Color(255, 248, 226, 235), new Color(235, 205, 158),
     );
-    const countLabel = this.label(countTag, '', 0, -1, 15, new Color(136, 94, 63));
+    const countLabel = this.label(countTag, '', 0, -1, 17, new Color(136, 94, 63));
     countLabel.isBold = true;
 
     this.itemViews.push({

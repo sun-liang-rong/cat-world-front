@@ -295,8 +295,9 @@ export class AdventureScreen {
   }
 
   private buildChapterArrows(top: number) {
-    this.buildChapterArrow('AdventureChapterUp', 312, 296, true);
-    this.buildChapterArrow('AdventureChapterDown', 312, -268, false);
+    // 箭头贴地图区域上下边，短屏也不会压进底部关卡卡片。
+    this.buildChapterArrow('AdventureChapterUp', 304, top - BANNER_Y_FROM_TOP - BANNER_HEIGHT / 2 - 66, true);
+    this.buildChapterArrow('AdventureChapterDown', 304, -top + 440, false);
   }
 
   private buildChapterArrow(name: string, x: number, y: number, up: boolean) {
@@ -522,10 +523,11 @@ export class AdventureScreen {
     const start = new Node('AdventureStartButton');
     card.addChild(start);
     start.setPosition(222, -4);
-    start.addComponent(UITransform).setContentSize(204, 85);
+    // 视觉底板和点击热区保持同一高度，避免底板超出 Button 热区造成“点到边缘没反应”。
+    start.addComponent(UITransform).setContentSize(204, 96);
     const inner = new Node('AdventureStartButtonInner');
     start.addChild(inner);
-    inner.addComponent(UITransform).setContentSize(204, 85);
+    inner.addComponent(UITransform).setContentSize(204, 96);
     // 统一主 CTA：橙色（tasks/daily_button_primary 与每日任务页同款素材），绿色底只留给次级元素。
     styleActionNode(inner, 'primary', 204, 96);
     const startLabel = this.label(inner, '开始挑战', 0, -2, 30, new Color(255, 251, 238));
@@ -544,7 +546,7 @@ export class AdventureScreen {
   }
 
   private buildThemeBar(bottom: number) {
-    const y = bottom + 107;
+    const y = bottom + 130;
     const panel = this.roundedShape(
       this.adventureUI!, 'AdventureThemeBar', 0, y, 700, 122, 32,
       COLORS.cream, COLORS.border, 4,
@@ -705,7 +707,7 @@ export class AdventureScreen {
       name.node.getComponent(UITransform)!.setContentSize(124, 28);
 
       const subText = !unlocked ? '未解锁' : clearedAll ? '已通关' : `${cleared} / ${LEVELS_PER_THEME}`;
-      const sub = this.label(chip, subText, 26, -17, 18, !unlocked ? new Color(170, 158, 136) : clearedAll ? COLORS.goldDark : COLORS.muted);
+    const sub = this.label(chip, subText, 26, -17, 18, !unlocked ? new Color(170, 158, 136) : clearedAll ? COLORS.goldDark : COLORS.muted);
       sub.node.getComponent(UITransform)!.setContentSize(124, 22);
 
       this.addButton(chip, () => this.onThemeChipTap(index, chip, unlocked));

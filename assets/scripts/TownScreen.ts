@@ -292,14 +292,14 @@ export class TownScreen {
     this.dailyTitle.horizontalAlign = Label.HorizontalAlign.LEFT;
     this.dailyTitle.overflow = Label.Overflow.CLAMP;
     this.anchorLeft(this.dailyTitle, 390, 28);
-    this.dailyDescription = this.label(this.dailyCard, '', -246, 8, 17, new Color(136, 94, 63));
+    this.dailyDescription = this.label(this.dailyCard, '', -246, 8, 18, new Color(136, 94, 63));
     this.dailyDescription.horizontalAlign = Label.HorizontalAlign.LEFT;
     this.dailyDescription.overflow = Label.Overflow.CLAMP;
     this.anchorLeft(this.dailyDescription, 400, 24);
-    this.dailyProgress = this.label(this.dailyCard, '', -246, -22, 16, new Color(157, 112, 74));
+    this.dailyProgress = this.label(this.dailyCard, '', -246, -22, 18, new Color(157, 112, 74));
     this.dailyProgress.horizontalAlign = Label.HorizontalAlign.LEFT;
     this.anchorLeft(this.dailyProgress, 250, 22);
-    this.dailyReward = this.label(this.dailyCard, '', 10, -22, 16, new Color(191, 125, 27));
+    this.dailyReward = this.label(this.dailyCard, '', 10, -22, 18, new Color(191, 125, 27));
     this.dailyReward.isBold = true;
     this.dailyReward.horizontalAlign = Label.HorizontalAlign.LEFT;
     this.anchorLeft(this.dailyReward, 160, 22);
@@ -503,7 +503,7 @@ export class TownScreen {
     const strip = new Node('TownBuildingStrip');
     this.townUI!.addChild(strip);
     // 槽位条位置：在面板顶部上方，留出更大的间距
-    strip.setPosition(0, bottom + 708);
+    strip.setPosition(0, bottom + 756);
 
     const slotWidth = 116;
     const gap = 20;
@@ -524,7 +524,7 @@ export class TownScreen {
         84,
         62,
       );
-      const nameColor = this.label(slotNode, building.name, 0, -38, 16, new Color(112, 69, 40));
+      const nameColor = this.label(slotNode, building.name, 0, -38, 18, new Color(112, 69, 40));
       nameColor.isBold = true;
       const checkMark = this.makeCheckMark(slotNode, 43, 40);
       const lockMark = this.makeLockMark(slotNode, 43, 40);
@@ -552,25 +552,25 @@ export class TownScreen {
       this.townUI!,
       'town/panel',
       0,
-      bottom + 348,
+      bottom + 372,
       660,
-      560,
+      608,
       { left: 58, right: 58, top: 62, bottom: 46 },
     );
 
-    this.titleLabel = this.label(this.townPanel, '', -38, 220, 29, new Color(111, 62, 28));
+    this.titleLabel = this.label(this.townPanel, '', -38, 244, 29, new Color(111, 62, 28));
     this.titleLabel.isBold = true;
     this.titleLabel.outlineWidth = 2;
     this.titleLabel.outlineColor = new Color(255, 248, 226);
 
-    this.subtitleLabel = this.label(this.townPanel, '', 0, 182, 18, new Color(136, 94, 63));
+    this.subtitleLabel = this.label(this.townPanel, '', 0, 206, 18, new Color(136, 94, 63));
     this.subtitleLabel.isBold = true;
 
     // 状态角标用动态文字胶囊，避免美术图上"施工中"常驻误导
     this.statusNode = this.roundPanel(
       this.townPanel,
       232,
-      180,
+      244,
       132,
       46,
       23,
@@ -579,31 +579,21 @@ export class TownScreen {
     );
     this.statusLabel = this.label(this.statusNode, '', 0, -1, 18, new Color(112, 69, 40));
     this.statusLabel.isBold = true;
-    const statusButton = this.statusNode.addComponent(Button);
-    ensureButtonControl(statusButton);
-    statusButton.node.on(Button.EventType.CLICK, () => {
-      this.options.onPlaySound('click');
-      const building = this.selected;
-      this.toast(
-        building.completed
-          ? building.name + '已建成'
-          : '建设进度 ' + (building.stage + 1) + ' / ' + building.maxStage,
-      );
-    });
+    // 进度角标只展示状态；阶段卡片已提供详情，避免角标热区与第一排阶段卡重叠。
 
     this.stageRow = new Node('StageRow');
     this.townPanel.addChild(this.stageRow);
-    this.stageRow.setPosition(0, 132);
+    this.stageRow.setPosition(0, 112);
 
     // 小节点格子行：点击「下一格」与主按钮行为一致，都是点亮一格
     this.cellRow = new Node('CellRow');
     this.townPanel.addChild(this.cellRow);
-    this.cellRow.setPosition(0, 12);
+    this.cellRow.setPosition(0, -10);
 
-    this.conditionLabel = this.label(this.townPanel, '', 0, -64, 20, new Color(112, 69, 40));
+    this.conditionLabel = this.label(this.townPanel, '', 0, -90, 20, new Color(112, 69, 40));
     this.conditionLabel.isBold = true;
 
-    this.actionNode = this.image(this.townPanel, 'town/button_action', 0, -152, 450, 74);
+    this.actionNode = this.image(this.townPanel, 'town/button_action', 0, -172, 450, 74);
     styleActionNode(this.actionNode, 'primary', 450, 96);
     this.actionLabel = this.label(this.actionNode, '', 0, 0, 33, new Color(255, 251, 238));
     this.actionLabel.isBold = true;
@@ -648,7 +638,7 @@ export class TownScreen {
       )
       .start();
 
-    this.rewardLabel = this.label(this.townPanel, '', 0, -230, 18, new Color(136, 94, 63));
+    this.rewardLabel = this.label(this.townPanel, '', 0, -256, 20, new Color(136, 94, 63));
     this.rewardLabel.isBold = true;
   }
 
@@ -1149,7 +1139,7 @@ export class TownScreen {
     backdropGraphics.fill();
     backdrop.addComponent(BlockInputEvents);
 
-    const panelHeight = shareOffer ? 780 : 620;
+    const panelHeight = shareOffer ? 816 : 620;
     const panel = this.roundPanel(
       overlay, 0, 0, 580, panelHeight, 34,
       new Color(255, 248, 226), new Color(235, 205, 158),
@@ -1188,7 +1178,7 @@ export class TownScreen {
 
     if (shareOffer) {
       const shareNode = this.roundPanel(
-        panel, 0, -218, 440, 72, 36,
+        panel, 0, -236, 440, 72, 36,
         new Color(244, 131, 165), new Color(184, 74, 110),
       );
       const shareLabel = this.label(shareNode, shareOffer.label, 0, -1, 25, Color.WHITE);
@@ -1202,7 +1192,7 @@ export class TownScreen {
       });
     }
 
-    const actionY = shareOffer ? -322 : -232;
+    const actionY = shareOffer ? -340 : -244;
     const primary = this.roundPanel(
       panel, -116, actionY, 208, 88, 38,
       new Color(255, 224, 108), new Color(201, 148, 47),

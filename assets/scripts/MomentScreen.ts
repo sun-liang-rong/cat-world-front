@@ -252,7 +252,7 @@ export class MomentScreen {
     const fillNode = new Node('MomentProgressFill');
     progress.addChild(fillNode);
     this.progressFill = fillNode.addComponent(Graphics);
-    this.progressLabel = this.label(progress, '', TRACK.x + TRACK.width / 2, -1, 15, Color.WHITE);
+    this.progressLabel = this.label(progress, '', TRACK.x + TRACK.width / 2, -1, 18, Color.WHITE);
     this.progressLabel.isBold = true;
     this.progressLabel.outlineWidth = 3;
     this.progressLabel.outlineColor = COLORS.outline;
@@ -376,11 +376,11 @@ export class MomentScreen {
     const barLabel = this.leftLabel(bar, '', -96, 0, 20, Color.WHITE, 192);
     barLabel.isBold = true;
 
-    const descLabel = this.leftLabel(card, '', TEXT_X, -4, 17, COLORS.body, TEXT_WIDTH);
-    descLabel.node.getComponent(UITransform)!.setContentSize(TEXT_WIDTH, 48);
-    descLabel.lineHeight = 24;
+    const descLabel = this.leftLabel(card, '', TEXT_X, -4, 20, COLORS.body, TEXT_WIDTH);
+    descLabel.node.getComponent(UITransform)!.setContentSize(TEXT_WIDTH, 52);
+    descLabel.lineHeight = 28;
 
-    const hintLabel = this.leftLabel(card, '', TEXT_X, -64, 16, COLORS.muted, TEXT_WIDTH);
+    const hintLabel = this.leftLabel(card, '', TEXT_X, -64, 18, COLORS.muted, TEXT_WIDTH);
     hintLabel.isBold = true;
 
     this.simpleSprite(card, 'moment/moment_arrow_card', CARD_WIDTH / 2 - 62, 0, 84);
@@ -513,7 +513,7 @@ export class MomentScreen {
     this.detailDescription.node.getComponent(UITransform)!.setContentSize(510, 64);
     this.detailDescription.lineHeight = 30;
     this.detailDescription.overflow = Label.Overflow.CLAMP;
-    this.detailHint = this.label(panel, '这段回忆会一直留在小镇里', 0, -266, 17, COLORS.muted);
+    this.detailHint = this.label(panel, '这段回忆会一直留在小镇里', 0, -266, 18, COLORS.muted);
     this.detailHint.isBold = true;
   }
 

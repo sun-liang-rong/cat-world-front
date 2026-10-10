@@ -173,7 +173,7 @@ export class SettingsPopup extends Component {
     badgeGraphics.roundRect(-52, -15, 104, 30, 12);
     badgeGraphics.fill();
     badgeGraphics.stroke();
-    const badgeLabel = this.label(badge, '小镇偏好', 0, 0, 16, new Color(112, 69, 40));
+    const badgeLabel = this.label(badge, '小镇偏好', 0, 0, 17, new Color(112, 69, 40));
     badgeLabel.isBold = true;
 
     const close = this.spriteNode(panel, 'SettingsClose', this.frames.btnClose, 240, 216, 88, 88);
@@ -291,7 +291,7 @@ export class SettingsPopup extends Component {
     graphics.moveTo(-170, 0);
     graphics.lineTo(170, 0);
     graphics.stroke();
-    const footer = this.label(panel, '猫爪星球奇遇记', 0, -240, 17, new Color(181, 147, 96));
+    const footer = this.label(panel, '猫爪星球奇遇记', 0, -240, 18, new Color(181, 147, 96));
     footer.isBold = true;
   }
 

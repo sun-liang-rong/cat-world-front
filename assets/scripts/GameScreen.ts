@@ -2050,12 +2050,12 @@ export class GameScreen {
     backdrop.rect(-visibleSize.width / 2, -visibleSize.height / 2, visibleSize.width, visibleSize.height);
     backdrop.fill();
 
-    const panel = this.addPanel('LeavePanel', 0, 20, 560, 280, new Color(255, 248, 226, 255), overlay);
+    const panel = this.addPanel('LeavePanel', 0, 20, 580, 280, new Color(255, 248, 226, 255), overlay);
     const panelGraphics = panel.getComponent(Graphics);
     if (panelGraphics) {
       panelGraphics.strokeColor = new Color(235, 205, 158);
       panelGraphics.lineWidth = 3;
-      panelGraphics.roundRect(-280, -140, 560, 280, 24);
+      panelGraphics.roundRect(-290, -140, 580, 280, 24);
       panelGraphics.stroke();
     }
     const title = this.label(panel, '确定离开吗？', 0, 78, 30, new Color(111, 62, 28));

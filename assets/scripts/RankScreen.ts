@@ -27,7 +27,7 @@ const STAR_X = 186;
 const SCORE_BAR_X = 270;
 const SCORE_BAR_WIDTH = 108;
 const LIST_VIEW_TOP_INSET = 360;
-const LIST_VIEW_BOTTOM_INSET = 224;
+const LIST_VIEW_BOTTOM_INSET = 252;
 const TABS: Array<{ id: LeaderboardTab; label: string }> = [
   { id: 'level', label: '好友星星榜' },
 ];
@@ -151,7 +151,7 @@ export class RankScreen {
     title.isBold = true;
     title.outlineWidth = 2;
     title.outlineColor = new Color(255, 248, 226, 200);
-    this.mockCaption = this.label(this.rankUI!, '', 10, top - 338, 16, new Color(150, 124, 95));
+    this.mockCaption = this.label(this.rankUI!, '', 10, top - 338, 18, new Color(150, 124, 95));
 
     const back = new Node('RankBackButton');
     this.rankUI!.addChild(back);
@@ -385,8 +385,8 @@ export class RankScreen {
   private buildSelfCard(bottom: number) {
     const card = new Node('SelfCard');
     this.rankUI!.addChild(card);
-    // 底边距屏幕底 44px（Home 条安全区），给滚动列表让出最大高度。
-    card.setPosition(0, bottom + 128);
+    // 底边离屏幕 68px，避开 Home 条。
+    card.setPosition(0, bottom + 152);
     card.addComponent(UITransform).setContentSize(690, 168);
 
     const shadow = new Node('SelfCardShadow');
@@ -421,7 +421,7 @@ export class RankScreen {
     this.selfStarsLabel.overflow = Label.Overflow.CLAMP;
     this.selfStarsLabel.node.getComponent(UITransform)!.setContentSize(84, 28);
 
-    this.selfCaptionLabel = this.label(panel, '', -35, 4, 17, new Color(136, 94, 63));
+    this.selfCaptionLabel = this.label(panel, '', -35, 4, 18, new Color(136, 94, 63));
     this.selfCaptionLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
     this.selfCaptionLabel.overflow = Label.Overflow.CLAMP;
     this.selfCaptionLabel.node.getComponent(UITransform)!.setContentSize(330, 24);
