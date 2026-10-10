@@ -1,3 +1,4 @@
+import { ensureButtonControl, styleActionNode } from './Theme';
 import {
   _decorator,
   BlockInputEvents,
@@ -43,9 +44,9 @@ export interface SettlementPopupOptions {
   starReward: number;
   coinReward: number;
   rating: string;
-  /** 覆盖分段胶囊左侧主操作文案，缺省「下一关」 */
+  /** 覆盖主操作文案，缺省「下一关」 */
   nextButtonLabel?: string;
-  /** 覆盖分段胶囊右侧文案，缺省为返回首页 */
+  /** 覆盖次操作文案，缺省为返回首页 */
   homeButtonLabel?: string;
   /** 微信环境下的重要节点分享入口；仅用于自愿展示成果。 */
   share?: {
@@ -88,7 +89,7 @@ export interface SettlementPopupOptions {
 // —— 结算弹窗套件（assets/resources/popup2/，对齐用户设计稿）——
 // 单一粉紫描边九宫格面板（底角绿植雏菊），胜败共用；猫咪趴在面板上沿、爪子搭在绶带上；
 // 标题是粉/灰绶带底图 + 动态 Label；评价/奖励行带浅粉胶囊底；失败为工具箱信息卡；
-// 次操作是两条独立浅粉胶囊，红色广告钮压底。
+// 主操作为暖黄圆角按钮，视频与返回共用一排奶油次按钮。
 const POPUP_ASSETS = {
   panel: 'popup2/panel_result',
   catWin: 'popup2/cat_win_wave',
@@ -112,22 +113,23 @@ const RIBBON_HEIGHT = 120;
 const FAIL_RIBBON_HEIGHT = 95;
 /** 面板顶到第一个内容区块的距离：需低于绶带下缘（150 偏移 + 60 半高 ≈ 210）并留出间距 */
 const HEADER_ZONE = 232;
-const SECTION_GAP = 14;
+const SECTION_GAP = 16;
 /** 评价/奖励行的浅粉胶囊底 */
 const ROW_PILL_WIDTH = 440;
 const ROW_PILL_HEIGHT = 56;
-/** 次操作胶囊按钮（两条并排） */
-const CAPSULE_WIDTH = 200;
-const CAPSULE_HEIGHT = 212;
-const CAPSULE_GAP = 24;
-/** 红色广告主按钮 */
-const AD_WIDTH = 320;
+const ACTION_WIDTH = 440;
+const PRIMARY_HEIGHT = 104;
+const ACTION_GAP = 16;
+const SECONDARY_GAP = 24;
+const SECONDARY_HEIGHT = 88;
+const ACTION_SECTION_HEIGHT = PRIMARY_HEIGHT + ACTION_GAP + SECONDARY_HEIGHT;
+/** 视频与返回首页同宽、同高 */
+const AD_WIDTH = (ACTION_WIDTH - SECONDARY_GAP) / 2;
 const AD_HEIGHT = 88;
-const AD_ROW_GAP = 14;
 /** 分享按钮与其它操作之间的间距。 */
 const SHARE_WIDTH = 440;
 const SHARE_HEIGHT = 88;
-const SHARE_ROW_GAP = 14;
+const SHARE_ROW_GAP = 16;
 /** 失败信息卡（工具箱 + 文案） */
 const CARD_WIDTH = 500;
 const CARD_HEIGHT = 104;
@@ -238,9 +240,8 @@ export class SettlementPopup extends Component {
 
     const hasAdRow = this.hasAdRow(mode);
     const hasShareRow = !!this.options.share;
-    const buttonSectionHeight = CAPSULE_HEIGHT
-      + (hasShareRow ? SHARE_ROW_GAP + SHARE_HEIGHT : 0)
-      + (hasAdRow ? AD_ROW_GAP + AD_HEIGHT : 0);
+    const buttonSectionHeight = ACTION_SECTION_HEIGHT
+      + (hasShareRow ? SHARE_ROW_GAP + SHARE_HEIGHT : 0);
     const sections = this.collectSections(mode);
     const sectionsTotal = sections.reduce((sum, section) => sum + section.height, 0)
       + SECTION_GAP * Math.max(0, sections.length - 1);
@@ -276,27 +277,23 @@ export class SettlementPopup extends Component {
     // 按钮区改为从面板底边向上叠放，全部收进面板框内：
     // 下一关/重试为主操作，视频奖励与自愿分享为次操作。
     const bottomEdge = -(panelHeight / 2 - BOTTOM_PAD);
-    let sectionTop = bottomEdge + buttonSectionHeight;
+    const primaryY = bottomEdge + buttonSectionHeight - PRIMARY_HEIGHT / 2;
+    const secondaryY = bottomEdge + SECONDARY_HEIGHT / 2;
+    this.buildActionButtons(group, primaryY, secondaryY, mode, hasAdRow);
+    if (hasShareRow) {
+      this.buildShareButton(group, secondaryY + SECONDARY_HEIGHT / 2 + SHARE_ROW_GAP + SHARE_HEIGHT / 2);
+    }
     if (hasAdRow) {
       const freeRevive = mode === 'fail' && this.options.freeRevive === true;
       const adText = mode === 'fail'
-        ? (freeRevive ? '免费复活清出一对' : '看视频清出一对')
+        ? (freeRevive ? '免费复活' : '视频复活')
         : '看视频×2金币';
       const onCompleted = mode === 'fail'
         ? () => this.options.onRevive!()
         : () => this.options.onDoubleReward!();
-      sectionTop -= AD_HEIGHT;
-      this.createAdButton(group, adText, 'orange', 0, sectionTop + AD_HEIGHT / 2, onCompleted, freeRevive);
-      sectionTop -= AD_ROW_GAP;
+      this.createAdButton(group, adText, 'orange', -(AD_WIDTH + SECONDARY_GAP) / 2, secondaryY, onCompleted, freeRevive);
       if (!freeRevive) this.options.onTrack?.('ad_entrance_show', { scene: this.adScene() });
     }
-    if (hasShareRow) {
-      sectionTop -= SHARE_HEIGHT;
-      this.buildShareButton(group, sectionTop + SHARE_HEIGHT / 2);
-      sectionTop -= SHARE_ROW_GAP;
-    }
-    sectionTop -= CAPSULE_HEIGHT;
-    this.buildActionButtons(group, sectionTop + CAPSULE_HEIGHT / 2, mode);
   }
 
   private hasAdRow(mode: PopupMode) {
@@ -333,7 +330,7 @@ export class SettlementPopup extends Component {
     sections.push({ height: 60, build: (parent, y) => this.buildRatingRow(parent, y) });
     sections.push({ height: 60, build: (parent, y) => this.buildRewardRow(parent, y) });
     if (this.options.buildTarget) {
-      sections.push({ height: 68, build: (parent, y) => this.buildBuildTargetRow(parent, y) });
+      sections.push({ height: 88, build: (parent, y) => this.buildBuildTargetRow(parent, y) });
     }
     return sections;
   }
@@ -564,14 +561,13 @@ export class SettlementPopup extends Component {
 
     if (canBuild) {
       const button = node.addComponent(Button);
-      button.transition = Button.Transition.SCALE;
-      button.zoomScale = 0.96;
+      ensureButtonControl(button);
       button.node.on(Button.EventType.CLICK, () => this.options.onGoBuild!());
     }
   }
 
   /** 主操作在上，返回小镇在下 */
-  private buildActionButtons(parent: Node, y: number, mode: PopupMode) {
+  private buildActionButtons(parent: Node, primaryY: number, secondaryY: number, mode: PopupMode, hasAd: boolean) {
     const leftText = mode === 'fail'
       ? '再玩一次'
       : mode === 'endless' ? '再玩一局' : mode === 'challenge' ? '再挑战一次' : this.options.nextButtonLabel ?? '下一关';
@@ -579,15 +575,16 @@ export class SettlementPopup extends Component {
       ? this.options.onReplay
       : this.options.onNextLevel;
     const next = SettlementButton.create(parent, this.assets, {
-      text: leftText, tone: 'green', width: 470, height: 112,
-      scale: 1, fontSize: 38, onClick: leftClick,
+      text: leftText, tone: 'orange', appearance: 'primary', width: ACTION_WIDTH, height: PRIMARY_HEIGHT,
+      scale: 1, fontSize: 40, onClick: leftClick,
     });
-    next.setPosition(0, y + 50);
+    next.setPosition(0, primaryY);
     const home = SettlementButton.create(parent, this.assets, {
-      text: this.options.homeButtonLabel ?? '返回首页', tone: 'orange', width: 280, height: 88,
-      scale: 1, fontSize: 26, onClick: this.options.onReturnHome,
+      text: this.options.homeButtonLabel ?? '返回首页', tone: 'orange', appearance: 'secondary',
+      width: hasAd ? AD_WIDTH : ACTION_WIDTH, height: SECONDARY_HEIGHT,
+      scale: 1, fontSize: 24, onClick: this.options.onReturnHome,
     });
-    home.setPosition(0, y - 66);
+    home.setPosition(hasAd ? (AD_WIDTH + SECONDARY_GAP) / 2 : 0, secondaryY);
   }
 
   private buildShareButton(parent: Node, y: number) {
@@ -595,6 +592,7 @@ export class SettlementPopup extends Component {
     const node = SettlementButton.create(parent, this.assets, {
       text: this.options.share.label,
       tone: 'pink',
+      appearance: 'secondary',
       width: SHARE_WIDTH,
       height: SHARE_HEIGHT,
       scale: 1,
@@ -602,26 +600,6 @@ export class SettlementPopup extends Component {
       onClick: () => this.options.share?.onShare(),
     });
     node.setPosition(0, y);
-  }
-
-  private createActionButton(
-    parent: Node,
-    text: string,
-    tone: SettlementButtonTone,
-    x: number,
-    y: number,
-    onClick: () => void,
-  ) {
-    const node = SettlementButton.create(parent, this.assets, {
-      text,
-      tone,
-      width: CAPSULE_WIDTH,
-      height: 88,
-      scale: 1,
-      fontSize: 28,
-      onClick,
-    });
-    node.setPosition(x, y);
   }
 
   private buildEndlessStat(parent: Node, y: number, info: EndlessSettlementInfo) {
@@ -684,6 +662,7 @@ export class SettlementPopup extends Component {
     const node = SettlementButton.create(parent, this.assets, {
       text,
       tone,
+      appearance: 'secondary',
       width: AD_WIDTH,
       height: AD_HEIGHT,
       scale: 1,
@@ -704,6 +683,7 @@ export class SettlementPopup extends Component {
     if (this.adBusy || !this.adButton) return;
     this.adBusy = true;
     this.adButton.interactable = false;
+    styleActionNode(this.adButton.node, 'disabled', AD_WIDTH, AD_HEIGHT);
     if (this.adButtonLabel) this.adButtonLabel.string = '已领取';
     onCompleted();
   }
@@ -713,6 +693,7 @@ export class SettlementPopup extends Component {
     if (this.adBusy || !this.options.onReviveAd || !this.adButton) return;
     this.adBusy = true;
     this.adButton.interactable = false;
+    styleActionNode(this.adButton.node, 'disabled', AD_WIDTH, AD_HEIGHT);
     if (this.adButtonLabel) this.adButtonLabel.string = '视频准备中...';
 
     let completed = false;
@@ -732,7 +713,8 @@ export class SettlementPopup extends Component {
 
     this.adBusy = false;
     this.adButton.interactable = true;
-    if (this.adButtonLabel) this.adButtonLabel.string = '看视频清出一对';
+    styleActionNode(this.adButton.node, 'secondary', AD_WIDTH, AD_HEIGHT);
+    if (this.adButtonLabel) this.adButtonLabel.string = '视频复活';
   }
 
   /** 激励视频双倍金币：播放激励视频，成功后补发与基础奖励相同数量的金币；失败可重试。 */
@@ -740,6 +722,7 @@ export class SettlementPopup extends Component {
     if (this.adBusy || !this.options.onDoubleRewardAd || !this.adButton) return;
     this.adBusy = true;
     this.adButton.interactable = false;
+    styleActionNode(this.adButton.node, 'disabled', AD_WIDTH, AD_HEIGHT);
     if (this.adButtonLabel) this.adButtonLabel.string = '视频准备中...';
 
     let completed = false;
@@ -759,6 +742,7 @@ export class SettlementPopup extends Component {
 
     this.adBusy = false;
     this.adButton.interactable = true;
+    styleActionNode(this.adButton.node, 'secondary', AD_WIDTH, AD_HEIGHT);
     if (this.adButtonLabel) this.adButtonLabel.string = '看视频×2金币';
   }
 

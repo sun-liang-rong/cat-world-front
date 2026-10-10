@@ -1,3 +1,4 @@
+import { styleActionNode, styleActionLabel, ensureButtonControl } from './Theme';
 import {
   BlockInputEvents,
   Button,
@@ -498,10 +499,11 @@ export class GameScreen {
     buttonGraphics.fillColor = new Color(255, 224, 108);
     buttonGraphics.roundRect(-180, -56, 360, 112, 24);
     buttonGraphics.fill();
-    this.label(buttonNode, '继续本局', 0, 0, 36, new Color(111, 62, 28));
+    styleActionNode(buttonNode, 'primary', 360, 112);
+    const continueLabel = this.label(buttonNode, '继续本局', 0, 0, 36, new Color(111, 62, 28));
+    styleActionLabel(continueLabel, 360, 112, 36);
     const button = buttonNode.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     buttonNode.on(Button.EventType.CLICK, () => {
       const elapsed = Date.now() - this.pausedAt;
       this.startedAt += elapsed;
@@ -612,8 +614,7 @@ export class GameScreen {
     this.image(back, COMMON_UI_ASSETS.backButton, 0, 0, BACK_BUTTON_SIZE.visualWidth, BACK_BUTTON_SIZE.visualHeight);
 
     const backButton = back.addComponent(Button);
-    backButton.transition = Button.Transition.SCALE;
-    backButton.zoomScale = 0.93;
+    ensureButtonControl(backButton);
     backButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.requestLeave();
@@ -627,8 +628,7 @@ export class GameScreen {
     settingsEntry.addComponent(UITransform).setContentSize(88, 88);
     this.image(settingsEntry, 'home_crops/hud_settings', 0, 0, 72, 72);
     const settingsButton = settingsEntry.addComponent(Button);
-    settingsButton.transition = Button.Transition.SCALE;
-    settingsButton.zoomScale = 0.93;
+    ensureButtonControl(settingsButton);
     settingsButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.openSettings();
@@ -884,8 +884,7 @@ export class GameScreen {
     chargeLabel.enableWrapText = false;
     chargeLabel.node.getComponent(UITransform)!.setContentSize(152, 28);
     const button = panel.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.onCatSkillTap();
@@ -2104,11 +2103,12 @@ export class GameScreen {
     graphics.roundRect(-110, -36, 220, 72, 18);
     graphics.fill();
     graphics.stroke();
-    const label = this.label(node, text, 0, 0, 24, new Color(255, 251, 238));
+    styleActionNode(node, x < 0 ? 'primary' : 'secondary', 220, 88);
+    const label = this.label(node, text, 0, 0, 24, new Color(111, 62, 28));
+    styleActionLabel(label, 220, 88);
     label.isBold = true;
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       onClick();
@@ -2533,8 +2533,7 @@ export class GameScreen {
     count.outlineColor = new Color(90, 61, 38);
     this.toolNameBadge(buttonNode, name, 82);
     const button = buttonNode.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     this.toolButtonViews.set(itemId, {
       node: buttonNode,
       button,

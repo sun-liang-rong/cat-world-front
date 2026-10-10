@@ -1,3 +1,4 @@
+import { ensureButtonControl, Theme } from './Theme';
 import {
   BlockInputEvents,
   Button,
@@ -16,7 +17,6 @@ import {
   view,
 } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
-import { Theme } from './Theme';
 import { MomentCategory, MomentSnapshot, MOMENT_DEFINITIONS } from './MomentContent';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
@@ -806,10 +806,9 @@ export class MomentScreen {
     return label;
   }
 
-  private addTapFeedback(node: Node, onTap: () => void, zoomScale = 0.93) {
+  private addTapFeedback(node: Node, onTap: () => void, _zoomScale = 0.93) {
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = zoomScale;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       onTap();

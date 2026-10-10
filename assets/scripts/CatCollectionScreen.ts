@@ -1,3 +1,4 @@
+import { ensureButtonControl, Theme, TITLE_SIGN } from './Theme';
 import {
   Button,
   Color,
@@ -14,7 +15,6 @@ import {
 } from 'cc';
 import { CAT_DEFINITIONS, CatDefinition } from './GameContent';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
-import { Theme, TITLE_SIGN } from './Theme';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
 import { CatId, CatProgress, CatTrialStatus } from './PlayerTypes';
@@ -314,13 +314,12 @@ export class CatCollectionScreen {
     name.node.getComponent(UITransform)!.setContentSize(tier.plaqueWidth - 20, 28);
     name.overflow = Label.Overflow.SHRINK;
 
-    const status = this.label(plaqueNode, '', 0, -13, 14, COLORS.body);
+    const status = this.label(plaqueNode, '', 0, -13, 18, COLORS.body);
     status.node.getComponent(UITransform)!.setContentSize(tier.plaqueWidth - 16, 22);
     status.overflow = Label.Overflow.SHRINK;
 
     const button = slot.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const progress = this.options.getCats()[definition.id];
@@ -472,8 +471,7 @@ export class CatCollectionScreen {
     this.image(node, COMMON_UI_ASSETS.backButton, 0, 0, BACK_BUTTON_SIZE.visualWidth, BACK_BUTTON_SIZE.visualHeight);
 
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       callback();

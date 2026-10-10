@@ -1,3 +1,4 @@
+import { styleActionNode, styleActionLabel, ensureButtonControl } from './Theme';
 import { Button, Color, Graphics, Label, Mask, Node, ScrollView, Sprite, SubContextView, Size, UITransform, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
 import { AudioEffect } from './AudioManager';
@@ -158,8 +159,7 @@ export class RankScreen {
     back.addComponent(UITransform).setContentSize(BACK_BUTTON_SIZE.hitWidth, BACK_BUTTON_SIZE.hitHeight);
     this.image(back, COMMON_UI_ASSETS.backButton, 0, 0, BACK_BUTTON_SIZE.visualWidth, BACK_BUTTON_SIZE.visualHeight);
     const button = back.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.options.onReturnHome();
@@ -212,8 +212,7 @@ export class RankScreen {
       const label = this.label(node, tab.label, 0, 0, 22, new Color(112, 69, 40));
       label.isBold = true;
       const button = node.addComponent(Button);
-      button.transition = Button.Transition.SCALE;
-      button.zoomScale = 0.93;
+      ensureButtonControl(button);
       button.node.on(Button.EventType.CLICK, () => {
         if (this.currentTab === tab.id) return;
         this.options.onPlaySound('click');
@@ -291,11 +290,11 @@ export class RankScreen {
     graphics.roundRect(-100, -36, 200, 72, 36);
     graphics.fill();
     graphics.stroke();
+    styleActionNode(node, 'primary', 200, 96);
     const label = this.label(node, '点击重试', 0, 0, 24, new Color(112, 69, 40));
-    label.isBold = true;
+    styleActionLabel(label, 200, 96, 24);
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     node.active = false;
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
@@ -445,15 +444,14 @@ export class RankScreen {
     panel.addChild(node);
     node.setPosition(240, 0);
     node.addComponent(UITransform).setContentSize(192, 88);
-    const visual = this.image(node, 'rank/btn_gold', 0, 0, 190, 86);
-    if (!this.assets.getFrame('rank/btn_gold')) this.drawPillFallback(visual, 190, 86);
+    styleActionNode(node, 'secondary', 192, 88);
     const label = this.label(node, '邀请好友', 0, 0, 26, new Color(255, 251, 238));
     label.isBold = true;
     label.outlineWidth = 2;
     label.outlineColor = new Color(184, 74, 10);
+    styleActionLabel(label, 192, 88, 24);
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const sent = this.options.onInvite();
@@ -560,15 +558,14 @@ export class RankScreen {
     state.addChild(button);
     button.setPosition(0, -128);
     button.addComponent(UITransform).setContentSize(232, 100);
-    const visual = this.image(button, 'rank/btn_gold', 0, 0, 230, 98);
-    if (!this.assets.getFrame('rank/btn_gold')) this.drawPillFallback(visual, 230, 98);
+    styleActionNode(button, 'secondary', 288, 96);
     const label = this.label(button, '邀请好友一起玩', 0, 0, 26, new Color(255, 251, 238));
     label.isBold = true;
     label.outlineWidth = 2;
     label.outlineColor = new Color(184, 74, 10);
+    styleActionLabel(label, 288, 96, 24);
     const buttonComponent = button.addComponent(Button);
-    buttonComponent.transition = Button.Transition.SCALE;
-    buttonComponent.zoomScale = 0.93;
+    ensureButtonControl(buttonComponent);
     buttonComponent.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const sent = this.options.onInvite();

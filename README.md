@@ -25,7 +25,7 @@
 
 ## 结算弹窗
 
-结算 UI 位于 `assets/scripts/SettlementPopup.ts`，通过 `SettlementPopup.open(parent, options)` 创建，素材位于 `assets/resources/result_model/`。`GameScreen.ts` 负责传入结算状态、奖励数值和按钮回调，成功 / 失败弹窗均可从结算页返回首页，因此后续关卡或其他玩法可以复用同一套弹窗。
+结算 UI 位于 `assets/scripts/SettlementPopup.ts`，通过 `SettlementPopup.open(parent, options)` 创建，装饰素材位于 `assets/resources/popup2/`，按钮由 `Theme.ts` 的共享暖黄/奶油圆角底板绘制。`GameScreen.ts` 负责传入结算状态、奖励数值和按钮回调，成功 / 失败弹窗均可从结算页返回首页，因此后续关卡或其他玩法可以复用同一套弹窗。
 
 ## 打开方式
 

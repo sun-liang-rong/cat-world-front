@@ -1,3 +1,4 @@
+import { styleActionNode, styleActionLabel, ensureButtonControl } from './Theme';
 import { BlockInputEvents, Button, Color, Graphics, Label, Node, Sprite, tween, UIOpacity, UITransform, Vec2, Vec3, view } from 'cc';
 import { TrackEventName, TrackProps } from './Analytics';
 import { ActivitySnapshot } from './ActivityContent';
@@ -312,10 +313,9 @@ export class HomeScreen {
     return node;
   }
 
-  private addTapFeedback(node: Node, onTap: () => void, zoomScale = 0.93) {
+  private addTapFeedback(node: Node, onTap: () => void, _zoomScale = 0.93) {
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = zoomScale;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       onTap();
@@ -720,7 +720,8 @@ export class HomeScreen {
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const startLabel = this.label(startButton, '立即试住', 0, -1, 25, new Color(111, 62, 28));
-    startLabel.isBold = true;
+    styleActionNode(startButton, 'primary');
+    styleActionLabel(startLabel, startButton.getComponent(UITransform)!.contentSize.width, 88, startLabel.fontSize);
     this.addTapFeedback(startButton, () => {
       this.options.onTrack?.('cat_trial_offer_click', { accepted: true });
       this.closeCatTrialOffer();
@@ -732,7 +733,8 @@ export class HomeScreen {
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const laterLabel = this.label(laterButton, '稍后再说', 0, -1, 23, new Color(135, 104, 76));
-    laterLabel.isBold = true;
+    styleActionNode(laterButton, 'secondary');
+    styleActionLabel(laterLabel, laterButton.getComponent(UITransform)!.contentSize.width, 88, laterLabel.fontSize);
     this.addTapFeedback(laterButton, () => {
       this.options.onTrack?.('cat_trial_offer_click', { accepted: false });
       this.closeCatTrialOffer();
@@ -867,18 +869,20 @@ export class HomeScreen {
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const goLabel = this.label(goButton, '去看看', 0, -1, 25, new Color(111, 62, 28));
-    goLabel.isBold = true;
+    styleActionNode(goButton, 'primary');
+    styleActionLabel(goLabel, goButton.getComponent(UITransform)!.contentSize.width, 88, goLabel.fontSize);
     this.addTapFeedback(goButton, () => {
       this.closeChallengeUnlockNotice();
       this.options.onStartChallenge();
     });
 
     const laterButton = this.creamPanel(
-      panel, 104, -130, 168, 88, 44,
+      panel, 112, -130, 168, 88, 44,
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const laterLabel = this.label(laterButton, '稍后再说', 0, -1, 22, new Color(135, 104, 76));
-    laterLabel.isBold = true;
+    styleActionNode(laterButton, 'secondary');
+    styleActionLabel(laterLabel, laterButton.getComponent(UITransform)!.contentSize.width, 88, laterLabel.fontSize);
     this.addTapFeedback(laterButton, () => this.closeChallengeUnlockNotice(), 0.95);
   }
 
@@ -949,7 +953,8 @@ export class HomeScreen {
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const okLabel = this.label(okButton, '知道了', 0, -1, 24, new Color(111, 62, 28));
-    okLabel.isBold = true;
+    styleActionNode(okButton, 'primary');
+    styleActionLabel(okLabel, okButton.getComponent(UITransform)!.contentSize.width, 88, okLabel.fontSize);
     this.addTapFeedback(okButton, () => this.closeChallengeLockPanel(), 0.95);
   }
 
@@ -1062,7 +1067,8 @@ export class HomeScreen {
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const goLabel = this.label(goButton, '去建设', 0, -1, 26, new Color(111, 62, 28));
-    goLabel.isBold = true;
+    styleActionNode(goButton, 'primary');
+    styleActionLabel(goLabel, goButton.getComponent(UITransform)!.contentSize.width, 88, goLabel.fontSize);
     this.addTapFeedback(goButton, () => {
       this.closeFirstTownGuide(false);
       this.options.onFirstTownGuideDone?.();
@@ -1074,7 +1080,8 @@ export class HomeScreen {
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const skipLabel = this.label(skipButton, '稍后再说', 0, -1, 22, new Color(135, 104, 76));
-    skipLabel.isBold = true;
+    styleActionNode(skipButton, 'secondary');
+    styleActionLabel(skipLabel, skipButton.getComponent(UITransform)!.contentSize.width, 88, skipLabel.fontSize);
     this.addTapFeedback(skipButton, () => {
       this.options.onFirstTownGuideDone?.();
       this.closeFirstTownGuide(true);
@@ -1331,7 +1338,7 @@ export class HomeScreen {
   private buildStartCluster(bottom: number) {
     const cluster = new Node('StartCluster');
     this.homeUI!.addChild(cluster);
-    cluster.setPosition(0, bottom + 380);
+    cluster.setPosition(0, bottom + 424);
 
     const start = new Node('StartButton');
     cluster.addChild(start);
@@ -1349,7 +1356,7 @@ export class HomeScreen {
 
     const inner = new Node('StartInner');
     start.addChild(inner);
-    this.homeCrop(inner, 'button_start', 0, 0, 420, 118);
+    styleActionNode(inner, 'primary', 420, 118);
     const text = this.label(inner, '开始闯关', 0, 0, 44, new Color(255, 251, 238));
     this.startLabel = text;
     text.isBold = true;
@@ -1358,10 +1365,10 @@ export class HomeScreen {
     text.enableShadow = true;
     text.shadowColor = new Color(150, 66, 14, 160);
     text.shadowOffset = new Vec2(0, -4);
+    styleActionLabel(text, 420, 118, 44);
 
     const button = start.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.options.onStartGame();
@@ -1376,15 +1383,15 @@ export class HomeScreen {
       )
       .start();
 
-    const goalPanel = this.creamPanel(cluster, 0, 130, 624, 56, 22, new Color(255, 248, 226, 240), new Color(235, 205, 158));
-    this.goalLabel = this.label(goalPanel, '', 0, 0, 23, new Color(111, 62, 28));
+    const goalPanel = this.creamPanel(cluster, 0, 152, 624, 56, 22, new Color(255, 248, 226, 240), new Color(235, 205, 158));
+    this.goalLabel = this.label(goalPanel, '', 0, 0, 21, new Color(111, 62, 28));
     this.goalLabel.isBold = true;
     this.goalLabel.outlineWidth = 4;
     this.goalLabel.outlineColor = new Color(255, 248, 226);
 
     const endless = new Node('EndlessButton');
     cluster.addChild(endless);
-    endless.setPosition(0, -81);
+    endless.setPosition(0, -92);
     endless.addComponent(UITransform).setContentSize(300, 78);
 
     const endlessShadow = new Node('EndlessShadow');
@@ -1398,11 +1405,11 @@ export class HomeScreen {
 
     const endlessInner = new Node('EndlessInner');
     endless.addChild(endlessInner);
-    this.homeCrop(endlessInner, 'button_start', 0, 0, 300, 78);
+    styleActionNode(endlessInner, 'secondary', 300, 88);
     this.endlessLabel = this.label(endlessInner, '无尽模式', 0, 0, 30, new Color(255, 251, 238));
     this.endlessLabel.isBold = true;
     this.endlessLabel.outlineWidth = 4;
-    this.endlessLabel.outlineColor = new Color(184, 74, 10);
+    styleActionLabel(this.endlessLabel, 300, 88, 28);
     this.addTapFeedback(endless, () => {
       if (!this.options.isEndlessUnlocked()) {
         this.toast('先通关第 1 关再来挑战无尽');
@@ -1412,7 +1419,7 @@ export class HomeScreen {
     }, 0.93);
     this.refreshPlayEntries();
 
-    cluster.setScale(new Vec3(0.72, 0.72, 1));
+    cluster.setScale(new Vec3(1, 1, 1));
     const opacity = cluster.addComponent(UIOpacity);
     opacity.opacity = 0;
     tween(cluster)
@@ -1478,7 +1485,7 @@ export class HomeScreen {
     if (this.endlessLabel) {
       const unlocked = this.options.isEndlessUnlocked();
       this.endlessLabel.string = unlocked ? '无尽模式' : '无尽未解锁';
-      this.endlessLabel.color = unlocked ? new Color(255, 251, 238) : new Color(255, 236, 206);
+      this.endlessLabel.color = unlocked ? new Color(111, 62, 28) : new Color(150, 137, 121);
     }
   }
 
@@ -1515,7 +1522,7 @@ export class HomeScreen {
   }
 
   private buildBottomNav(bottom: number) {
-    const navWidth = 702;
+    const navWidth = 688;
     const navHeight = 168;
     // Keep the navigation bar above the home-indicator safe area.
     const navFinalY = bottom + navHeight / 2 + 68;
@@ -1956,7 +1963,8 @@ export class HomeScreen {
     const close = this.creamPanel(parent, 0, -320, 240, 88, 28,
       new Color(255, 224, 108), new Color(201, 148, 47));
     const closeLabel = this.label(close, '知道了', 0, -2, 30, new Color(111, 62, 28));
-    closeLabel.isBold = true;
+    styleActionNode(close, 'secondary', 240, 88);
+    styleActionLabel(closeLabel, 240, 88, 24);
     this.addTapFeedback(close, () => this.toggleGuide(false), 0.93);
   }
 
@@ -2061,13 +2069,14 @@ export class HomeScreen {
 
     // 分享按钮（复用结算弹窗的绿色胶囊底图）
     const shareButtonNode = this.image(panel, 'popup/btn_green', 0, -150, 236, 88);
+    styleActionNode(shareButtonNode, 'primary', 236, 88);
     const shareLabel = this.label(shareButtonNode, '去闯关', 0, 0, 24, Color.WHITE);
     shareLabel.isBold = true;
     shareLabel.outlineWidth = 3;
     shareLabel.outlineColor = new Color(43, 94, 34);
+    styleActionLabel(shareLabel, 236, 88, 24);
     const shareButton = shareButtonNode.addComponent(Button);
-    shareButton.transition = Button.Transition.SCALE;
-    shareButton.zoomScale = 0.93;
+    ensureButtonControl(shareButton);
     shareButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.toggleCoinAdPopup(false);

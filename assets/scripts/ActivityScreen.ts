@@ -1,3 +1,4 @@
+import { drawActionSurface, styleActionLabel, ensureButtonControl } from './Theme';
 import {
   BlockInputEvents,
   Button,
@@ -181,7 +182,7 @@ export class ActivityScreen {
 
   private buildHeader(activity: ActivitySnapshot) {
     const visuals = activity.definition.visuals;
-    const headerY = belowWeChatCapsule(DESIGN_HEIGHT / 2, 64);
+    const headerY = DESIGN_HEIGHT / 2 - 112;
     // Back button (visual art is smaller than the 88px hit area on purpose).
     this.buildImageButton(
       this.contentUI!,
@@ -229,7 +230,7 @@ export class ActivityScreen {
     chipGraphics.lineTo(-51, -3);
     chipGraphics.stroke();
     // Centered in the space right of the clock so varying text lengths stay balanced.
-    this.countdownLabel = this.labelBox(chip, '', 20, 0, 114, 34, 15, DARK_BROWN);
+    this.countdownLabel = this.labelBox(chip, '', 20, 0, 114, 34, 20, DARK_BROWN);
     this.countdownLabel.isBold = true;
   }
 
@@ -293,7 +294,7 @@ export class ActivityScreen {
       const item = new Node(`Reward_${reward.id}`);
       panel.addChild(item);
       item.setPosition(x, 0);
-      item.addComponent(UITransform).setContentSize(132, 190);
+      item.addComponent(UITransform).setContentSize(120, 190);
       this.image(item, reward.iconPath, 0, 54, 64, 64);
       const marker = new Node('RewardMarker');
       item.addChild(marker);
@@ -303,14 +304,13 @@ export class ActivityScreen {
 
       const threshold = this.labelBox(item, `${reward.threshold}`, 0, -28, 96, 24, 17, DARK_BROWN);
       threshold.isBold = true;
-      const name = this.labelBox(item, reward.name, 0, -56, 132, 24, 16, MUTED_BROWN);
+      const name = this.labelBox(item, reward.name, 0, -56, 132, 28, 18, MUTED_BROWN);
       name.overflow = Label.Overflow.SHRINK;
-      const status = this.labelBox(item, '', 0, -82, 132, 22, 14, MUTED_BROWN);
+      const status = this.labelBox(item, '', 0, -82, 132, 26, 18, MUTED_BROWN);
       status.isBold = true;
 
       const button = item.addComponent(Button);
-      button.transition = Button.Transition.SCALE;
-      button.zoomScale = 0.93;
+      ensureButtonControl(button, this.contentUI?.scale.x ?? 1);
       button.node.on(Button.EventType.CLICK, () => {
         this.options.onPlaySound('click');
         const success = this.options.onClaimReward(reward.id);
@@ -324,7 +324,7 @@ export class ActivityScreen {
   private buildTasks(activity: ActivitySnapshot) {
     const panel = this.creamPanel(this.contentUI!, 0, -250, 700, 372, 28, new Color(255, 248, 226, 242), PANEL_STROKE);
     this.taskTab = this.buildSectionTab(panel, -238, 186, '远征任务');
-    this.labelBox(panel, '完成后记得回来领取积分', 135, 156, 236, 24, 14, MUTED_BROWN, {
+    this.labelBox(panel, '完成后记得回来领取积分', 135, 156, 236, 28, 18, MUTED_BROWN, {
       horizontalAlign: Label.HorizontalAlign.RIGHT,
     });
 
@@ -351,11 +351,11 @@ export class ActivityScreen {
       plateGraphics.stroke();
       this.image(plate, task.iconPath, 0, 0, 50, 50);
 
-      const taskTitle = this.leftLabel(row, task.title, -224, 20, 230, 26, 19, DARK_BROWN);
+      const taskTitle = this.leftLabel(row, task.title, -224, 20, 230, 28, 20, DARK_BROWN);
       taskTitle.isBold = true;
-      this.leftLabel(row, task.description, -224, -12, 240, 22, 14, MUTED_BROWN);
+      this.leftLabel(row, task.description, -224, -12, 240, 26, 18, MUTED_BROWN);
 
-      const progressLabel = this.leftLabel(row, '', 36, 22, 120, 22, 15, DARK_BROWN);
+      const progressLabel = this.leftLabel(row, '', 36, 22, 120, 28, 18, DARK_BROWN);
       progressLabel.isBold = true;
       const progressNode = new Node('TaskProgress');
       row.addChild(progressNode);
@@ -363,7 +363,7 @@ export class ActivityScreen {
       progressNode.addComponent(UITransform).setContentSize(120, 12);
       const progressGraphics = progressNode.addComponent(Graphics);
 
-      const buttonNode = this.actionButton(row, 252, 0, 118, 58, '去完成', CORAL, CORAL_DARK, 17, 24);
+      const buttonNode = this.actionButton(row, 252, 0, 118, 88, '去完成', CORAL, CORAL_DARK, 17, 24);
       buttonNode.button.node.on(Button.EventType.CLICK, () => {
         this.options.onPlaySound('click');
         const current = this.options.getActivity().tasks.find(item => item.id === task.id);
@@ -406,8 +406,7 @@ export class ActivityScreen {
     this.drawCircleButton(graphics, 0, 0, 46, CREAM, new Color(142, 92, 48));
     this.drawBook(graphics, 0, 2);
     const button = rules.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button, this.contentUI?.scale.x ?? 1);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.toggleRules(true);
@@ -496,19 +495,8 @@ export class ActivityScreen {
         progress / Math.max(1, task.target),
         task.completed ? GREEN : new Color(133, 192, 64),
       );
-      if (claimable) {
-        this.drawActionButton(viewData.buttonGraphics, 118, 58, GOLD, GOLD_DARK, 24);
-        viewData.buttonLabel.color = DARK_BROWN;
-        viewData.buttonLabel.outlineColor = CREAM;
-      } else if (task.claimed) {
-        this.drawActionButton(viewData.buttonGraphics, 118, 58, new Color(184, 221, 169), new Color(143, 178, 128), 24);
-        viewData.buttonLabel.color = GREEN_DARK;
-        viewData.buttonLabel.outlineColor = new Color(184, 221, 169);
-      } else {
-        this.drawActionButton(viewData.buttonGraphics, 118, 58, CORAL, CORAL_DARK, 24);
-        viewData.buttonLabel.color = Color.WHITE;
-        viewData.buttonLabel.outlineColor = CORAL_DARK;
-      }
+      drawActionSurface(viewData.buttonGraphics, 118, 88, viewData.button.interactable ? 'primary' : 'disabled');
+      styleActionLabel(viewData.buttonLabel, 118, 88, 20);
       // Highlight rows that have a reward waiting for pickup.
       this.drawPanelCard(
         viewData.rowGraphics,
@@ -547,7 +535,7 @@ export class ActivityScreen {
       this.primaryButtonLabel.string =
         activity.status === 'locked' ? '暂未开放' : playable ? '开始挑战' : '活动已结束';
       this.drawActionButton(this.primaryGraphics, 320, 96, playable ? CORAL : DISABLED_FILL, playable ? CORAL_DARK : DISABLED_STROKE, 32);
-      this.primaryButtonLabel.outlineColor = playable ? CORAL_DARK : new Color(150, 143, 122);
+      styleActionLabel(this.primaryButtonLabel, 320, 96, 26);
     }
   }
 
@@ -585,16 +573,7 @@ export class ActivityScreen {
   }
 
   private drawActionButton(graphics: Graphics, width: number, height: number, fill: Color, stroke: Color, radius: number) {
-    graphics.clear();
-    graphics.fillColor = new Color(104, 61, 35, 60);
-    graphics.roundRect(-width / 2 + 2, -height / 2 - 5, width, height, radius);
-    graphics.fill();
-    graphics.fillColor = fill;
-    graphics.strokeColor = stroke;
-    graphics.lineWidth = 3;
-    graphics.roundRect(-width / 2, -height / 2, width, height, radius);
-    graphics.fill();
-    graphics.stroke();
+    drawActionSurface(graphics, width, Math.max(88, height), fill === DISABLED_FILL ? 'disabled' : fill === CORAL ? 'primary' : 'secondary');
   }
 
   // Shared green capsule style for section tabs and the hero card tag.
@@ -698,6 +677,7 @@ export class ActivityScreen {
     fontSize = 18,
     radius = 24,
   ) {
+    height = Math.max(88, height);
     const node = new Node('ActionButton');
     parent.addChild(node);
     node.setPosition(x, y);
@@ -705,12 +685,12 @@ export class ActivityScreen {
     const graphics = node.addComponent(Graphics);
     this.drawActionButton(graphics, width, height, fill, stroke, radius);
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button, parent === this.contentUI || parent.parent === this.contentUI ? this.contentUI?.scale.x ?? 1 : 1);
     const label = this.labelBox(node, text, 0, 0, width - 10, height - 10, fontSize, Color.WHITE);
     label.isBold = true;
     label.outlineWidth = 2;
     label.outlineColor = stroke;
+    styleActionLabel(label, width, height, fontSize);
     return { node, button, label, graphics };
   }
 
@@ -731,8 +711,7 @@ export class ActivityScreen {
     node.addComponent(UITransform).setContentSize(Math.max(88, hitWidth), Math.max(88, hitHeight));
     this.image(node, path, 0, 0, visualWidth, visualHeight);
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button, this.contentUI?.scale.x ?? 1);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       onClick();

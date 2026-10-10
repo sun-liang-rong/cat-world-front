@@ -1,3 +1,4 @@
+import { styleActionNode, styleActionLabel, ensureButtonControl } from './Theme';
 import { Button, Color, Graphics, Label, Node, Sprite, UITransform, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
@@ -133,8 +134,7 @@ export class ShopScreen {
     node.addComponent(UITransform).setContentSize(BACK_BUTTON_SIZE.hitWidth, BACK_BUTTON_SIZE.hitHeight);
     this.image(node, COMMON_UI_ASSETS.backButton, 0, 0, BACK_BUTTON_SIZE.visualWidth, BACK_BUTTON_SIZE.visualHeight);
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.options.onReturnHome();
@@ -169,11 +169,11 @@ export class ShopScreen {
     description.node.getComponent(UITransform)!.setContentSize(250, 52);
 
     const buttonNode = this.image(card, 'shop/button_buy', 0, -147, 236, 88);
-    const buttonLabel = this.label(buttonNode, '', 30, 0, 24, new Color(150, 78, 20));
-    buttonLabel.isBold = true;
+    styleActionNode(buttonNode, 'primary', 236, 88);
+    const buttonLabel = this.label(buttonNode, '', 0, 0, 24, new Color(150, 78, 20));
+    styleActionLabel(buttonLabel, 236, 88);
     const button = buttonNode.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       void this.handleItemAction(id, definition.name);
     });
@@ -262,6 +262,8 @@ export class ShopScreen {
         : !affordable
           ? new Color(190, 59, 51)
           : new Color(150, 78, 20);
+
+      styleActionNode(viewData.button.node, viewData.button.interactable ? 'primary' : 'disabled', 236, 88);
 
       // 原有逻辑（已注释）：
       // viewData.button.interactable = definition.purchasable

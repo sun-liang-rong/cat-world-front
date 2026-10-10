@@ -1,6 +1,6 @@
+import { styleActionNode, styleActionLabel, ensureButtonControl, Theme, TITLE_SIGN } from './Theme';
 import { Button, Color, EventMouse, EventTouch, Graphics, Label, Mask, Node, Sprite, tween, Tween, UITransform, Vec3, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
-import { Theme, TITLE_SIGN } from './Theme';
 import { isCampaignComplete, LEVELS_PER_THEME, MAIN_THEME_COUNT, themeIndexForLevel } from './TownContent';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
@@ -317,7 +317,7 @@ export class AdventureScreen {
     graphics.lineTo(0, up ? 34 : 22);
     graphics.lineTo(12, up ? 22 : 34);
     graphics.stroke();
-    const label = this.label(node, up ? '上一章' : '下一章', 0, -8, 16, COLORS.body);
+    const label = this.label(node, up ? '上一章' : '下一章', 0, -8, 20, COLORS.body);
     label.isBold = true;
     this.addButton(node, () => this.shiftWindow(up ? -CHAPTER_PAGE : CHAPTER_PAGE, up ? '已经在第一章啦' : '已经是最后一章啦'));
   }
@@ -527,11 +527,12 @@ export class AdventureScreen {
     start.addChild(inner);
     inner.addComponent(UITransform).setContentSize(204, 85);
     // 统一主 CTA：橙色（tasks/daily_button_primary 与每日任务页同款素材），绿色底只留给次级元素。
-    this.image(inner, 'tasks/daily_button_primary', 0, 0, 204, 85);
+    styleActionNode(inner, 'primary', 204, 96);
     const startLabel = this.label(inner, '开始挑战', 0, -2, 30, new Color(255, 251, 238));
     startLabel.isBold = true;
     startLabel.outlineWidth = 2;
     startLabel.outlineColor = new Color(184, 74, 10);
+    styleActionLabel(startLabel, 204, 96, 28);
     this.addButton(start, () => this.onStartPressed());
     tween(inner)
       .repeatForever(
@@ -871,8 +872,7 @@ export class AdventureScreen {
 
   private addButton(node: Node, onTap: () => void) {
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       onTap();

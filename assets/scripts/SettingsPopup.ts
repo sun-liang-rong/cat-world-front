@@ -1,3 +1,4 @@
+import { ensureButtonControl } from './Theme';
 import {
   _decorator,
   BlockInputEvents,
@@ -196,8 +197,7 @@ export class SettingsPopup extends Component {
       fallback.stroke();
     }
     const closeButton = close.addComponent(Button);
-    closeButton.transition = Button.Transition.SCALE;
-    closeButton.zoomScale = 0.93;
+    ensureButtonControl(closeButton);
     closeButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.close();
@@ -241,14 +241,14 @@ export class SettingsPopup extends Component {
 
     const titleLabel = this.label(row, name, -104, 10, 24, new Color(100, 69, 43));
     titleLabel.isBold = true;
-    const captionLabel = this.label(row, caption, -104, -20, 17, new Color(172, 143, 104));
+    const captionLabel = this.label(row, caption, -104, -20, 18, new Color(172, 143, 104));
     captionLabel.isBold = true;
 
     // 开关整体用代码绘制：暖黄=开 / 灰褐=关，旋钮可滑动，不依赖开关贴图
     const toggle = new Node(`${name}Toggle`);
     row.addChild(toggle);
     toggle.setPosition(174, 0);
-    toggle.addComponent(UITransform).setContentSize(132, 72);
+    toggle.addComponent(UITransform).setContentSize(132, 88);
     const track = new Node('ToggleTrack');
     toggle.addChild(track);
     track.addComponent(UITransform).setContentSize(132, 72);
@@ -268,8 +268,7 @@ export class SettingsPopup extends Component {
     knobGraphics.stroke();
 
     const button = toggle.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       if (kind === 'music') this.options.onMusicChanged(!this.options.getMusicEnabled());

@@ -1,3 +1,4 @@
+import { createVerticalContent, drawActionSurface, styleActionNode, styleActionLabel, ensureButtonControl, Theme, TITLE_SIGN } from './Theme';
 import {
   BlockInputEvents,
   Button,
@@ -14,7 +15,6 @@ import {
   view,
 } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
-import { Theme, TITLE_SIGN } from './Theme';
 import { AudioEffect } from './AudioManager';
 import { DAILY_CHEST_REWARD, DAILY_TASK_DEFINITIONS } from './GameContent';
 import { CatJourneyClaimResult, CatJourneySnapshot, DailyTaskId, ShareCardType, ShareOffer, TaskSnapshot } from './PlayerTypes';
@@ -42,7 +42,7 @@ type TaskCardView = {
   progressLabel: Label;
   button: Button;
   buttonLabel: Label;
-  buttonBackground: Sprite | null;
+  buttonBackground: Graphics | null;
   progressFill: Graphics;
 };
 
@@ -68,13 +68,14 @@ const REWARD_ICON_PATHS = [
 
 export class DailyTaskScreen {
   private taskUI: Node | null = null;
+  private taskContent: Node | null = null;
   private dateLabel: Label | null = null;
   private chestButton: Button | null = null;
   private chestLabel: Label | null = null;
-  private chestButtonBackground: Sprite | null = null;
+  private chestButtonBackground: Graphics | null = null;
   private journeyButton: Button | null = null;
   private journeyButtonLabel: Label | null = null;
-  private journeyButtonBackground: Sprite | null = null;
+  private journeyButtonBackground: Graphics | null = null;
   private journeyBadge: Node | null = null;
   private journeyUI: Node | null = null;
   private readonly cardViews: TaskCardView[] = [];
@@ -131,6 +132,7 @@ export class DailyTaskScreen {
     this.cardViews.length = 0;
     this.taskUI?.destroy();
     this.taskUI = null;
+    this.taskContent = null;
     this.journeyButton = null;
     this.journeyButtonLabel = null;
     this.journeyButtonBackground = null;
@@ -152,7 +154,8 @@ export class DailyTaskScreen {
 
     const taskStep = TASK_CARD_HEIGHT + 36;
     // 任务卡与宝箱整体下移（旅程按钮下移后跟随，再留 10px 余量）
-    const positions = [top - 410, top - 410 - taskStep, top - 410 - taskStep * 2];
+    this.taskContent = createVerticalContent(this.taskUI, top - 324, -top + 88, 686, 992);
+    const positions = [-96, -96 - taskStep, -96 - taskStep * 2];
     DAILY_TASK_DEFINITIONS.forEach((definition, index) => {
       this.buildTaskCard(definition.id, index, positions[index]);
     });
@@ -217,14 +220,14 @@ export class DailyTaskScreen {
 
   private buildTaskCard(id: DailyTaskId, index: number, y: number) {
     const definition = DAILY_TASK_DEFINITIONS[index];
-    const card = this.image(this.taskUI!, 'tasks/daily_panel', 0, y, PANEL_WIDTH, TASK_CARD_HEIGHT);
+    const card = this.image(this.taskContent!, 'tasks/daily_panel', 0, y, PANEL_WIDTH, TASK_CARD_HEIGHT);
     this.image(card, TASK_ICON_PATHS[index], TASK_ICON_X, 2, 140, 141);
 
-    const title = this.label(card, definition.title, -139, 53, 30, new Color(111, 62, 28));
+    const title = this.label(card, definition.title, -139, 53, 26, new Color(111, 62, 28));
     title.isBold = true;
     title.horizontalAlign = Label.HorizontalAlign.LEFT;
-    title.node.setPosition(10, 53);
-    title.node.getComponent(UITransform)!.setContentSize(320, 44);
+    title.node.setPosition(-14, 53);
+    title.node.getComponent(UITransform)!.setContentSize(272, 44);
 
     const description = this.label(card, definition.description, -137, 15, 21, new Color(136, 94, 63));
     description.horizontalAlign = Label.HorizontalAlign.LEFT;
@@ -269,7 +272,7 @@ export class DailyTaskScreen {
   }
 
   private buildChest(y: number) {
-    const card = this.image(this.taskUI!, 'tasks/daily_chest_panel', 0, y, PANEL_WIDTH, 312);
+    const card = this.image(this.taskContent!, 'tasks/daily_chest_panel', 0, y, PANEL_WIDTH, 312);
     this.image(card, 'tasks/daily_chest_new', -224, 8, 214, 172);
     this.image(card, 'tasks/daily_sparkle_large', -299, 102, 36, 42);
     this.image(card, 'tasks/daily_sparkle_small', -278, -85, 22, 26);
@@ -492,11 +495,11 @@ export class DailyTaskScreen {
       claimedCount >= 7 ? '旅程全部完成' : `旅程进度 ${claimedCount}/7 天`,
       0,
       0,
-      14,
-      Color.WHITE,
+      18,
+      Theme.title,
     );
     progressLabel.isBold = true;
-    progressLabel.outlineWidth = 2;
+    progressLabel.outlineWidth = 0;
     progressLabel.outlineColor = new Color(190, 120, 40);
 
     // 礼物卡：日签胶囊 + 奖励图标 + 短文案，替代纯文字格
@@ -547,16 +550,16 @@ export class DailyTaskScreen {
       tagGraphics.roundRect(-35, -13, 70, 26, 13);
       tagGraphics.fill();
       tagGraphics.stroke();
-      const tagLabel = this.label(tag, `第 ${day} 天`, 0, 0, 15, new Color(111, 62, 28));
+      const tagLabel = this.label(tag, `第 ${day} 天`, 0, 0, 17, new Color(111, 62, 28));
       tagLabel.isBold = true;
       tagLabel.overflow = Label.Overflow.SHRINK;
-      tagLabel.node.getComponent(UITransform)!.setContentSize(64, 20);
+      tagLabel.node.getComponent(UITransform)!.setContentSize(64, 26);
 
       // 奖励图标 + 短文案
       this.image(cell, rewardIcons[index], 0, -4, 44, 44);
-      const rewardLabel = this.label(cell, claimed ? '已领取' : rewardShort[index], 0, -38, 15, new Color(112, 69, 40));
+      const rewardLabel = this.label(cell, claimed ? '已领取' : rewardShort[index], 0, -38, 17, new Color(112, 69, 40));
       rewardLabel.overflow = Label.Overflow.SHRINK;
-      rewardLabel.node.getComponent(UITransform)!.setContentSize(128, 20);
+      rewardLabel.node.getComponent(UITransform)!.setContentSize(128, 26);
 
       // 已领取：右上角补一枚绿勾，扫一眼就能分清新旧格子
       if (claimed) {
@@ -594,8 +597,8 @@ export class DailyTaskScreen {
     // 底部操作排成一行：主操作居左、稍后查看居右（次级灰底）；按钮收窄并整体下移
     const row1Bottom = gridTop - gridStep - 50;
     const shareY = row1Bottom - 52;
-    const buttonsY = (shareOffer ? shareY - 93 : row1Bottom - 57) - 20;
-    const claimView = this.actionButton(panel, -69, buttonsY, 210, 70, journey.canClaim ? '领取今日奖励' : journey.completed ? '旅程已完成' : '明天再来');
+    const buttonsY = (shareOffer ? shareY - 104 : row1Bottom - 57) - 20;
+    const claimView = this.actionButton(panel, -116, buttonsY, 208, 88, journey.canClaim ? '领取今日奖励' : journey.completed ? '旅程已完成' : '明天再来');
     claimView.button.interactable = journey.canClaim;
     this.setButtonVisual(claimView.background, journey.canClaim);
     claimView.button.node.on(Button.EventType.CLICK, () => {
@@ -607,14 +610,15 @@ export class DailyTaskScreen {
     });
 
     if (shareOffer) {
-      const shareView = this.actionButton(panel, 0, shareY, 400, 72, shareOffer.label);
+      const shareView = this.actionButton(panel, 0, shareY, 400, 88, shareOffer.label);
+      drawActionSurface(shareView.background, 400, 88, 'secondary');
       shareView.button.node.on(Button.EventType.CLICK, () => {
         this.options.onShare?.(shareOffer.type);
       });
     }
 
-    const close = this.actionButton(panel, 109, buttonsY, 130, 70, '稍后查看');
-    this.setButtonVisual(close.background, false);
+    const close = this.actionButton(panel, 116, buttonsY, 208, 88, '稍后查看');
+    drawActionSurface(close.background, 208, 88, 'secondary');
     close.button.node.on(Button.EventType.CLICK, () => this.closeJourneyPanel());
   }
 
@@ -641,14 +645,12 @@ export class DailyTaskScreen {
   }
 
   private actionButton(parent: Node, x: number, y: number, width: number, height: number, text: string) {
+    height = Math.max(88, height);
     const node = new Node('ActionButton');
     parent.addChild(node);
     node.setPosition(x, y);
     node.addComponent(UITransform).setContentSize(Math.max(width, 88), Math.max(height, 88));
-    const visual = this.image(node, 'tasks/daily_button_primary', 0, 0, width, height);
-    const background = visual.getComponent(Sprite);
-    if (!background) this.drawButtonFallback(visual, true, width, height);
-
+    const background = styleActionNode(node, 'primary', width, height);
     const labelNode = new Node('Label');
     node.addChild(labelNode);
     labelNode.addComponent(UITransform).setContentSize(width - 10, height - 10);
@@ -663,27 +665,16 @@ export class DailyTaskScreen {
     label.horizontalAlign = Label.HorizontalAlign.CENTER;
     label.verticalAlign = Label.VerticalAlign.CENTER;
 
+    styleActionLabel(label, width, height, 24);
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     return { button, label, background };
   }
 
-  private setButtonVisual(background: Sprite | null, active: boolean) {
+  private setButtonVisual(background: Graphics | null, active: boolean) {
     if (!background) return;
-    background.spriteFrame = this.assets.getFrame(
-      active ? 'tasks/daily_button_primary' : 'tasks/daily_button_disabled',
-    ) || background.spriteFrame;
-  }
-
-  private drawButtonFallback(parent: Node, active: boolean, width: number, height: number) {
-    const graphics = parent.addComponent(Graphics);
-    graphics.fillColor = active ? new Color(241, 139, 47) : new Color(255, 221, 153);
-    graphics.strokeColor = active ? new Color(184, 102, 26) : new Color(226, 176, 93);
-    graphics.lineWidth = 3;
-    graphics.roundRect(-width / 2, -height / 2, width, height, 20);
-    graphics.fill();
-    graphics.stroke();
+    const size = background.node.getComponent(UITransform)!.contentSize;
+    drawActionSurface(background, size.width, size.height, active ? 'primary' : 'disabled');
   }
 
   private buildBackButton(parent: Node, x: number, y: number, callback: () => void) {
@@ -702,8 +693,7 @@ export class DailyTaskScreen {
       graphics.stroke();
     }
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       callback();

@@ -1,3 +1,4 @@
+import { drawActionSurface, styleActionNode, styleActionLabel, ensureButtonControl, Theme, TITLE_SIGN } from './Theme';
 import {
   BlockInputEvents,
   Button,
@@ -15,7 +16,6 @@ import {
   view,
 } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
-import { Theme, TITLE_SIGN } from './Theme';
 import { AudioEffect } from './AudioManager';
 import { getCatDefinition } from './GameContent';
 import { BuildCellResult, BuildingView, CELL_STAR_COST } from './TownContent';
@@ -240,18 +240,18 @@ export class TownScreen {
 
     this.buildResourceChip(
       this.townUI!,
-      180,
-      y,
-      156,
+      116,
+      belowWeChatCapsule(top, 62),
+      144,
       COMMON_UI_ASSETS.starIcon,
       () => '' + this.options.getStars(),
       () => this.toast('星星来自三消通关'),
     );
     this.buildResourceChip(
       this.townUI!,
-      304,
+      276,
       belowWeChatCapsule(top, 62),
-      166,
+      144,
       COMMON_UI_ASSETS.coinIcon,
       () => '' + this.options.getCoins(),
       () => this.toast('金币可在商店购买道具'),
@@ -263,7 +263,7 @@ export class TownScreen {
     this.dailyCard = this.roundPanel(
       this.townUI!,
       0,
-      top - 283,
+      top - 310,
       660,
       124,
       26,
@@ -315,10 +315,10 @@ export class TownScreen {
       new Color(214, 151, 38),
     );
     this.dailyActionLabel = this.label(this.dailyActionNode, '', 0, -1, 20, new Color(112, 69, 40));
-    this.dailyActionLabel.isBold = true;
+    styleActionNode(this.dailyActionNode, 'primary', 146, 88);
+    styleActionLabel(this.dailyActionLabel, 146, 88, 22);
     this.dailyActionButton = this.dailyActionNode.addComponent(Button);
-    this.dailyActionButton.transition = Button.Transition.SCALE;
-    this.dailyActionButton.zoomScale = 0.93;
+    ensureButtonControl(this.dailyActionButton);
     this.dailyActionButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.handleDailyAction();
@@ -339,19 +339,7 @@ export class TownScreen {
     this.dailyActionButton.interactable = snapshot.unlocked && !snapshot.claimed;
     const graphics = this.dailyActionNode?.getComponent(Graphics);
     if (graphics) {
-      graphics.clear();
-      graphics.lineWidth = 3;
-      graphics.fillColor = snapshot.claimed
-        ? new Color(235, 227, 210, 245)
-        : snapshot.canClaim
-          ? new Color(255, 224, 108)
-          : new Color(255, 239, 178);
-      graphics.strokeColor = snapshot.claimed
-        ? new Color(205, 193, 170)
-        : new Color(214, 151, 38);
-      graphics.roundRect(-73, -32, 146, 64, 22);
-      graphics.fill();
-      graphics.stroke();
+      drawActionSurface(graphics, 146, 88, this.dailyActionButton.interactable ? 'primary' : 'disabled');
     }
     this.dailyActionLabel.color = snapshot.claimed
       ? new Color(157, 145, 127)
@@ -422,8 +410,7 @@ export class TownScreen {
     this.image(buttonNode, COMMON_UI_ASSETS.backButton, 0, 0, BACK_BUTTON_SIZE.visualWidth, BACK_BUTTON_SIZE.visualHeight);
 
     const button = buttonNode.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.options.onReturnHome();
@@ -461,11 +448,12 @@ export class TownScreen {
     this.image(chip, iconPath, -width / 2 + 32, 0, iconSize, iconSize);
     const label = this.label(chip, formatValue(), 10, -2, 25, new Color(112, 69, 40));
     label.isBold = true;
+    label.overflow = Label.Overflow.SHRINK;
+    label.node.getComponent(UITransform)!.setContentSize(width - 96, 40);
     this.drawPlus(chip, width / 2 - 25, 0, iconScale);
 
     const button = hitArea.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.95;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       onTap();
@@ -501,8 +489,7 @@ export class TownScreen {
     this.displayLayer.setPosition(0, 180);
     this.displayLayer.addComponent(UITransform).setContentSize(480, 400);
     const button = this.displayLayer.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.98;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const building = this.selected;
@@ -516,7 +503,7 @@ export class TownScreen {
     const strip = new Node('TownBuildingStrip');
     this.townUI!.addChild(strip);
     // 槽位条位置：在面板顶部上方，留出更大的间距
-    strip.setPosition(0, bottom + 570);
+    strip.setPosition(0, bottom + 708);
 
     const slotWidth = 116;
     const gap = 20;
@@ -552,8 +539,7 @@ export class TownScreen {
       });
 
       const button = slotNode.addComponent(Button);
-      button.transition = Button.Transition.SCALE;
-      button.zoomScale = 0.95;
+      ensureButtonControl(button);
       button.node.on(Button.EventType.CLICK, () => {
         this.options.onPlaySound('click');
         this.selectBuilding(index);
@@ -566,18 +552,18 @@ export class TownScreen {
       this.townUI!,
       'town/panel',
       0,
-      bottom + 270,
+      bottom + 348,
       660,
-      440,
+      560,
       { left: 58, right: 58, top: 62, bottom: 46 },
     );
 
-    this.titleLabel = this.label(this.townPanel, '', -38, 180, 29, new Color(111, 62, 28));
+    this.titleLabel = this.label(this.townPanel, '', -38, 220, 29, new Color(111, 62, 28));
     this.titleLabel.isBold = true;
     this.titleLabel.outlineWidth = 2;
     this.titleLabel.outlineColor = new Color(255, 248, 226);
 
-    this.subtitleLabel = this.label(this.townPanel, '', 0, 142, 18, new Color(136, 94, 63));
+    this.subtitleLabel = this.label(this.townPanel, '', 0, 182, 18, new Color(136, 94, 63));
     this.subtitleLabel.isBold = true;
 
     // 状态角标用动态文字胶囊，避免美术图上"施工中"常驻误导
@@ -594,8 +580,7 @@ export class TownScreen {
     this.statusLabel = this.label(this.statusNode, '', 0, -1, 18, new Color(112, 69, 40));
     this.statusLabel.isBold = true;
     const statusButton = this.statusNode.addComponent(Button);
-    statusButton.transition = Button.Transition.SCALE;
-    statusButton.zoomScale = 0.95;
+    ensureButtonControl(statusButton);
     statusButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const building = this.selected;
@@ -608,27 +593,28 @@ export class TownScreen {
 
     this.stageRow = new Node('StageRow');
     this.townPanel.addChild(this.stageRow);
-    this.stageRow.setPosition(0, 70);
+    this.stageRow.setPosition(0, 132);
 
     // 小节点格子行：点击「下一格」与主按钮行为一致，都是点亮一格
     this.cellRow = new Node('CellRow');
     this.townPanel.addChild(this.cellRow);
-    this.cellRow.setPosition(0, -18);
+    this.cellRow.setPosition(0, 12);
 
     this.conditionLabel = this.label(this.townPanel, '', 0, -64, 20, new Color(112, 69, 40));
     this.conditionLabel.isBold = true;
 
-    this.actionNode = this.image(this.townPanel, 'town/button_action', 0, -132, 450, 74);
-    this.actionLabel = this.label(this.actionNode, '', -10, 0, 33, new Color(255, 251, 238));
+    this.actionNode = this.image(this.townPanel, 'town/button_action', 0, -152, 450, 74);
+    styleActionNode(this.actionNode, 'primary', 450, 96);
+    this.actionLabel = this.label(this.actionNode, '', 0, 0, 33, new Color(255, 251, 238));
     this.actionLabel.isBold = true;
     this.actionLabel.outlineWidth = 4;
     this.actionLabel.outlineColor = new Color(184, 74, 10);
     this.actionLabel.enableShadow = true;
     this.actionLabel.shadowColor = new Color(150, 66, 14, 150);
     this.actionLabel.shadowOffset = new Vec2(0, -3);
+    styleActionLabel(this.actionLabel, 450, 96, 32);
     this.actionButton = this.actionNode.addComponent(Button);
-    this.actionButton.transition = Button.Transition.SCALE;
-    this.actionButton.zoomScale = 0.93;
+    ensureButtonControl(this.actionButton);
     this.actionButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.lightCell();
@@ -662,7 +648,7 @@ export class TownScreen {
       )
       .start();
 
-    this.rewardLabel = this.label(this.townPanel, '', 0, -192, 18, new Color(136, 94, 63));
+    this.rewardLabel = this.label(this.townPanel, '', 0, -230, 18, new Color(136, 94, 63));
     this.rewardLabel.isBold = true;
   }
 
@@ -931,8 +917,7 @@ export class TownScreen {
       });
 
       const button = card.addComponent(Button);
-      button.transition = Button.Transition.SCALE;
-      button.zoomScale = 0.95;
+      ensureButtonControl(button);
       button.node.on(Button.EventType.CLICK, () => {
         this.options.onPlaySound('click');
         this.selectStage(index);
@@ -1025,7 +1010,7 @@ export class TownScreen {
     this.cellRow.addChild(hit);
     hit.addComponent(UITransform).setContentSize(88, 88);
     const button = hit.addComponent(Button);
-    button.transition = Button.Transition.NONE;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.lightCell();
@@ -1065,8 +1050,9 @@ export class TownScreen {
     const canAct = building.unlocked && !building.completed;
     this.actionButton.interactable = canAct;
     this.actionLabel.color = canAct
-      ? new Color(255, 251, 238)
-      : new Color(235, 225, 208);
+      ? Theme.title
+      : Theme.mutedSoft;
+    if (this.actionNode) styleActionNode(this.actionNode, canAct ? 'primary' : 'disabled', 450, 96);
     if (this.actionGuideRing) {
       // 首次建设引导：只对小屋、当前大节点一格未亮时出现
       this.actionGuideRing.active = canAct
@@ -1163,7 +1149,7 @@ export class TownScreen {
     backdropGraphics.fill();
     backdrop.addComponent(BlockInputEvents);
 
-    const panelHeight = shareOffer ? 700 : 620;
+    const panelHeight = shareOffer ? 780 : 620;
     const panel = this.roundPanel(
       overlay, 0, 0, 580, panelHeight, 34,
       new Color(255, 248, 226), new Color(235, 205, 158),
@@ -1206,28 +1192,26 @@ export class TownScreen {
         new Color(244, 131, 165), new Color(184, 74, 110),
       );
       const shareLabel = this.label(shareNode, shareOffer.label, 0, -1, 25, Color.WHITE);
-      shareLabel.isBold = true;
-      shareLabel.outlineWidth = 3;
-      shareLabel.outlineColor = new Color(150, 28, 62);
+      styleActionNode(shareNode, 'secondary', 440, 88);
+      styleActionLabel(shareLabel, 440, 88, 24);
       const shareButton = shareNode.addComponent(Button);
-      shareButton.transition = Button.Transition.SCALE;
-      shareButton.zoomScale = 0.93;
+      ensureButtonControl(shareButton);
       shareButton.node.on(Button.EventType.CLICK, () => {
         this.options.onPlaySound('click');
         this.options.onShare?.(shareOffer.type);
       });
     }
 
-    const actionY = shareOffer ? -304 : -232;
+    const actionY = shareOffer ? -322 : -232;
     const primary = this.roundPanel(
-      panel, -95, actionY, 250, 76, 38,
+      panel, -116, actionY, 208, 88, 38,
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const primaryLabel = this.label(primary, '去装备', 0, -1, 27, new Color(111, 62, 28));
-    primaryLabel.isBold = true;
+    styleActionNode(primary, 'primary', 208, 88);
+    styleActionLabel(primaryLabel, 208, 88, 24);
     const primaryButton = primary.addComponent(Button);
-    primaryButton.transition = Button.Transition.SCALE;
-    primaryButton.zoomScale = 0.93;
+    ensureButtonControl(primaryButton);
     primaryButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.closeCelebration();
@@ -1235,14 +1219,14 @@ export class TownScreen {
     });
 
     const secondary = this.roundPanel(
-      panel, 125, actionY, 190, 76, 38,
+      panel, 116, actionY, 208, 88, 38,
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const secondaryLabel = this.label(secondary, '留在这里', 0, -1, 24, new Color(135, 104, 76));
-    secondaryLabel.isBold = true;
+    styleActionNode(secondary, 'secondary', 208, 88);
+    styleActionLabel(secondaryLabel, 208, 88, 24);
     const secondaryButton = secondary.addComponent(Button);
-    secondaryButton.transition = Button.Transition.SCALE;
-    secondaryButton.zoomScale = 0.95;
+    ensureButtonControl(secondaryButton);
     secondaryButton.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       this.closeCelebration();

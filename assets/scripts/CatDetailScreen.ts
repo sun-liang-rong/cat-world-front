@@ -1,3 +1,4 @@
+import { styleActionNode, ensureButtonControl } from './Theme';
 import {
   Button,
   Color,
@@ -225,7 +226,8 @@ export class CatDetailScreen {
     const upgradeNode = SettlementButton.create(panel, this.assets, {
       text: '',
       tone: 'orange',
-      width: 296,
+      appearance: 'secondary',
+      width: 280,
       height: 108,
       fontSize: 28,
       scale: 1,
@@ -237,7 +239,7 @@ export class CatDetailScreen {
         if (result.ok) this.playUpgradeAnimation();
       },
     });
-    upgradeNode.setPosition(-156, -464);
+    upgradeNode.setPosition(-152, -464);
     this.upgradeButton = upgradeNode.getComponent(Button);
     this.upgradeLabel = upgradeNode.getChildByName('Label')?.getComponent(Label) ?? null;
     this.upgradeOpacity = upgradeNode.addComponent(UIOpacity);
@@ -245,7 +247,7 @@ export class CatDetailScreen {
     const equipNode = SettlementButton.create(panel, this.assets, {
       text: '',
       tone: 'green',
-      width: 296,
+      width: 280,
       height: 108,
       fontSize: 28,
       scale: 1,
@@ -256,7 +258,7 @@ export class CatDetailScreen {
         this.refresh();
       },
     });
-    equipNode.setPosition(156, -464);
+    equipNode.setPosition(152, -464);
     this.equipButton = equipNode.getComponent(Button);
     this.equipLabel = equipNode.getChildByName('Label')?.getComponent(Label) ?? null;
     this.equipOpacity = equipNode.addComponent(UIOpacity);
@@ -366,13 +368,13 @@ export class CatDetailScreen {
     graphics.roundRect(-84, -56, 168, 112, 20);
     graphics.fill();
     graphics.stroke();
+    styleActionNode(node, 'secondary', 168, 112);
     this.image(node, iconPath, 0, 22, 46, 46);
     const name = this.label(node, text, 0, -14, 21, COLOR_TITLE);
     name.isBold = true;
     const status = this.label(node, '', 0, -42, 17, COLOR_BODY);
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const result = this.options.onInteract(this.catId, id);
@@ -481,7 +483,8 @@ export class CatDetailScreen {
         ? COLOR_MUTED
         : costsCoins && !affordable ? new Color(190, 59, 51) : COLOR_BODY;
       viewData.button.interactable = showAsUnlocked && !trialMode && !used && affordable;
-      viewData.opacity.opacity = viewData.button.interactable ? 255 : 160;
+      styleActionNode(viewData.button.node, viewData.button.interactable ? 'secondary' : 'disabled', 168, 112);
+      viewData.opacity.opacity = 255;
     });
 
     if (this.upgradeButton && this.upgradeLabel && this.upgradeOpacity) {
@@ -497,14 +500,16 @@ export class CatDetailScreen {
             : !affordable
               ? `还差 ${upgradeCost - coins} 金币`
               : `升级 · ${upgradeCost} 金币`;
-      this.upgradeOpacity.opacity = this.upgradeButton.interactable ? 255 : 160;
+      styleActionNode(this.upgradeButton.node, this.upgradeButton.interactable ? 'secondary' : 'disabled', 280, 108);
+      this.upgradeOpacity.opacity = 255;
     }
     if (this.equipButton && this.equipLabel && this.equipOpacity) {
       this.equipButton.interactable = unlocked && !trialMode && !equipped;
       this.equipLabel.string = trialMode
         ? '试住中自动出战'
         : !unlocked ? '解锁后可装备' : equipped ? '当前装备' : '装备出战';
-      this.equipOpacity.opacity = this.equipButton.interactable ? 255 : 160;
+      styleActionNode(this.equipButton.node, this.equipButton.interactable ? 'primary' : 'disabled', 280, 108);
+      this.equipOpacity.opacity = 255;
     }
   }
 
@@ -571,8 +576,7 @@ export class CatDetailScreen {
     node.addComponent(UITransform).setContentSize(BACK_BUTTON_SIZE.hitWidth, BACK_BUTTON_SIZE.hitHeight);
     this.image(node, COMMON_UI_ASSETS.backButton, 0, 0, BACK_BUTTON_SIZE.visualWidth, BACK_BUTTON_SIZE.visualHeight);
     const button = node.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.93;
+    ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       callback();

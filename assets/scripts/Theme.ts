@@ -1,4 +1,4 @@
-import { Color } from 'cc';
+import { Button, Color, Graphics, Label, Mask, Node, ScrollView, Sprite, UITransform } from 'cc';
 
 /**
  * 全局共享调色板：AGENTS.md「色板」一节的唯一代码出处。
@@ -59,3 +59,110 @@ export const TITLE_SIGN = {
   titleOffsetY: -34,
   titleFontSize: 30,
 };
+
+/** 全局 UI 几何：750 宽设计坐标，图标按钮、文字按钮与卡片各保留自己的语义。 */
+export const UI_METRICS = {
+  pageInset: 32,
+  panelInset: 32,
+  gap: 16,
+  sectionGap: 32,
+  buttonHeight: 96,
+  minHitSize: 88,
+  buttonRadius: 24,
+  buttonTextInset: 16,
+} as const;
+
+export type ActionAppearance = 'primary' | 'secondary' | 'disabled';
+
+/** 文字操作统一暖黄主按钮、奶油次按钮和灰奶油禁用态。 */
+export function drawActionSurface(graphics: Graphics, width: number, height: number, appearance: ActionAppearance = 'primary') {
+  const primary = appearance === 'primary';
+  const disabled = appearance === 'disabled';
+  const radius = Math.min(UI_METRICS.buttonRadius, height / 2);
+  graphics.clear();
+  graphics.fillColor = primary ? new Color(214, 157, 63) : new Color(231, 199, 178);
+  graphics.roundRect(-width / 2, -height / 2 - 4, width, height, radius);
+  graphics.fill();
+  graphics.fillColor = primary ? Theme.accentYellow : disabled ? new Color(238, 230, 211) : Theme.creamSolid;
+  graphics.strokeColor = primary ? new Color(226, 170, 71) : Theme.border;
+  graphics.lineWidth = 3;
+  graphics.roundRect(-width / 2, -height / 2, width, height, radius);
+  graphics.fill();
+  graphics.stroke();
+  graphics.strokeColor = primary ? new Color(255, 248, 206, 220) : new Color(255, 255, 255, 190);
+  graphics.lineWidth = 2;
+  graphics.roundRect(-width / 2 + 5, -height / 2 + 5, width - 10, height - 10, Math.max(4, radius - 5));
+  graphics.stroke();
+}
+
+export function styleActionLabel(label: Label, width: number, height: number, fontSize = 24) {
+  label.fontSize = Math.max(20, fontSize);
+  label.lineHeight = label.fontSize + 8;
+  label.color = Theme.title;
+  label.isBold = true;
+  label.outlineWidth = 0;
+  label.enableShadow = false;
+  label.enableWrapText = false;
+  label.overflow = Label.Overflow.SHRINK;
+  label.horizontalAlign = Label.HorizontalAlign.CENTER;
+  label.verticalAlign = Label.VerticalAlign.CENTER;
+  label.node.getComponent(UITransform)!.setContentSize(width - UI_METRICS.buttonTextInset * 2, height - 16);
+}
+
+export function styleActionNode(node: Node, appearance: ActionAppearance = 'primary', width?: number, height?: number) {
+  const transform = node.getComponent(UITransform) || node.addComponent(UITransform);
+  const w = width ?? transform.contentSize.width;
+  const h = height ?? transform.contentSize.height;
+  const sprite = node.getComponent(Sprite);
+  if (sprite) sprite.enabled = false;
+  // Cocos 每个节点只能注册一个 UIRenderer；原有 Sprite 仍占用渲染槽。
+  // 保留图片节点的点击与布局，在独立子节点绘制替换底板。
+  let surface = node;
+  if (sprite || node.getComponent(Label)) {
+    surface = node.getChildByName('ActionSurface') || new Node('ActionSurface');
+    if (!surface.parent) node.addChild(surface);
+    surface.setSiblingIndex(0);
+    const surfaceTransform = surface.getComponent(UITransform) || surface.addComponent(UITransform);
+    surfaceTransform.setContentSize(w, h);
+  }
+  const graphics = surface.getComponent(Graphics) || surface.addComponent(Graphics);
+  drawActionSurface(graphics, w, h, appearance);
+  transform.setContentSize(Math.max(88, w), Math.max(88, h));
+  return graphics;
+}
+
+/** 所有可点击控件共享反馈；固定缩放由调用方传入，避免入场动画改变热区。 */
+export function ensureButtonControl(button: Button, renderedScale = 1) {
+  button.transition = Button.Transition.SCALE;
+  button.zoomScale = 0.93;
+  const node = button.node;
+  const transform = node.getComponent(UITransform) || node.addComponent(UITransform);
+  const scale = Math.max(0.1, Math.abs(renderedScale));
+  transform.setContentSize(
+    Math.max(transform.contentSize.width, UI_METRICS.minHitSize / scale),
+    Math.max(transform.contentSize.height, UI_METRICS.minHitSize / scale),
+  );
+}
+
+/** 内容超出可见高度时滚动，保留字号和触控尺寸，避免整页缩小或遮住底部按钮。 */
+export function createVerticalContent(parent: Node, topY: number, bottomY: number, width: number, contentHeight: number) {
+  const height = Math.max(88, topY - bottomY);
+  const viewport = new Node('ContentViewport');
+  parent.addChild(viewport);
+  viewport.setPosition(0, (topY + bottomY) / 2);
+  viewport.addComponent(UITransform).setContentSize(width, height);
+  viewport.addComponent(Mask).type = Mask.Type.GRAPHICS_RECT;
+  const content = new Node('ScrollableContent');
+  viewport.addChild(content);
+  const transform = content.addComponent(UITransform);
+  transform.setAnchorPoint(0.5, 1);
+  transform.setContentSize(width, Math.max(height, contentHeight));
+  content.setPosition(0, height / 2);
+  const scroll = viewport.addComponent(ScrollView);
+  scroll.content = content;
+  scroll.horizontal = false;
+  scroll.vertical = contentHeight > height;
+  scroll.inertia = true;
+  scroll.elastic = true;
+  return content;
+}
