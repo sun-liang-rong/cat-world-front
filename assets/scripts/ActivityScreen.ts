@@ -734,7 +734,7 @@ export class ActivityScreen {
     badge.setPosition(72, 15);
     badge.addComponent(UITransform).setContentSize(30, 30);
     const badgeGraphics = badge.addComponent(Graphics);
-    const badgeLabel = this.labelBox(badge, '', 0, 0, 26, 22, 14, Color.WHITE);
+    const badgeLabel = this.labelBox(badge, '', 0, 0, 26, 26, 18, Color.WHITE);
     badgeLabel.isBold = true;
     badge.active = false;
     return { badgeGraphics, badgeLabel };

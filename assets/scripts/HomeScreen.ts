@@ -659,11 +659,11 @@ export class HomeScreen {
     backdrop.addComponent(BlockInputEvents);
 
     this.roundedShape(
-      overlay, 'CatTrialOfferShadow', 0, -28, 560, 460, 34,
+      overlay, 'CatTrialOfferShadow', 0, -28, 600, 472, 34,
       new Color(69, 48, 29, 88), new Color(69, 48, 29, 0), 0,
     );
     const panel = this.creamPanel(
-      overlay, 0, -18, 540, 456, 32,
+      overlay, 0, -18, 580, 472, 32,
       new Color(255, 248, 226), new Color(235, 205, 158),
     );
     panel.setScale(new Vec3(0.76, 0.76, 1));
@@ -686,7 +686,7 @@ export class HomeScreen {
     const perks = [
       { text: '每局可发动 1 次大橘专属技能' },
       { text: '开局自动充满技能能量' },
-      { text: '建好流浪猫小屋，大橘正式留下' },
+      { text: '完成小屋清理，大橘正式留下' },
     ];
     perks.forEach((perk, index) => {
       const row = this.creamPanel(
@@ -704,24 +704,24 @@ export class HomeScreen {
       badgeGraphics.circle(0, 0, 13);
       badgeGraphics.fill();
       badgeGraphics.stroke();
-      const num = this.label(badge, `${index + 1}`, 0, -1, 15, new Color(111, 62, 28));
+      const num = this.label(badge, `${index + 1}`, 0, -1, 18, new Color(111, 62, 28));
       num.isBold = true;
-      const perkLabel = this.label(row, perk.text, -190, 0, 19, new Color(112, 69, 40));
+      const perkLabel = this.label(row, perk.text, -190, 0, 21, new Color(112, 69, 40));
       perkLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
       perkLabel.verticalAlign = Label.VerticalAlign.CENTER;
       const perkTransform = perkLabel.node.getComponent(UITransform)!;
       perkTransform.anchorX = 0;
       perkTransform.anchorY = 0.5;
-      perkTransform.setContentSize(380, 26);
+      perkTransform.setContentSize(380, 32);
     });
 
     const startButton = this.creamPanel(
-      panel, -112, -148, 196, 88, 44,
+      panel, -116, -148, 208, 96, 24,
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const startLabel = this.label(startButton, '立即试住', 0, -1, 25, new Color(111, 62, 28));
     styleActionNode(startButton, 'primary');
-    styleActionLabel(startLabel, startButton.getComponent(UITransform)!.contentSize.width, 88, startLabel.fontSize);
+    styleActionLabel(startLabel, startButton.getComponent(UITransform)!.contentSize.width, startButton.getComponent(UITransform)!.contentSize.height, startLabel.fontSize);
     this.addTapFeedback(startButton, () => {
       this.options.onTrack?.('cat_trial_offer_click', { accepted: true });
       this.closeCatTrialOffer();
@@ -729,12 +729,12 @@ export class HomeScreen {
     });
 
     const laterButton = this.creamPanel(
-      panel, 112, -148, 196, 88, 44,
+      panel, 116, -148, 208, 96, 24,
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const laterLabel = this.label(laterButton, '稍后再说', 0, -1, 23, new Color(135, 104, 76));
     styleActionNode(laterButton, 'secondary');
-    styleActionLabel(laterLabel, laterButton.getComponent(UITransform)!.contentSize.width, 88, laterLabel.fontSize);
+    styleActionLabel(laterLabel, laterButton.getComponent(UITransform)!.contentSize.width, laterButton.getComponent(UITransform)!.contentSize.height, laterLabel.fontSize);
     this.addTapFeedback(laterButton, () => {
       this.options.onTrack?.('cat_trial_offer_click', { accepted: false });
       this.closeCatTrialOffer();
@@ -832,11 +832,11 @@ export class HomeScreen {
     backdrop.addComponent(BlockInputEvents);
 
     this.roundedShape(
-      overlay, 'ChallengeUnlockShadow', 0, -24, 560, 440, 34,
+      overlay, 'ChallengeUnlockShadow', 0, -24, 600, 440, 34,
       new Color(69, 48, 29, 88), new Color(69, 48, 29, 0), 0,
     );
     const panel = this.creamPanel(
-      overlay, 0, -14, 540, 424, 32,
+      overlay, 0, -14, 580, 424, 32,
       new Color(255, 248, 226), new Color(235, 205, 158),
     );
     panel.setScale(new Vec3(0.76, 0.76, 1));
@@ -865,24 +865,24 @@ export class HomeScreen {
     body.node.getComponent(UITransform)!.setContentSize(440, 64);
 
     const goButton = this.creamPanel(
-      panel, -100, -130, 190, 88, 44,
+      panel, -116, -130, 208, 96, 24,
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const goLabel = this.label(goButton, '去看看', 0, -1, 25, new Color(111, 62, 28));
     styleActionNode(goButton, 'primary');
-    styleActionLabel(goLabel, goButton.getComponent(UITransform)!.contentSize.width, 88, goLabel.fontSize);
+    styleActionLabel(goLabel, goButton.getComponent(UITransform)!.contentSize.width, goButton.getComponent(UITransform)!.contentSize.height, goLabel.fontSize);
     this.addTapFeedback(goButton, () => {
       this.closeChallengeUnlockNotice();
       this.options.onStartChallenge();
     });
 
     const laterButton = this.creamPanel(
-      panel, 112, -130, 168, 88, 44,
+      panel, 116, -130, 208, 96, 24,
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const laterLabel = this.label(laterButton, '稍后再说', 0, -1, 22, new Color(135, 104, 76));
     styleActionNode(laterButton, 'secondary');
-    styleActionLabel(laterLabel, laterButton.getComponent(UITransform)!.contentSize.width, 88, laterLabel.fontSize);
+    styleActionLabel(laterLabel, laterButton.getComponent(UITransform)!.contentSize.width, laterButton.getComponent(UITransform)!.contentSize.height, laterLabel.fontSize);
     this.addTapFeedback(laterButton, () => this.closeChallengeUnlockNotice(), 0.95);
   }
 
@@ -916,11 +916,11 @@ export class HomeScreen {
     backdrop.on(Node.EventType.TOUCH_END, () => this.closeChallengeLockPanel());
 
     this.roundedShape(
-      overlay, 'ChallengeLockShadow', 0, -20, 560, 440, 34,
+      overlay, 'ChallengeLockShadow', 0, -20, 600, 456, 34,
       new Color(69, 48, 29, 88), new Color(69, 48, 29, 0), 0,
     );
     const panel = this.creamPanel(
-      overlay, 0, -10, 540, 420, 32,
+      overlay, 0, -10, 580, 440, 32,
       new Color(255, 248, 226), new Color(235, 205, 158),
     );
     panel.setScale(new Vec3(0.8, 0.8, 1));
@@ -949,12 +949,12 @@ export class HomeScreen {
     this.label(panel, '先完成前 5 关，熟悉收集规则后再来挑战。', 0, -74, 19, new Color(136, 94, 63));
 
     const okButton = this.creamPanel(
-      panel, 0, -150, 220, 82, 41,
+      panel, 0, -150, 240, 96, 24,
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const okLabel = this.label(okButton, '知道了', 0, -1, 24, new Color(111, 62, 28));
     styleActionNode(okButton, 'primary');
-    styleActionLabel(okLabel, okButton.getComponent(UITransform)!.contentSize.width, 88, okLabel.fontSize);
+    styleActionLabel(okLabel, okButton.getComponent(UITransform)!.contentSize.width, okButton.getComponent(UITransform)!.contentSize.height, okLabel.fontSize);
     this.addTapFeedback(okButton, () => this.closeChallengeLockPanel(), 0.95);
   }
 
@@ -1035,11 +1035,11 @@ export class HomeScreen {
     // 面板带投影 + 顶部猫探头，与玩法介绍弹窗同一套视觉语言；
     // 宽度压在 480 内，左缘不盖住小镇入口的脉冲光环
     this.roundedShape(
-      overlay, 'FirstTownGuideShadow', 56, entryY - 86, 488, 276, 32,
+      overlay, 'FirstTownGuideShadow', 56, entryY - 86, 488, 324, 32,
       new Color(69, 48, 29, 88), new Color(69, 48, 29, 0), 0,
     );
     const panel = this.creamPanel(
-      overlay, 56, entryY - 80, 480, 268, 30,
+      overlay, 56, entryY - 80, 480, 316, 30,
       new Color(255, 248, 226), new Color(235, 205, 158),
     );
     panel.setScale(new Vec3(0.7, 0.7, 1));
@@ -1059,16 +1059,16 @@ export class HomeScreen {
     this.image(panel, COMMON_UI_ASSETS.starIcon, -106, 70, 30, 30);
     const title = this.label(panel, '通关第 1 关啦！', 21, 70, 28, new Color(111, 62, 28));
     title.isBold = true;
-    const body = this.label(panel, '刚赢的星星可以逐格点亮\n流浪猫小屋，修好它解锁猫咪！', 0, 14, 20, new Color(112, 69, 40));
+    const body = this.label(panel, '刚赢的星星可以逐格点亮\n流浪猫小屋，完成清理让大橘安家！', 0, 14, 20, new Color(112, 69, 40));
 
     // 按钮宽度贴内容：去建设 3 字 ≈78px、稍后再说 4 字 ≈88px，左右各留 ~36/28px 内边距
     const goButton = this.creamPanel(
-      panel, -85, -76, 152, 88, 44,
+      panel, -88, -84, 160, 96, 24,
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const goLabel = this.label(goButton, '去建设', 0, -1, 26, new Color(111, 62, 28));
     styleActionNode(goButton, 'primary');
-    styleActionLabel(goLabel, goButton.getComponent(UITransform)!.contentSize.width, 88, goLabel.fontSize);
+    styleActionLabel(goLabel, goButton.getComponent(UITransform)!.contentSize.width, goButton.getComponent(UITransform)!.contentSize.height, goLabel.fontSize);
     this.addTapFeedback(goButton, () => {
       this.closeFirstTownGuide(false);
       this.options.onFirstTownGuideDone?.();
@@ -1076,12 +1076,12 @@ export class HomeScreen {
     });
 
     const skipButton = this.creamPanel(
-      panel, 88, -76, 146, 88, 44,
+      panel, 88, -84, 160, 96, 24,
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const skipLabel = this.label(skipButton, '稍后再说', 0, -1, 22, new Color(135, 104, 76));
     styleActionNode(skipButton, 'secondary');
-    styleActionLabel(skipLabel, skipButton.getComponent(UITransform)!.contentSize.width, 88, skipLabel.fontSize);
+    styleActionLabel(skipLabel, skipButton.getComponent(UITransform)!.contentSize.width, skipButton.getComponent(UITransform)!.contentSize.height, skipLabel.fontSize);
     this.addTapFeedback(skipButton, () => {
       this.options.onFirstTownGuideDone?.();
       this.closeFirstTownGuide(true);
@@ -1114,7 +1114,14 @@ export class HomeScreen {
   }
 
   private pulseSideEntry(entry: Node, delay: number) {
-    tween(entry)
+    // 点击缩放由外层 Button 控制，循环提醒只缩放内层插画。
+    const visual = new Node('EntryVisual');
+    entry.addChild(visual);
+    visual.addComponent(UITransform).setContentSize(entry.getComponent(UITransform)!.contentSize);
+    entry.children.slice().forEach(child => {
+      if (child !== visual) child.setParent(visual);
+    });
+    tween(visual)
       .delay(delay)
       .repeatForever(
         tween()
@@ -1150,7 +1157,7 @@ export class HomeScreen {
     this.challengeRewardLabel.node.getComponent(UITransform)!.setContentSize(92, 28);
     // 锁定态：小挂锁图标 + 「第 5 关解锁」，底色换成米灰以区分奖励金字签
     this.challengeLockIcon = this.buildLockIcon(tag, -46);
-    this.challengeLockLabel = this.label(tag, '', 10, -1, 16, new Color(135, 104, 76));
+    this.challengeLockLabel = this.label(tag, '', 10, -1, 18, new Color(135, 104, 76));
     this.challengeLockLabel.isBold = true;
     this.challengeLockLabel.node.getComponent(UITransform)!.setContentSize(110, 28);
     this.challengeLockLabel.node.active = false;
@@ -1176,16 +1183,7 @@ export class HomeScreen {
       )
       .start();
 
-    // 挑战入口待机动画
-    tween(challenge)
-      .delay(3.8)
-      .repeatForever(
-        tween()
-          .delay(8)
-          .to(0.3, { scale: new Vec3(1.08, 1.08, 1) }, { easing: 'backOut' })
-          .to(0.25, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' }),
-      )
-      .start();
+    this.pulseSideEntry(challenge, 3.8);
   }
 
   private popIn(node: Node, delay: number) {
@@ -1864,7 +1862,7 @@ export class HomeScreen {
     badgeGraphics.circle(0, 0, 12);
     badgeGraphics.fill();
     badgeGraphics.stroke();
-    const num = this.label(badge, `${index}`, 0, -1, 14, new Color(111, 62, 28));
+    const num = this.label(badge, `${index}`, 0, -1, 18, new Color(111, 62, 28));
     num.isBold = true;
 
     const title = this.label(row, titleText, -194, 13, 20, new Color(111, 62, 28));

@@ -192,6 +192,10 @@ export class LoadingOverlay {
     this.messageLabel.lineHeight = 34;
     this.messageLabel.color = new Color(112, 69, 40);
     this.messageLabel.horizontalAlign = Label.HorizontalAlign.CENTER;
+    this.messageLabel.verticalAlign = Label.VerticalAlign.CENTER;
+    this.messageLabel.enableWrapText = false;
+    this.messageLabel.overflow = Label.Overflow.SHRINK;
+    messageNode.getComponent(UITransform)!.setContentSize(312, 42);
     this.messageLabel.isBold = true;
     this.startDotsLoop();
 
@@ -201,9 +205,13 @@ export class LoadingOverlay {
     const subtitleLabel = subtitleNode.addComponent(Label);
     subtitleLabel.string = '小猫正在赶路，马上就好';
     subtitleLabel.fontSize = 18;
-    subtitleLabel.lineHeight = 24;
+    subtitleLabel.lineHeight = 26;
     subtitleLabel.color = new Color(145, 99, 54, 200);
     subtitleLabel.horizontalAlign = Label.HorizontalAlign.CENTER;
+    subtitleLabel.verticalAlign = Label.VerticalAlign.CENTER;
+    subtitleLabel.enableWrapText = false;
+    subtitleLabel.overflow = Label.Overflow.SHRINK;
+    subtitleNode.getComponent(UITransform)!.setContentSize(312, 30);
   }
 
   // 文案省略号 0~3 个循环跳动
