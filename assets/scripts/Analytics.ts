@@ -1,14 +1,14 @@
 import { sys } from 'cc';
 import { HTML5, MINIGAME, PREVIEW, WECHAT } from 'cc/env';
 import { ApiClient, ApiError } from './ApiClient';
-import { TrackEventName, TrackProps } from './TrackEvents';
+import { TrackEventName, TrackProps, TRACK_PROP_SCHEMAS } from './TrackEvents';
 import type { RewardedAdResult } from './RewardedAdService';
 
 // 事件名与属性类型由 analytics/track-events.json 生成（scripts/generate_track_contract.js），
 // 这里统一再导出，历史调用方保持从 Analytics 导入的习惯。
 export type { TrackEventName, TrackProps } from './TrackEvents';
 
-export const ANALYTICS_APP_VERSION = '1.0.0';
+export const ANALYTICS_APP_VERSION = '1.1.0';
 
 export type AnalyticsPageId =
   | 'home'
@@ -75,6 +75,7 @@ function detectPlatform(): AnalyticsPlatform {
 
 export class Analytics {
   private userId = '';
+  private firstLaunch = false;
   private readonly sessionId = makeId();
   private readonly platform = getAnalyticsPlatform();
   private readonly api: ApiClient;
@@ -88,6 +89,16 @@ export class Analytics {
   constructor(api = new ApiClient(), getContext: () => AnalyticsContext = () => ({ userId: '' })) {
     this.api = api;
     this.getContext = getContext;
+    const identityKey = 'cat-world-analytics-id-v1';
+    try {
+      const savedIdentity = sys.localStorage.getItem(identityKey);
+      this.firstLaunch = !savedIdentity;
+      this.userId = savedIdentity || `anon-${makeId()}`;
+      sys.localStorage.setItem(identityKey, this.userId);
+    } catch (error) {
+      this.userId = `session-${this.sessionId}`;
+      console.error('[CatWorld] Failed to persist anonymous analytics identity', error);
+    }
     this.queue = this.readQueue();
     this.allowFlush = true;
     if (this.queue.length > 0) this.scheduleFlush(800);
@@ -95,6 +106,10 @@ export class Analytics {
 
   setContext(getContext: () => AnalyticsContext) {
     this.getContext = getContext;
+  }
+
+  isFirstLaunch() {
+    return this.firstLaunch;
   }
 
   setUserId(userId: string) {
@@ -117,7 +132,10 @@ export class Analytics {
       event_id: makeId(),
       name,
       ts: Date.now(),
-      props: this.compact(props),
+      props: this.compact(Object.keys(props).reduce((result, key) => {
+        if (Object.prototype.hasOwnProperty.call(TRACK_PROP_SCHEMAS[name], key)) result[key] = props[key];
+        return result;
+      }, {} as TrackProps)),
     };
     this.queue.push(event);
     if (this.queue.length > MAX_QUEUE) {

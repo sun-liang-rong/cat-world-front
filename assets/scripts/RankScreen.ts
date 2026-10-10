@@ -1,10 +1,12 @@
-import { Button, Color, Graphics, Label, Mask, Node, ScrollView, Sprite, UITransform, view } from 'cc';
+import { Button, Color, Graphics, Label, Mask, Node, ScrollView, Sprite, SubContextView, Size, UITransform, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { LeaderboardData, LeaderboardEntry, LeaderboardTab } from './LeaderboardService';
 import { Toast } from './Toast';
 
 export interface RankScreenOptions {
+  getStars: () => number;
+  isWechat: () => boolean;
   onPlaySound: (effect: AudioEffect) => void;
   fetchEntries: (tab: LeaderboardTab) => Promise<LeaderboardData>;
   onInvite: () => boolean;
@@ -26,9 +28,7 @@ const SCORE_BAR_WIDTH = 108;
 const LIST_VIEW_TOP_INSET = 360;
 const LIST_VIEW_BOTTOM_INSET = 224;
 const TABS: Array<{ id: LeaderboardTab; label: string }> = [
-  { id: 'level', label: '关卡模式' },
-  { id: 'endless', label: '无尽模式' },
-  { id: 'challenge', label: '超萌挑战' },
+  { id: 'level', label: '好友星星榜' },
 ];
 
 export class RankScreen {
@@ -48,6 +48,7 @@ export class RankScreen {
   private loadToken = 0;
   private listViewHeight = 0;
   private active = false;
+  private friendView: Node | null = null;
 
   constructor(
     private readonly root: Node,
@@ -85,6 +86,7 @@ export class RankScreen {
     if (!this.rankUI) return;
     this.rankUI.active = active;
     if (active) this.reloadList();
+    else this.postFriendMessage('hide');
   }
 
   destroy() {
@@ -121,7 +123,24 @@ export class RankScreen {
     this.buildSelfCard(bottom);
     this.buildEmptyState(top, bottom);
     this.buildRetryButton(top);
+    if (this.options.isWechat()) {
+      this.friendView = new Node('WechatFriendBoard');
+      this.rankUI.addChild(this.friendView);
+      const height = Math.min(720, this.listViewHeight);
+      this.friendView.setPosition(0, top - LIST_VIEW_TOP_INSET - height / 2);
+      this.friendView.addComponent(UITransform).setContentSize(660, height);
+      const subContext = this.friendView.addComponent(SubContextView);
+      subContext.designResolutionSize = new Size(660, height);
+      subContext.fps = 10;
+    }
     this.reloadList();
+  }
+
+  private postFriendMessage(type: string) {
+    if (!this.options.isWechat()) return;
+    const runtime = globalThis as typeof globalThis & { wx?: { getOpenDataContext?: () => { postMessage: (data: { type: string }) => void } } };
+    try { runtime.wx?.getOpenDataContext?.().postMessage({ type }); }
+    catch (error) { console.error('[CatWorld] Failed to open friend stars', error); }
   }
 
   private buildHeader(top: number) {
@@ -181,7 +200,7 @@ export class RankScreen {
     TABS.forEach((tab, index) => {
       const node = new Node(`RankTab_${tab.id}`);
       bar.addChild(node);
-      node.setPosition(-220 + index * 220, 0);
+      node.setPosition(0, 0);
       node.addComponent(UITransform).setContentSize(200, 64);
       const graphics = node.addComponent(Graphics);
       graphics.fillColor = new Color(255, 248, 226);
@@ -225,6 +244,18 @@ export class RankScreen {
 
   private reloadList() {
     if (!this.listContent || !this.scrollView || !this.rankUI) return;
+    if (this.options.isWechat()) {
+      this.listContent.parent!.active = false;
+      this.emptyState!.active = false;
+      if (this.retryButton) this.retryButton.active = false;
+      this.mockCaption!.string = '仅展示好友累计星星，其他纪录保存在本机';
+      this.mockCaption!.node.active = true;
+      this.selfStarsLabel!.string = String(this.options.getStars());
+      this.selfNameLabel!.string = '我';
+      this.selfCaptionLabel!.string = '继续闯关，为猫咪收集星星';
+      this.postFriendMessage('friend_stars');
+      return;
+    }
     const token = ++this.loadToken;
     // 重进页面或切换页签时先回到顶部，避免拉取期间停留在上次的滚动位置
     this.scrollView.scrollToTop(0, false);
@@ -276,7 +307,8 @@ export class RankScreen {
   private renderList(data: LeaderboardData) {
     if (!this.listContent || !this.scrollView || !this.rankUI) return;
     const viewHeight = this.listViewHeight;
-    this.mockCaption!.node.active = false;
+    this.mockCaption!.string = '预览示例好友，不是真实榜单';
+    this.mockCaption!.node.active = true;
 
     this.listContent.destroyAllChildren();
     this.emptyState!.active = data.entries.length === 0;

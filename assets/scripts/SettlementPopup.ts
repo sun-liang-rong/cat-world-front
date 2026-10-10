@@ -47,7 +47,7 @@ export interface SettlementPopupOptions {
   nextButtonLabel?: string;
   /** 覆盖分段胶囊右侧文案，缺省为返回首页 */
   homeButtonLabel?: string;
-  /** 微信环境下的重要节点分享入口；每日奖励由 Main/PlayerStore 统一处理。 */
+  /** 微信环境下的重要节点分享入口；仅用于自愿展示成果。 */
   share?: {
     type: ShareCardType;
     label: string;
@@ -56,10 +56,10 @@ export interface SettlementPopupOptions {
   onNextLevel: () => void;
   onReturnHome: () => void;
   onReplay: () => void;
-  /** 复活：分享好友成功（或免费复活）后，将本局从失败状态恢复为可继续操作。 */
+  /** 复活：视频完播（或免费复活）后，将本局从失败状态恢复为可继续操作。 */
   onRevive?: () => void;
-  /** 微信分享好友复活：Promise resolve true 视为分享成功。 */
-  onReviveShare?: () => Promise<boolean>;
+  /** 激励视频复活：Promise resolve true 视为视频完播。 */
+  onReviveAd?: () => Promise<boolean>;
   /**
    * 免费复活（连败中打难关的留存兜底）：不看广告直接执行 onRevive。
    * 由 DifficultyController 在连败 ≥1 且触发 spike 时随关卡透传，每局仍只复活一次；
@@ -71,10 +71,10 @@ export interface SettlementPopupOptions {
   /** 覆盖失败信息卡标题 / 正文（收集关目标不足等） */
   failTitle?: string;
   failMessage?: string;
-  /** 「分享好友×2金币」分享成功后补发与基础通关奖励相同数量的金币。 */
+  /** 「看视频×2金币」视频完播后补发与基础通关奖励相同数量的金币。 */
   onDoubleReward?: () => void;
-  /** 「分享好友×2金币」：Main 拉起微信分享，成功 resolve true。 */
-  onDoubleRewardShare?: () => Promise<boolean>;
+  /** 「看视频×2金币」：Main 播放激励视频，成功 resolve true。 */
+  onDoubleRewardAd?: () => Promise<boolean>;
   onTrack?: (name: TrackEventName, props?: TrackProps) => void;
   /**
    * 主线成功态的建设目标提示（小节点机制）：星够时整行可点，作为「去建设」入口；
@@ -118,11 +118,11 @@ const ROW_PILL_WIDTH = 440;
 const ROW_PILL_HEIGHT = 56;
 /** 次操作胶囊按钮（两条并排） */
 const CAPSULE_WIDTH = 200;
-const CAPSULE_HEIGHT = 88;
+const CAPSULE_HEIGHT = 212;
 const CAPSULE_GAP = 24;
 /** 红色广告主按钮 */
-const AD_WIDTH = 440;
-const AD_HEIGHT = 134;
+const AD_WIDTH = 320;
+const AD_HEIGHT = 88;
 const AD_ROW_GAP = 14;
 /** 分享按钮与其它操作之间的间距。 */
 const SHARE_WIDTH = 440;
@@ -274,24 +274,21 @@ export class SettlementPopup extends Component {
     });
 
     // 按钮区改为从面板底边向上叠放，全部收进面板框内：
-    // 次操作胶囊贴底，其上依次是分享行、红色主按钮（分享复活 / 看广告双倍）。
+    // 下一关/重试为主操作，视频奖励与自愿分享为次操作。
     const bottomEdge = -(panelHeight / 2 - BOTTOM_PAD);
     let sectionTop = bottomEdge + buttonSectionHeight;
     if (hasAdRow) {
       const freeRevive = mode === 'fail' && this.options.freeRevive === true;
       const adText = mode === 'fail'
-        ? (freeRevive ? '免费复活清出一对' : '分享好友清出一对')
-        : '分享好友×2金币';
+        ? (freeRevive ? '免费复活清出一对' : '看视频清出一对')
+        : '看视频×2金币';
       const onCompleted = mode === 'fail'
         ? () => this.options.onRevive!()
         : () => this.options.onDoubleReward!();
       sectionTop -= AD_HEIGHT;
-      this.createAdButton(group, adText, 'red', 0, sectionTop + AD_HEIGHT / 2, onCompleted, freeRevive);
+      this.createAdButton(group, adText, 'orange', 0, sectionTop + AD_HEIGHT / 2, onCompleted, freeRevive);
       sectionTop -= AD_ROW_GAP;
-      this.options.onTrack?.('share_entrance_show', {
-        scene: this.adScene(),
-        free_revive: freeRevive,
-      });
+      if (!freeRevive) this.options.onTrack?.('ad_entrance_show', { scene: this.adScene() });
     }
     if (hasShareRow) {
       sectionTop -= SHARE_HEIGHT;
@@ -303,12 +300,12 @@ export class SettlementPopup extends Component {
   }
 
   private hasAdRow(mode: PopupMode) {
-    // 红色主按钮全部走微信分享：失败给「分享好友清出一对」复活（或难关失败的免费复活），
-    // 胜利/无尽给「分享好友×2金币」。回调由 GameScreen 按模式与剩余机会注入。
+    // 次操作使用可选激励视频：失败给「看视频清出一对」复活（或难关失败的免费复活），
+    // 胜利/无尽给「看视频×2金币」。回调由 GameScreen 按模式与剩余机会注入。
     if (mode === 'fail') {
-      return !!this.options.onRevive && (!!this.options.onReviveShare || this.options.freeRevive === true);
+      return !!this.options.onRevive && (!!this.options.onReviveAd || this.options.freeRevive === true);
     }
-    return !!this.options.onDoubleRewardShare
+    return !!this.options.onDoubleRewardAd
       && !!this.options.onDoubleReward
       && (mode !== 'endless' || this.options.coinReward > 0);
   }
@@ -529,7 +526,7 @@ export class SettlementPopup extends Component {
     title.isBold = true;
     const messageText = this.options.failMessage
       || (this.options.hadTrayPair
-        ? '分享给好友清出这对，下一手就能消'
+        ? '清出这对，让猫咪陪你再试试'
         : '再挑战一次，完成本关目标吧!');
     const messageWidth = this.textWidth(messageText, 22);
     const message = this.label(node, messageText, textLeft + messageWidth / 2, -20, 22, new Color(121, 83, 59));
@@ -573,7 +570,7 @@ export class SettlementPopup extends Component {
     }
   }
 
-  /** 次操作：两条独立的浅粉胶囊按钮并排 */
+  /** 主操作在上，返回小镇在下 */
   private buildActionButtons(parent: Node, y: number, mode: PopupMode) {
     const leftText = mode === 'fail'
       ? '再玩一次'
@@ -581,9 +578,16 @@ export class SettlementPopup extends Component {
     const leftClick = (mode === 'fail' || mode === 'endless' || mode === 'challenge')
       ? this.options.onReplay
       : this.options.onNextLevel;
-    const offset = (CAPSULE_WIDTH + CAPSULE_GAP) / 2;
-    this.createActionButton(parent, leftText, 'green', -offset, y, leftClick);
-    this.createActionButton(parent, this.options.homeButtonLabel ?? '返回首页', 'orange', offset, y, this.options.onReturnHome);
+    const next = SettlementButton.create(parent, this.assets, {
+      text: leftText, tone: 'green', width: 470, height: 112,
+      scale: 1, fontSize: 38, onClick: leftClick,
+    });
+    next.setPosition(0, y + 50);
+    const home = SettlementButton.create(parent, this.assets, {
+      text: this.options.homeButtonLabel ?? '返回首页', tone: 'orange', width: 280, height: 88,
+      scale: 1, fontSize: 26, onClick: this.options.onReturnHome,
+    });
+    home.setPosition(0, y - 66);
   }
 
   private buildShareButton(parent: Node, y: number) {
@@ -612,7 +616,7 @@ export class SettlementPopup extends Component {
       text,
       tone,
       width: CAPSULE_WIDTH,
-      height: CAPSULE_HEIGHT,
+      height: 88,
       scale: 1,
       fontSize: 28,
       onClick,
@@ -683,12 +687,12 @@ export class SettlementPopup extends Component {
       width: AD_WIDTH,
       height: AD_HEIGHT,
       scale: 1,
-      fontSize: 30,
+      fontSize: 24,
       onClick: skipAd
         ? () => this.completeWithoutAd(onCompleted)
         : this.options.onRevive
-          ? () => this.shareRevive(onCompleted)
-          : () => this.shareDouble(onCompleted),
+          ? () => this.watchRevive(onCompleted)
+          : () => this.watchDouble(onCompleted),
     });
     node.setPosition(x, y);
     this.adButton = node.getComponent(Button);
@@ -704,23 +708,23 @@ export class SettlementPopup extends Component {
     onCompleted();
   }
 
-  /** 分享好友复活：拉起微信分享，回调成功才执行复活；失败恢复按钮可重试。 */
-  private async shareRevive(onCompleted: () => void) {
-    if (this.adBusy || !this.options.onReviveShare || !this.adButton) return;
+  /** 激励视频复活：播放激励视频，回调成功才执行复活；失败恢复按钮可重试。 */
+  private async watchRevive(onCompleted: () => void) {
+    if (this.adBusy || !this.options.onReviveAd || !this.adButton) return;
     this.adBusy = true;
     this.adButton.interactable = false;
-    if (this.adButtonLabel) this.adButtonLabel.string = '分享中...';
+    if (this.adButtonLabel) this.adButtonLabel.string = '视频准备中...';
 
-    let shareOk = false;
+    let completed = false;
     try {
-      shareOk = await this.options.onReviveShare();
+      completed = await this.options.onReviveAd();
     } catch (error) {
-      console.error('[CatWorld] Settlement revive share failed', error);
-      shareOk = false;
+      console.error('[CatWorld] Settlement revive ad failed', error);
+      completed = false;
     }
     if (!this.node.isValid) return;
 
-    if (shareOk) {
+    if (completed) {
       if (this.adButtonLabel) this.adButtonLabel.string = '已领取';
       onCompleted();
       return;
@@ -728,26 +732,26 @@ export class SettlementPopup extends Component {
 
     this.adBusy = false;
     this.adButton.interactable = true;
-    if (this.adButtonLabel) this.adButtonLabel.string = '分享好友清出一对';
+    if (this.adButtonLabel) this.adButtonLabel.string = '看视频清出一对';
   }
 
-  /** 分享好友双倍金币：拉起微信分享，成功后补发与基础奖励相同数量的金币；失败可重试。 */
-  private async shareDouble(onCompleted: () => void) {
-    if (this.adBusy || !this.options.onDoubleRewardShare || !this.adButton) return;
+  /** 激励视频双倍金币：播放激励视频，成功后补发与基础奖励相同数量的金币；失败可重试。 */
+  private async watchDouble(onCompleted: () => void) {
+    if (this.adBusy || !this.options.onDoubleRewardAd || !this.adButton) return;
     this.adBusy = true;
     this.adButton.interactable = false;
-    if (this.adButtonLabel) this.adButtonLabel.string = '分享中...';
+    if (this.adButtonLabel) this.adButtonLabel.string = '视频准备中...';
 
-    let shareOk = false;
+    let completed = false;
     try {
-      shareOk = await this.options.onDoubleRewardShare();
+      completed = await this.options.onDoubleRewardAd();
     } catch (error) {
-      console.error('[CatWorld] Settlement double share failed', error);
-      shareOk = false;
+      console.error('[CatWorld] Settlement double ad failed', error);
+      completed = false;
     }
     if (!this.node.isValid) return;
 
-    if (shareOk) {
+    if (completed) {
       if (this.adButtonLabel) this.adButtonLabel.string = '已领取';
       onCompleted();
       return;
@@ -755,7 +759,7 @@ export class SettlementPopup extends Component {
 
     this.adBusy = false;
     this.adButton.interactable = true;
-    if (this.adButtonLabel) this.adButtonLabel.string = '分享好友×2金币';
+    if (this.adButtonLabel) this.adButtonLabel.string = '看视频×2金币';
   }
 
   private adScene(): AdScene {

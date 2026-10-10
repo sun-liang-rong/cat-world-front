@@ -689,7 +689,7 @@ export class TownScreen {
 
   private renderDisplay(building: BuildingView) {
     if (!this.displayLayer) return;
-    const key = building.id + ':' + building.stage;
+    const key = building.id + ':' + building.stage + ':' + building.subProgress;
     if (this.displayImage && this.displayKey !== key) {
       this.displayImage.destroy();
       this.displayImage = null;
@@ -705,6 +705,25 @@ export class TownScreen {
         380,
       );
       this.displayImage.name = 'BuildingArtwork';
+      // 每点亮一格都添一束花，阶段完成后保留已获得的花朵。
+      const completedCells = [0, 5, 12, 20][building.stage] ?? 20;
+      const flowers = Math.min(20, completedCells + building.subProgress);
+      const decoration = new Node('ProgressFlowers');
+      this.displayImage.addChild(decoration);
+      const art = decoration.addComponent(Graphics);
+      for (let index = 0; index < flowers; index += 1) {
+        const x = -168 + (index % 8) * 48;
+        const y = -143 + Math.floor(index / 8) * 22;
+        art.strokeColor = new Color(112, 126, 69); art.lineWidth = 3;
+        art.moveTo(x, y - 19); art.lineTo(x, y); art.stroke();
+        art.fillColor = new Color(255, 224, 108);
+        for (let petal = 0; petal < 5; petal += 1) {
+          const angle = Math.PI * 2 * petal / 5;
+          art.circle(x + Math.cos(angle) * 6, y + Math.sin(angle) * 6, 5); art.fill();
+        }
+        art.fillColor = new Color(177, 106, 43); art.circle(x, y, 3); art.fill();
+      }
+
       this.displayKey = key;
       if (this.active) {
         this.displayImage.setScale(new Vec3(0.96, 0.96, 1));

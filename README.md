@@ -15,12 +15,12 @@
 - 连消情绪反馈：成功三消之间间隔不超过 2 秒时显示逐级增强的连消文字、光晕和粒子，不额外改变金币或关卡规则
 - 锤子、重排和临时增加第 7 个槽位
 - 建设小镇页、猫咪图鉴/详情页、每日任务页、道具商店页和“瞬间”记忆相册页
-- 小镇建设小节点：建筑三阶段拆成 20 个小格（清理 5 / 修复 7 / 装饰 8），点亮 1 格固定消耗 ⭐3，与“每关 3 星”对齐（1 关 = 1 格）；亮满一个阶段建筑外观变化一次，装饰完成解锁对应猫咪；结算弹窗有“去建设”直达入口，第 1 关通关后有一次性建设引导
+- 小镇建设小节点：建筑三阶段拆成 20 个小格（清理 5 / 修复 7 / 装饰 8），点亮 1 格固定消耗 ⭐3，与“每关 3 星”对齐（1 关 = 1 格）；每格增加花朵、亮满阶段更新建筑；大橘在小屋清理完成后加入，其余猫在装饰完成后加入；结算弹窗有“去建设”直达入口，第 1 关通关后有一次性建设引导
 - 冒险地图页：章节关卡节点、星星/金币进度、当前关卡挑战和锁定提示，地图区域支持上下滑动换页（也可用“上一章/下一章”按钮）
-- 超萌挑战：首页左侧金币入口，对标“羊了个羊第二关”的固定单关——69 张牌 / 15 种元素 / 固定 8 层深堆、收集槽只有 5 格（额外槽位道具可 +1），同种牌按层距打散、全叠配额更高，贴满压力规划让最优路径长期骑在 4/5 满槽边缘（无放松段）；48 个候选按残酷度取前 6，再各跑一次玩家风险模拟、挑模拟失败率最高者发出；每日首次通关金币 ×3000、同日重复通关金币 ×80（入口文案切换为“今日已领取”）；不发星星、不写入难度自适应；每次进入或再玩一次都保持高压配置、只换元素排布，避免记住卡牌位置
+- 高手挑战：首页独立挑战入口，对标“羊了个羊第二关”的固定单关——69 张牌 / 15 种元素 / 固定 8 层深堆、收集槽只有 5 格（额外槽位道具可 +1），同种牌按层距打散、全叠配额更高，贴满压力规划让最优路径长期骑在 4/5 满槽边缘（无放松段）；48 个候选按残酷度取前 6，再各跑一次玩家风险模拟、挑模拟失败率最高者发出；每日首次通关金币 ×3000、同日重复通关金币 ×80（入口文案切换为“今日已领取”）；不发星星、不写入难度自适应；每次进入或再玩一次都保持高压配置、只换元素排布，避免记住卡牌位置
 - 无尽模式：首页开始闯关下方入口，棋盘永不空完。开局约 90 张密铺，场上剩余 ≤ 50 张时从最底层垫约 40 张，不得把新牌盖在正在点的牌上。每次补卡升一档难度，大约 3 分钟内爬到高压；按消除卡片数本地结算，不发星星、不推进主线、本版不上报排行榜
 - 版本化本地玩家存档：金币、星星、关卡、建设阶段、猫咪进度、道具库存和每日任务；除排行榜累计星星上报微信开放数据域外，其余玩法数据不与服务器交互
-- 激励视频：失败每关最多一次清出槽里一对继续（保证复活后还能往下玩），胜利结算可观看广告领取等额金币追加奖励
+- 激励视频：失败每局最多一次腾出槽位，主线前五关免费；保留必需的收集目标卡，胜利结算可观看广告领取等额金币追加奖励
 - 组件化结算弹窗：成功 / 失败状态、奖励展示、下一关、重试和返回首页
 
 ## 结算弹窗
@@ -63,32 +63,40 @@ python3 scripts/compress_resources.py --backup-dir /tmp/cat-world-originals
 
 关卡逻辑位于 `assets/scripts/level/`，与 Cocos UI 解耦：
 
-- `LevelGenerator.ts` 使用确定性 Seed 生成按层左右镜像对称的多层布局（上层按配额把一部分镜像牌与父层完全同位叠放，即"羊了个羊"式全叠：遮挡比例在 0.25 / 0.5 格点之外放行 1.0，叠柱深度 2~4，`scripts/profile-full-stack.ts` 可统计全叠分布），先构造合法移除见证路径，再按“压力段 / 缓解段”交替分配三消种类，并过滤节奏、难度上下限、普通玩家失误模拟风险或重复的候选。生成按“关卡角色”分化：`normal` 正常生成；`breather` 爽关减少两种元素并用 combo 原型制造三消连击（验收要求 maxCombo ≥ 2）；`spike` 难关把牌量压到普通关一半左右、强制使用 stacked/hidden/order 压力原型（难关必须短，难度来自密度而非规模）。主线风险目标按生命周期分段：L2-L5 新手保护约 8%-15%（先留人）、L6-L10 约 15%-25%（建立"失败→复活"习惯）、L11-L22 约 25%-40%、L23+ 约 30%-45%（变现档），难度验收同时使用上下容差带。此外生成验收包含"失败可挽回感"硬指标（失败率足够高、非爽关/救援）：`failureProgressAvg ≥ 80`（尾段失败）、`trappedPairRate ≥ 60`（失败时槽内带听牌）、`reviveRescueRate ≥ 55`（按真实复活规则模拟失败后清对子，剩余棋盘可解）。未进带的候选按这三项偏差排序兜底，不允许发出中盘就死或复活后无解的关。相关指标可用 `scripts/smoke-revive-check.ts` 验收。
+- `LevelGenerator.ts` 使用确定性 Seed 生成按层左右镜像对称的多层布局（上层按配额把一部分镜像牌与父层完全同位叠放，即"羊了个羊"式全叠：遮挡比例在 0.25 / 0.5 格点之外放行 1.0，叠柱深度 2~4，`scripts/profile-full-stack.ts` 可统计全叠分布），先构造合法移除见证路径，再按“压力段 / 缓解段”交替分配三消种类，并过滤节奏、难度上下限、普通玩家失误模拟风险或重复的候选。生成按“关卡角色”分化：`normal` 正常生成；`breather` 爽关减少两种元素并用 combo 原型制造三消连击（验收要求 maxCombo ≥ 2）；`spike` 难关把牌量压到普通关一半左右、强制使用 stacked/hidden/order 压力原型（难关必须短，难度来自密度而非规模）。主线风险目标按生命周期分段：L1-L5 新手保护约 0%-15%、L6-L10 约 15%-25%、L11-L22 约 25%-40%、L23+ 约 30%-45%，难度验收同时使用上下容差带。此外生成验收包含"失败可挽回感"硬指标（失败率足够高、非爽关/救援）：`failureProgressAvg ≥ 80`（尾段失败）、`trappedPairRate ≥ 60`（失败时槽内带听牌）、`reviveRescueRate ≥ 55`（按真实复活规则模拟失败后清对子，剩余棋盘可解）。未进带的候选按风险与救援指标偏差排序兜底；模拟指标不是对每位玩家的复活可解承诺。相关指标可用 `scripts/smoke-revive-check.ts` 验收。
 - `LevelSolver.ts` 使用与游戏一致的遮挡、槽位和三消规则搜索路径，同时统计压力时刻、缓解时刻和节奏切换。正结果包含完整通关路径；负结果只有在搜索未被状态上限截断时才算已证明无解。`LevelGenerator.ts` 另外用有上限的确定性轻度失误模拟评估“错误选择风险”，不把最佳通关路径当作玩家失败率。
 - `DifficultyController.ts` 保存最近 10 局表现，综合胜率、连胜/连败、失误、耗时和槽位余量计算下一关目标，并提供连续失败救援和三步恢复。在其之上有一层按关卡号驱动的“节拍表”：主题内第 5/10/15/20 关为 breather 爽关，第 9/14/19 关为 spike 难关（连败 ≥ 2 次自动取消；L23+ 变现档不再因精通度取消难关，救援关优先于节拍表），让难度曲线呈现“爬坡—释放—小高潮”的受控起伏。看广告通关不计入连胜。
 - `LevelSystem.ts` 是后续页面代码使用的入口，负责生成下一关、记录表现、保存最近关卡和序列化状态。
 
-批量验收命令：
+批量验收使用 Cocos Creator 自带编译器，配置在 `scripts/ux-tests.tsconfig.json`，`types: []` 避免工作区外的 Node 声明污染：
 
 ```sh
-/Applications/Cocos/Creator/3.8.8/CocosCreator.app/Contents/Resources/resources/3d/engine/node_modules/@cocos/typescript/bin/tsc --target ES2018 --module commonjs --moduleResolution node --strict false --skipLibCheck --outDir .codex/level-system-build scripts/validate-level-system.ts
-node .codex/level-system-build/scripts/validate-level-system.js
+/Applications/Cocos/Creator/3.8.8/CocosCreator.app/Contents/Resources/resources/3d/engine/node_modules/@cocos/typescript/bin/tsc -p scripts/ux-tests.tsconfig.json
+node .codex/ux-tests/scripts/validate-level-system.js
+node -r ./scripts/player-store-cc-shim.js .codex/ux-tests/scripts/validate-player-store.js
+node .codex/ux-tests/scripts/validate-endless-director.js
+node scripts/validate-platform-ux.js
+node scripts/check_track_contract.js
+/Applications/Cocos/Creator/3.8.8/CocosCreator.app/Contents/Resources/resources/3d/engine/node_modules/@cocos/typescript/bin/tsc -p scripts/game-flow-tests.tsconfig.json
+node scripts/validate-game-flow.js
 ```
 
-该脚本会生成并验证 1000 个不同 Seed，检查种类数量、镜像对称布局、见证路径、Solver 可解性、唯一性、救援关成功率和动态难度恢复。`GameScreen.ts` 已接入生成的 `LevelDefinition`，并把真实对局表现回传给 `LevelSystem`；现有 UI 布局和素材未改动。
+关卡脚本验收 1000 个 Seed 的唯一性、合法布局、见证路径、Solver 可解性、救援与难度恢复；存档脚本覆盖奖励、建设解锁、旧档迁移、坏主档冗余恢复和对局快照；平台脚本覆盖分享无回调、取消视频、完播、超时及迟到回调。它们不能代替 Cocos 编辑器完整一关与微信真机验收。
 
-存档逻辑验收命令（使用 Node 内存存储模拟 Cocos 的 `sys.localStorage`）：
+## 2026-10-10 体验优化
 
-```sh
-/Applications/Cocos/Creator/3.8.8/CocosCreator.app/Contents/Resources/resources/3d/engine/node_modules/@cocos/typescript/bin/tsc --target ES2018 --module commonjs --moduleResolution node --strict false --skipLibCheck --outDir .codex/player-store-build scripts/player-store-test-types.d.ts scripts/validate-player-store.ts
-node -r ./scripts/player-store-cc-shim.js .codex/player-store-build/scripts/validate-player-store.js
-```
+前五关牌量为 18 / 27 / 33 / 42 / 48，种类为 4 / 4 / 5 / 6 / 6。大橘试住 5 局有效主线，小屋清理 5 格后永久安家，旧档保留进度并补发应得猫咪。猫技能充能满后手动使用，每局一次，无分钟冷却；未使用的充能跨局保留。互动值不是升级门槛，好感 20 解锁照片，120/140/160 关有相册故事。
 
-该脚本覆盖新档默认值、奖励与扣款、建筑建设和猫咪解锁、商店每日限购、每日任务与宝箱、猫咪互动、超萌挑战领奖标记、无尽纪录以及旧档/坏档归一化。
+首页显示当前目标与真实入住猫，未解锁模式和过期活动隐藏；结算突出下一关/重试。分享仅用于自愿展示成果，每日道具补给独立领取。骰子先验证当前局面可解再扣道具，锤子/猫技能保护必需目标牌，快速点击不会因视觉动画取消而阻塞结算。
 
-无尽补波验收：
+PlayerStore 在本地保存未结算对局及冗余副本；后台暂停有效计时与音频，重进可继续本局，试住及道具不会再扣。主动离开对局会清除快照。首屏资源失败可重新加载或进入首页，挑战生成有等待上限。AssetStore 按路径保留一份可复用纹理，解决重进页面重复创建问题；尚未采用 GPU 资源淘汰，需要真机测量总峰值。
 
-```sh
-/Applications/Cocos/Creator/3.8.8/CocosCreator.app/Contents/Resources/resources/3d/engine/node_modules/@cocos/typescript/bin/tsc --target ES2018 --module commonjs --moduleResolution node --strict false --skipLibCheck --outDir .codex/endless-director-build scripts/validate-endless-director.ts
-node .codex/endless-director-build/scripts/validate-endless-director.js
-```
+## 微信构建与配置
+
+1. Cocos Creator 3.8.8 打开 `assets/scenes/main.scene`，在 Main 组件配置正式微信 `rewardedAdUnitId`。默认空值会隐藏微信视频入口，预览模拟完播。TapTap 广告位独立，不复用给微信。
+2. 用当前源码构建微信小游戏，随后运行 `node scripts/prepare-wechatgame.js build/wechatgame`。若输出目录不同，将它作为参数传入。
+3. 脚本复制 `wechat/open-data/index.js` 并登记 `openDataContext`，设 request=12s、downloadFile=20s；好友榜只读取 `cat_world_stars`，不读取/上传其他玩法存档。既有旧 build 不是本轮构建验收结果。
+4. 微信开发者工具和真机验证：安全区、资源断网重试、退出重进、广告取消/完播/无填充、好友榜分页。累计星星需微信开放数据能力，预览只能显示 Mock。
+5. 埋点目录 v2 必须与 service 同步部署；web 新看板兼容尚未返回 cohorts 的旧服务。客户端不调用自建身份/排行接口，不做登录或云存档。
+
+详见 `docs/用户体验优化实施记录-2026-10-10.md`，权威玩法修订在工作区 `../需求.md`。

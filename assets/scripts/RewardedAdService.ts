@@ -7,10 +7,11 @@ export interface RewardedAdResult {
 
 export const TAP_REWARDED_AD_UNIT_ID = '1067058';
 
-// preview / H5 走 TapTap 激励视频；微信渠道暂不开放广告入口。
-export const REWARDED_AD_ENABLED = getAnalyticsPlatform() !== 'wechat';
+// 预览模拟完播；微信 / TapTap 分别使用各自广告 SDK 和广告位。
+export const REWARDED_AD_ENABLED = true;
 
 interface TapRewardedVideoAd {
+  destroy?: () => void;
   show: () => Promise<void>;
   load: () => Promise<void>;
   onLoad: (callback: () => void) => void;
@@ -25,16 +26,27 @@ interface TapApi {
 function getTapApi(): TapApi | null {
   const runtime = typeof globalThis === 'undefined'
     ? null
-    : globalThis as typeof globalThis & { tap?: TapApi };
-  return runtime?.tap?.createRewardedVideoAd ? runtime.tap : null;
+    : globalThis as typeof globalThis & { tap?: TapApi; wx?: TapApi };
+  const api = getAnalyticsPlatform() === 'wechat' ? runtime?.wx : runtime?.tap;
+  return api?.createRewardedVideoAd ? api : null;
 }
 
 export class RewardedAdService {
   private rewardedAd: TapRewardedVideoAd | null = null;
-  private listenersBound = false;
+  private timeout: ReturnType<typeof setTimeout> | null = null;
   private pending: ((result: RewardedAdResult) => void) | null = null;
 
   constructor(private readonly adUnitId = TAP_REWARDED_AD_UNIT_ID) {}
+
+  isAvailable() {
+    return getAnalyticsPlatform() === 'preview' || (!!this.adUnitId.trim() && !!getTapApi());
+  }
+
+  destroy() {
+    this.finish(false);
+    this.rewardedAd?.destroy?.();
+    this.rewardedAd = null;
+  }
 
   watch(): Promise<RewardedAdResult> {
     const platform = getAnalyticsPlatform();
@@ -43,7 +55,7 @@ export class RewardedAdService {
       if (platform === 'preview') {
         return Promise.resolve({ completed: true, simulated: true });
       }
-      console.error('[CatWorld] TapTap 广告 SDK 不可用');
+      console.error('[CatWorld] 当前平台广告 SDK 不可用');
       return Promise.resolve({ completed: false, simulated: false });
     }
     if (!this.adUnitId.trim()) {
@@ -60,9 +72,13 @@ export class RewardedAdService {
 
     return new Promise(resolve => {
       this.pending = resolve;
-      ad.show().catch(() => {
-        if (!this.pending) return;
-        ad.load().then(() => ad.show()).catch(error => {
+      this.timeout = setTimeout(() => this.finish(false), 90000);
+      Promise.resolve().then(() => ad.show()).catch(() => {
+        if (!this.pending || this.rewardedAd !== ad) return;
+        Promise.resolve().then(() => ad.load()).then(() => {
+          if (this.pending && this.rewardedAd === ad) return ad.show();
+        }).catch(error => {
+          if (this.rewardedAd !== ad) return;
           console.error('[CatWorld] Rewarded ad failed', error);
           this.finish(false);
         });
@@ -83,14 +99,14 @@ export class RewardedAdService {
   }
 
   private bindListeners(ad: TapRewardedVideoAd) {
-    if (this.listenersBound) return;
-    this.listenersBound = true;
     ad.onLoad(() => {});
     ad.onError(error => {
+      if (this.rewardedAd !== ad) return;
       console.error('[CatWorld] Rewarded ad failed', error);
       this.finish(false);
     });
     ad.onClose(result => {
+      if (this.rewardedAd !== ad) return;
       this.finish(!!result && result.isEnded === true);
     });
   }
@@ -99,6 +115,11 @@ export class RewardedAdService {
     const resolve = this.pending;
     if (!resolve) return;
     this.pending = null;
+    if (this.timeout) clearTimeout(this.timeout);
+    this.timeout = null;
+    const ad = this.rewardedAd;
+    this.rewardedAd = null;
+    try { ad?.destroy?.(); } catch (error) { console.error('[CatWorld] Failed to dispose rewarded ad', error); }
     resolve({ completed, simulated: false });
   }
 }

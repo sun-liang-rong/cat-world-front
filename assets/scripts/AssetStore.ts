@@ -47,7 +47,7 @@ export class AssetStore {
     });
   }
 
-  /** 带归属的加载：owner 释放时这些图片会被回收（没有其他 owner 引用的话）。 */
+  /** 带归属的加载：释放页面归属时保留可复用纹理，每个路径最多缓存一份。 */
   loadImagesFor(owner: object, paths: string[], onComplete: () => void) {
     this.loadImagesWith(paths, onComplete, undefined, (path, callback) => {
       resources.load(path, ImageAsset, callback);
@@ -55,7 +55,7 @@ export class AssetStore {
   }
 
   /**
-   * 释放某个 owner 加载的图片。仅当某张图不再被任何 owner 引用时才走释放流程；
+   * 释放某个 owner 加载的图片。移除页面归属，缓存纹理留待同一路径复用；
    * 被多个页面共用（或被无 owner 的常驻加载占用）的图片会保留。
    */
   releaseOwner(owner: object) {
@@ -64,23 +64,8 @@ export class AssetStore {
       if (set.size > 0) return;
       this.owners.delete(path);
       if (this.permanentPaths.has(path)) return;
-      this.destroyFrame(path);
+      // 缓存继续保留，同一路径再打开页面时复用现有纹理。
     });
-  }
-
-  private destroyFrame(path: string) {
-    // 软释放：只把帧移出缓存并回收 CPU 侧解码数据（ImageAsset.destroy 不影响
-    // 已上传的 GPU 贴图），SpriteFrame / Texture2D 对象本身保持有效。
-    // 此前在这里硬销毁贴图，一旦存在未按 owner 登记的借用引用，对应 Sprite
-    // 会在渲染时拿到已销毁的贴图，触发 "Can't getGFXSampler" 和
-    // "Cannot read properties of null (reading 'hash')" 的渲染崩溃。
-    // 代价是已上传的显存随对象存活整个会话；换来的是渲染期零崩溃。
-    delete this.frames[path];
-    const image = this.imageAssets.get(path);
-    if (image) {
-      this.imageAssets.delete(path);
-      assetManager.releaseAsset(image);
-    }
   }
 
   private retain(paths: string[], owner: object) {
@@ -100,6 +85,7 @@ export class AssetStore {
     onComplete: () => void,
     onProgress?: (loaded: number, total: number) => void,
   ) {
+    paths.forEach(path => this.permanentPaths.add(path));
     const missing = Array.from(new Set(paths)).filter(path => !this.frames[path]);
     if (missing.length === 0) {
       onComplete();
@@ -181,7 +167,12 @@ export class AssetStore {
     });
 
     pathsToLoad.forEach(path => {
-      load(path, (error, asset) => {
+      let settled = false;
+      const complete = (error: Error | null, asset: ImageAsset | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+
         if (!error && asset) {
           this.frames[path] = this.createFrame(asset);
           this.imageAssets.set(path, asset);
@@ -192,7 +183,10 @@ export class AssetStore {
         const waiters = this.pending.get(path) || [];
         this.pending.delete(path);
         waiters.forEach(waiter => waiter());
-      });
+      };
+      const timeout = setTimeout(() => complete(new Error('Image load timeout'), null), 20000);
+      try { load(path, complete); }
+      catch (error) { complete(error as Error, null); }
     });
   }
 
@@ -210,14 +204,21 @@ export class AssetStore {
     }
 
     this.bundlePending.set(bundleName, [onComplete]);
-    assetManager.loadBundle(bundleName, (error, bundle) => {
+    let settled = false;
+    const complete = (error: Error | null, bundle?: AssetManager.Bundle) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
       if (error || !bundle) {
         console.error('[CatWorld] Failed to load asset bundle', bundleName, error);
       }
       const callbacks = this.bundlePending.get(bundleName) || [];
       this.bundlePending.delete(bundleName);
       callbacks.forEach(callback => callback(error || !bundle ? null : bundle));
-    });
+    };
+    const timeout = setTimeout(() => complete(new Error('Bundle load timeout')), 20000);
+    try { assetManager.loadBundle(bundleName, complete); }
+    catch (error) { complete(error as Error); }
   }
 
   private createFrame(asset: ImageAsset) {

@@ -1,4 +1,4 @@
-import { AdFunnelState, PlayerRun } from './level/LevelTypes';
+import { AdFunnelState, PlayerRun, LevelDefinition, TileGeometry } from './level/LevelTypes';
 
 export type CatId = 'orange' | 'white' | 'black' | 'ragdoll' | 'aurora';
 
@@ -226,7 +226,37 @@ export interface GamePetPosition {
   y: number;
 }
 
+export interface GameRunCheckpoint {
+  version: 1;
+  mode: 'main' | 'challenge' | 'endless';
+  level: number;
+  definition?: LevelDefinition;
+  endlessSeed?: number;
+  endlessWave?: number;
+  board: Array<TileGeometry & { kind: number; layer: number }>;
+  tray: Array<TileGeometry & { kind: number; layer: number }>;
+  elapsedMs: number;
+  extraSlot: boolean;
+  usedTools: ItemId[];
+  collectedTotal: number;
+  collectProgress: number;
+  eliminatedCount: number;
+  matchCount: number;
+  mistakes: number;
+  decisionCount: number;
+  nearFailureCount: number;
+  performanceReported?: boolean;
+  reviveUsed: boolean;
+  equippedCat: CatId | null;
+  catCharge: number;
+  catSkillUsed: boolean;
+  catSkillPicksLeft: number;
+  trialConsumed: boolean;
+  trialStartRemaining: number | null;
+}
+
 export interface PlayerState {
+  currentRun?: GameRunCheckpoint;
   version: 6;
   /** 后端生成的展示昵称，加载页拿到后写入本地 */
   userName: string;
@@ -287,9 +317,9 @@ export interface PlayerState {
   collectGoalHintDone: boolean;
   /** 「超萌挑战解锁」一次性提示是否已展示（旧档首次启动补弹一次作功能公告）。 */
   challengeUnlockSeen: boolean;
-  /** 各道具最后一次通过分享好友补领的日期；同一天同一道具只补 1 个。 */
+  /** 各道具最后一次领取本地每日补给的日期；字段名保留旧档兼容。 */
   toolShareDates: Record<ItemId, string>;
-  /** 最后一次通过分享好友领取首页金币的日期；每天 1 次。 */
+  /** 历史首页金币奖励日期；当前界面已取消分享领奖，仅保留旧档兼容。 */
   coinShareDate: string;
 }
 

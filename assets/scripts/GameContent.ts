@@ -3,8 +3,8 @@ import { CatId, DailyTaskId, ItemId, RewardBundle } from './PlayerTypes';
 export const MAX_CAT_LEVEL = 20;
 const FIRST_CAT_UPGRADE_COST = 10;
 const LAST_CAT_UPGRADE_COST = 1500;
-const INITIAL_CAT_SKILL_COOLDOWN_MS = 40 * 60 * 1000;
-const MIN_CAT_SKILL_COOLDOWN_MS = 30 * 60 * 1000;
+const INITIAL_CAT_SKILL_COOLDOWN_MS = 0;
+const MIN_CAT_SKILL_COOLDOWN_MS = 0;
 
 export function getCatUpgradeCost(level: number) {
   if (level >= MAX_CAT_LEVEL) return 0;
@@ -55,7 +55,7 @@ export function formatCatSkillCooldown(level: number) {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-// 猫咪技能机制：充能满且冷却结束后由玩家手动触发，升级猫咪缩短冷却时间。
+// 猫咪技能机制：充能满后由玩家手动触发，每局一次，无墙上时间冷却。
 // chargeType = 充能方式（收集元素 / 完成三消），chargeRequired = 触发一次需要的次数
 export type CatSkillEffect = 'clear_board' | 'clear_board_double' | 'clear_tray' | 'grant_item';
 
@@ -112,8 +112,8 @@ export const CAT_DEFINITIONS: CatDefinition[] = [
     name: '大橘',
     rarity: '新手猫咪',
     skill: '收集 20 个元素后手动发动，自选清除 1 个棋盘元素。',
-    unlockHint: '完成流浪猫小屋装饰后解锁',
-    unlockShort: '完成流浪猫小屋装饰解锁',
+    unlockHint: '完成流浪猫小屋清理后解锁',
+    unlockShort: '完成流浪猫小屋清理解锁',
     portraitPath: 'cats/cat_orange',
   },
   {

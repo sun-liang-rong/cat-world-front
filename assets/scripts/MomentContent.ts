@@ -134,6 +134,21 @@ export const MOMENT_DEFINITIONS: MomentDefinition[] = [
     imagePath: 'town/house_stage_3',
     isUnlocked: source => source.buildStage >= 3,
   },
+  ...[
+    { level: 120, title: '星光野餐', description: '大橘带来面包，小白铺好餐布。冒险之后，我们一起看星星。', imagePath: 'moment/moment_photo_cats' },
+    { level: 140, title: '写给小镇的信', description: '小黑把第一天的脚印收进信封：谢谢你，让我们拥有了家。', imagePath: 'moment/moment_photo_bench' },
+    { level: 160, title: '我们一直在这里', description: '五只猫围在灯下。旅程走到终点，小镇的生活才刚刚开始。', imagePath: 'town/house_stage_3' },
+  ].map(story => ({
+    id: `story_${story.level}`, category: 'levels' as const, dateLabel: `第 ${story.level} 关纪念`,
+    title: story.title, description: story.description, imagePath: story.imagePath,
+    unlockHint: `完成第 ${story.level} 关后收录`, isUnlocked: (source: MomentSource) => source.level > story.level,
+  })),
+  {
+    id: 'cat_affection', category: 'cats', dateLabel: '相伴的日子', title: '最安心的位置',
+    description: '猫咪把小爪放在你手心：今天也要一起玩呀。', unlockHint: '任意猫咪好感达到 20',
+    imagePath: 'moment/moment_photo_bench', isUnlocked: source => Object.values(source.cats).some(cat => cat.affection >= 20),
+  },
+
 ];
 
 export function buildMomentSnapshots(source: MomentSource): MomentSnapshot[] {

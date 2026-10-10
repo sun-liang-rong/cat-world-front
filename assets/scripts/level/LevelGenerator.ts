@@ -310,7 +310,8 @@ export class LevelGenerator {
     const failureRateBand = LevelGenerator.failureRateBand(options.level, options.rescue === true, candidate.goal);
     const difficultyGap = Math.abs(structuralScore.difficulty - context.target);
     const needsRisk = options.fullTrayPressure !== true && (
-      !!LevelRules.collectGoal(candidate.goal)
+      options.level <= 5
+      || !!LevelRules.collectGoal(candidate.goal)
       || difficultyGap <= LevelGenerator.targetTolerance + 1
       // 验收带按 acceptTarget 判定（不再只认 target）：
       // 高关普通关的难度分饱和在 54，而 baseDifficulty 已爬到 60+，只按 target 判断会让
@@ -363,9 +364,9 @@ export class LevelGenerator {
     );
     // 爽关的结构难度天然被棋盘规模顶高，往往进不了 base-14 的容差带；
     // 兜底候选必须优先保住连击链（验收要求 maxCombo ≥ 2）。
-    const rankedDistance = context.role === 'breather' && score.maxCombo < 2
-      ? distance + 1000
-      : distance;
+    const rankedDistance = distance
+      + (context.role === 'breather' && score.maxCombo < 2 ? 1000 : 0)
+      + (options.level <= 5 && score.estimatedFailureRate > failureRateBand.max ? 10000 : 0);
     if (score.repetition < 100 && rankedDistance < context.bestDistance) {
       context.best = candidate;
       context.bestDistance = rankedDistance;
@@ -1344,7 +1345,7 @@ export class LevelGenerator {
     // 新手保护期（L2-5）：失败率压到 8-15%。D1/D3 留存死在头几关，
     // 此时玩家还没形成"失败→看广告复活"的行为习惯，少赚的广告费远小于
     // 流失损失；变现档位（30-45%）推迟到 L23+ 才进入。
-    if (level <= 5) return { min: 8, max: 15 };
+    if (level <= 5) return { min: 0, max: 15 };
     if (level <= 10) return { min: 15, max: 25 };
     if (level <= 22) return { min: 25, max: 40 };
     return { min: 30, max: 45 };
@@ -1894,6 +1895,7 @@ export class LevelGenerator {
 
   private layerCount(level: number) {
     if (level <= 1) return 2;
+    if (level <= 5) return level <= 3 ? 3 : 4;
     // 层叠更深、可见牌更少：L2 就 5 层，L18 起到顶 9 层
     return Math.min(9, 5 + Math.floor((level - 2) / 4));
   }
@@ -1903,6 +1905,7 @@ export class LevelGenerator {
     if (fullTrayPressure) {
       return 15;
     }
+    if (level <= 5) return [4, 4, 5, 6, 6][Math.max(0, level - 1)];
     // 优先级2：延缓种类数增长 - 拉长难度曲线，给玩家更长的学习期
     // 🆕 再次优化：进一步增加前期种类数，解决"还是太简单"问题
     // 新曲线：L2=8种 → L3=9种 → L5=10种 → L10=11种 → L20=13种 → L35=15种
@@ -1936,6 +1939,7 @@ export class LevelGenerator {
     fullTrayPressure = false,
   ) {
     if (level <= 1) return 18;
+    if (level <= 5 && !fullTrayPressure) return [18, 27, 33, 42, 48][level - 1];
 
     const kindCount = LevelGenerator.kindCount(level, role, fullTrayPressure);
     const minimum = kindCount * 3;

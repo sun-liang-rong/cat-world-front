@@ -1,4 +1,4 @@
-import { _decorator, Camera, Color, Component, Node, ResolutionPolicy, UITransform, view } from 'cc';
+import { _decorator, Camera, Color, Component, Game, game, Node, ResolutionPolicy, UITransform, view } from 'cc';
 import { PREVIEW } from 'cc/env';
 import { ActivityScreen } from './ActivityScreen';
 import { AssetStore } from './AssetStore';
@@ -8,7 +8,6 @@ import { DailyTaskScreen } from './DailyTaskScreen';
 import { GameScreen, buildGameScreenImagePaths } from './GameScreen';
 import { HomeScreen, buildHomeScreenImagePaths } from './HomeScreen';
 import { PlayerStore } from './PlayerStore';
-import { ProfileCoordinator } from './ProfileCoordinator';
 import { isCampaignComplete, LEVELS_PER_THEME, MAX_MAIN_LEVEL, themeIndexForLevel } from './TownContent';
 import { ShopScreen } from './ShopScreen';
 import { TownScreen } from './TownScreen';
@@ -19,12 +18,12 @@ import { LoadingScreen } from './LoadingScreen';
 import { AudioManager } from './AudioManager';
 import { LeaderboardService } from './LeaderboardService';
 import { RankScreen } from './RankScreen';
-import { REWARDED_AD_ENABLED, RewardedAdService, TAP_REWARDED_AD_UNIT_ID } from './RewardedAdService';
+import { RewardedAdService, TAP_REWARDED_AD_UNIT_ID } from './RewardedAdService';
 import { Toast } from './Toast';
 import { MomentScreen } from './MomentScreen';
 import { AdventureScreen, THEME_INFO } from './AdventureScreen';
 import { LoadingOverlay } from './LoadingOverlay';
-import { AdScene, Analytics, AnalyticsPageId } from './Analytics';
+import { AdScene, Analytics, AnalyticsPageId, getAnalyticsPlatform } from './Analytics';
 import { SharePromoter } from './SharePromoter';
 
 const { ccclass, property } = _decorator;
@@ -57,8 +56,6 @@ export class Main extends Component {
   private launchedAt = 0;
   private audio!: AudioManager;
   private rewardedAd!: RewardedAdService;
-  /** 远程 profile 单飞协调器（在 onLoad 装配）。 */
-  private profile!: ProfileCoordinator;
   /** 分享适配层（在 onLoad 装配）。 */
   private sharePromoter!: SharePromoter;
   private homeScreen!: HomeScreen;
@@ -115,21 +112,14 @@ export class Main extends Component {
       return;
     }
     Main.instance = this;
+    game.on(Game.EVENT_HIDE, this.onAppHide, this);
+    game.on(Game.EVENT_SHOW, this.onAppShow, this);
     view.setDesignResolutionSize(750, 1334, ResolutionPolicy.FIXED_WIDTH);
     this.launchedAt = Date.now();
     this.playerStore.load();
-    // 埋点上下文只带匿名身份：金币、星星、关卡、猫咪等本机存档状态不再随事件上传。
-    this.analytics.setContext(() => ({
-      userId: this.playerStore.getUserId(),
-    }));
+    this.playerStore.bindCheckpointProvider(() => this.gameScreen?.createCheckpoint());
+    // 稳定的本机匿名统计 ID；不创建远端身份，也不上传存档。
     this.playerStore.bindAnalytics(this.analytics);
-    if (this.playerStore.hasProfile()) this.analytics.setUserId(this.playerStore.getUserId());
-    this.profile = new ProfileCoordinator({
-      playerStore: this.playerStore,
-      leaderboard: this.leaderboard,
-      analytics: this.analytics,
-      isAlive: () => this.node.isValid,
-    });
     this.sharePromoter = new SharePromoter({
       analytics: this.analytics,
       leaderboard: this.leaderboard,
@@ -138,9 +128,17 @@ export class Main extends Component {
       refreshGameInventory: () => this.gameScreen?.refreshInventoryHud(),
     });
     this.analytics.track('app_launch', {
-      is_new_user: !this.playerStore.hasProfile() && this.playerStore.getLevel() === 1 && this.playerStore.getTotalStarsEarned() === 0,
+      is_new_user: this.analytics.isFirstLaunch(),
       has_profile: this.playerStore.hasProfile(),
     });
+    const runtime = globalThis as typeof globalThis & { wx?: { getLaunchOptionsSync?: () => { query?: Record<string, string> } } };
+    if (getAnalyticsPlatform() === 'wechat') {
+      const cardType = runtime.wx?.getLaunchOptionsSync?.().query?.share_card;
+      if (['level_win', 'town_stage', 'cat_unlock', 'challenge_record', 'endless_record', 'journey_complete', 'campaign_complete'].includes(cardType)) {
+        this.analytics.track('share_card_open', { card_type: cardType });
+      }
+      this.leaderboard.reportStars(this.playerStore.getTotalStarsEarned());
+    }
     this.levelSystem.seedRuns(this.playerStore.getRecentRuns());
     this.root = new Node('CatTownRoot');
     this.node.addChild(this.root);
@@ -154,7 +152,7 @@ export class Main extends Component {
     // 音频延迟加载，不阻塞首屏
     // this.audio.load();
     this.rewardedAd = new RewardedAdService(
-      REWARDED_AD_ENABLED ? TAP_REWARDED_AD_UNIT_ID : this.rewardedAdUnitId,
+      getAnalyticsPlatform() === 'wechat' ? this.rewardedAdUnitId : TAP_REWARDED_AD_UNIT_ID,
     );
 
     // 加载页先亮起来，进度条走完前必须把首页和当前关卡都准备好。
@@ -164,11 +162,13 @@ export class Main extends Component {
     this.loadingScreen.loadAndCreate(() => this.beginPrimaryLoad());
   }
 
-  // 激励视频入口总控：preview / H5 开放 TapTap 广告；微信渠道关闭时注入 undefined，
-  // 结算复活/双倍、首页金币广告、商店广告领道具会各自隐藏入口。
   private buildWatchAdHandler() {
-    if (!REWARDED_AD_ENABLED) return undefined;
+    if (!this.rewardedAd.isAvailable()) return undefined;
     return (scene: AdScene = 'home_coins') => this.analytics.trackRewardedAd(scene, () => this.rewardedAd.watch());
+  }
+
+  private watchReward(scene: AdScene): Promise<boolean> {
+    return this.analytics.trackRewardedAd(scene, () => this.rewardedAd.watch()).then(result => result.completed);
   }
 
   private trackPage(pageId: AnalyticsPageId) {
@@ -188,7 +188,13 @@ export class Main extends Component {
       onSoundChanged: enabled => this.audio.setSoundEnabled(enabled),
       onVibrationChanged: enabled => this.audio.setVibrationEnabled(enabled),
       onPlaySound: effect => this.audio.playEffect(effect),
-      onStartGame: () => this.startGame(),
+      onStartGame: () => {
+        const run = this.playerStore.getRunCheckpoint();
+        if (run?.mode === 'endless') this.startEndless();
+        else if (run?.mode === 'challenge') this.startChallenge();
+        else this.startGame();
+      },
+      hasRunCheckpoint: () => !!this.playerStore.getRunCheckpoint(),
       onStartEndless: () => this.startEndless(),
       isEndlessUnlocked: () => this.playerStore.isEndlessUnlocked(),
       onStartChallenge: () => this.startChallenge(),
@@ -199,7 +205,7 @@ export class Main extends Component {
       onCatTrialOfferShown: () => this.playerStore.markCatTrialOfferShown(),
       onStartCatTrial: () => this.startCatTrial(),
       getCatTrialStatus: () => this.playerStore.getCatTrialStatus(),
-      shouldShowChallengeUnlockNotice: () => this.playerStore.shouldShowChallengeUnlockNotice(),
+      shouldShowChallengeUnlockNotice: () => this.playerStore.getLevel() >= 11 && this.playerStore.shouldShowChallengeUnlockNotice(),
       onChallengeUnlockNoticeShown: () => this.playerStore.markChallengeUnlockNoticeShown(),
       onOpenTown: () => this.openTown(),
       // 气泡条件 =「从未建设过」或「星星已够点亮下一格」（小节点机制的建设提醒）
@@ -242,9 +248,24 @@ export class Main extends Component {
           campaignComplete: complete,
         };
       },
-      onShareForCoins: () => this.sharePromoter.shareForCoins(),
-      canShareForCoins: () => this.playerStore.canClaimCoinByShare(),
-      onAddCoins: amount => this.playerStore.addReward({ coins: amount }),
+      getResidentCats: () => {
+        const ids: CatId[] = ['orange', 'white', 'black', 'ragdoll', 'aurora'];
+        const owned = ids.filter(id => this.playerStore.getCat(id).unlocked);
+        if (!owned.includes('orange') && this.playerStore.isCatTrialActive()) owned.unshift('orange');
+        return owned;
+      },
+      getCurrentGoal: () => {
+        const state = this.playerStore.getState();
+        if (!state.cats.orange.unlocked) {
+          const cells = Math.max(0, 5 - state.buildings.cat_house.subProgress);
+          const wins = Math.max(0, cells - Math.floor(state.stars / 3));
+          return wins > 0 ? `再赢 ${wins} 关，帮大橘准备小窝` : '星星够啦，去小镇给大橘安家';
+        }
+        const journey = this.playerStore.getCatJourneySnapshot();
+        if (journey.canClaim) return '今日猫咪旅程奖励已备好，去任务领取';
+        if (!journey.completed) return '大橘：明天也想和你一起冒险';
+        return '闯关攒星星，给猫咪们布置温暖的小镇';
+      },
     });
   }
 
@@ -269,7 +290,7 @@ export class Main extends Component {
       },
       getShareOffer: type => this.sharePromoter.buildShareOffer(
         type,
-        type === 'cat_unlock' ? '分享解锁成果 · 领金币×30' : '分享小镇进度 · 领金币×30',
+        type === 'cat_unlock' ? '分享解锁成果' : '分享小镇进度',
       ),
       onShare: type => this.sharePromoter.shareCard(type),
       onStartGame: () => {
@@ -323,9 +344,14 @@ export class Main extends Component {
       getCatJourney: () => this.playerStore.getCatJourneySnapshot(),
       onClaimCatJourney: () => this.playerStore.claimCatJourney(),
       onJourneyOpened: () => this.analytics.track('journey_open'),
-      getShareOffer: () => this.sharePromoter.buildShareOffer('journey_complete', '分享旅程完成 · 领金币×30'),
+      getShareOffer: () => this.sharePromoter.buildShareOffer('journey_complete', '分享旅程完成'),
       onShare: type => this.sharePromoter.shareCard(type),
-      onStartGame: () => this.startGame(),
+      onStartGame: () => {
+        const run = this.playerStore.getRunCheckpoint();
+        if (run?.mode === 'endless') this.startEndless();
+        else if (run?.mode === 'challenge') this.startChallenge();
+        else this.startGame();
+      },
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
   }
@@ -352,7 +378,12 @@ export class Main extends Component {
       getActivity: () => this.playerStore.getActivitySnapshot(),
       onClaimTask: id => this.playerStore.claimActivityTask(id),
       onClaimReward: id => this.playerStore.claimActivityReward(id),
-      onStartGame: () => this.startGame(),
+      onStartGame: () => {
+        const run = this.playerStore.getRunCheckpoint();
+        if (run?.mode === 'endless') this.startEndless();
+        else if (run?.mode === 'challenge') this.startChallenge();
+        else this.startGame();
+      },
       onPlaySound: effect => this.audio.playEffect(effect),
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
@@ -377,7 +408,12 @@ export class Main extends Component {
       getTotalStars: () => this.playerStore.getTotalStarsEarned(),
       getCoins: () => this.playerStore.getCoins(),
       onPlaySound: effect => this.audio.playEffect(effect),
-      onStartGame: () => this.startGame(),
+      onStartGame: () => {
+        const run = this.playerStore.getRunCheckpoint();
+        if (run?.mode === 'endless') this.startEndless();
+        else if (run?.mode === 'challenge') this.startChallenge();
+        else this.startGame();
+      },
       onOpenShop: () => this.openShop(),
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
@@ -388,13 +424,9 @@ export class Main extends Component {
     if (this.rankScreen) return;
     this.rankScreen = new RankScreen(this.root, this.assets, {
       onPlaySound: effect => this.audio.playEffect(effect),
-      // 排行榜入口补齐身份（A-3）：没有/生成失败时先走单飞生成，失败让页面
-      // 展示「网络暂不可用，可重试」，而不是把身份缺失渲染成空榜。
-      fetchEntries: tab => this.profile.ensure().then(() => this.leaderboard.fetchBoard(
-        tab,
-        this.playerStore.getUserId(),
-        tab === 'challenge' ? this.playerStore.getDailyDateKey() : undefined,
-      )),
+      getStars: () => this.playerStore.getTotalStarsEarned(),
+      isWechat: () => getAnalyticsPlatform() === 'wechat',
+      fetchEntries: () => this.leaderboard.fetchPreviewBoard(this.playerStore.getTotalStarsEarned()),
       onInvite: () => this.leaderboard.invite(),
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
@@ -402,15 +434,10 @@ export class Main extends Component {
 
   private beginPrimaryLoad() {
     if (!this.node.isValid) return;
+    this.homeScreen?.destroy();
     // ✅ 阶段1：只创建首页，不创建其他页面
     this.createHomeScreen();
     this.loadingScreen?.bringToFront();
-
-    // 远程 profile 完全后台化：失败/超时不阻塞首屏、不占加载进度，
-    // 排行榜入口会通过同一条单飞请求显式重试（见 ProfileCoordinator.ensure）。
-    this.profile.ensure().catch(() => {
-      // 失败日志已在协调器内输出，后台路径静默即可。
-    });
 
     // ✅ 只加载首页资源，游戏资源延迟到后台加载。
     // 首屏完成条件只看本地：首页图片就绪 + 首页 UI 创建成功（A-1），
@@ -439,15 +466,19 @@ export class Main extends Component {
       () => {
         if (!this.node.isValid) return;
         // 记录本地首页资源是否有加载失败，进首页后给出可见提示（A-1）。
-        this.homeLoadFailed = this.assets.takeLoadFailures().length > 0;
+        this.assets.takeLoadFailures();
+        this.homeLoadFailed = homeOnlyPaths.some(path => !this.assets.getFrame(path));
         imagesReady = true;
         updateProgress();
 
-        this.loadScreen(this.homeScreen, () => {
+        const createHome = () => this.loadScreen(this.homeScreen, () => {
           homeReady = true;
           updateProgress();
           maybeFinish();
         });
+        if (this.homeLoadFailed) {
+          this.loadingScreen?.showLoadFailure(() => this.beginPrimaryLoad(), createHome);
+        } else createHome();
       },
       (loaded, total) => {
         const imageShare = total > 0 ? loaded / total : 1;
@@ -648,6 +679,15 @@ export class Main extends Component {
       level: this.playerStore.getLevel(),
     });
     const level = this.playerStore.getLevel();
+    const run = this.playerStore.getRunCheckpoint();
+    if (run?.mode === 'main' && run.level === level) {
+      this.currentLevelDefinition = run.definition;
+      this.openGame(() => {
+        this.homeScreen.setActive(false);
+        this.startingGame = false;
+      });
+      return;
+    }
 
     // 通关后直接回小镇（不点“下一关”）时，存档关卡已 +1，而 currentLevelDefinition
     // 还是刚打完的那关：优先顶上预生成的下一关，对不上就作废重生成，
@@ -712,6 +752,8 @@ export class Main extends Component {
     this.gameScreen = new GameScreen(this.root, this.assets, {
       level,
       levelDefinition: this.currentLevelDefinition || undefined,
+      checkpoint: this.playerStore.getRunCheckpoint()?.mode === 'main' ? this.playerStore.getRunCheckpoint() : undefined,
+      onSaveRun: () => this.playerStore.save(),
       getCoins: () => this.playerStore.getCoins(),
       onCoinsChanged: coins => this.playerStore.setCoins(coins),
       onStarsGranted: stars => {
@@ -721,7 +763,7 @@ export class Main extends Component {
       },
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
-      onToolShareGet: id => this.sharePromoter.shareForTool(id),
+      onToolSupplyGet: id => this.sharePromoter.claimToolSupply(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(),
       hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(),
       onMainRunStarted: () => {
@@ -762,15 +804,15 @@ export class Main extends Component {
       onCollectGoalHintShown: () => this.playerStore.markCollectGoalHintDone(),
       getBuildTargetInfo: () => this.playerStore.getNextBuildableInfo(),
       onGoBuild: () => this.goBuildFromGame(),
-      onDoubleRewardShare: () => this.sharePromoter.shareForDouble(),
-      onReviveShare: () => this.sharePromoter.shareForRevive(),
+      onDoubleRewardAd: this.rewardedAd.isAvailable() ? () => this.watchReward('double_coins') : undefined,
+      onReviveAd: this.rewardedAd.isAvailable() ? () => this.watchReward('revive') : undefined,
       onTrack: (name, props) => this.analytics.track(name, props),
       getShareOffer: () => {
         if (level >= MAX_MAIN_LEVEL) {
-          return this.sharePromoter.buildShareOffer('campaign_complete', '分享冒险完成 · 领金币×30');
+          return this.sharePromoter.buildShareOffer('campaign_complete', '分享冒险完成');
         }
         if (level === 5) {
-          return this.sharePromoter.buildShareOffer('level_win', '分享第 5 关通关 · 领金币×30');
+          return this.sharePromoter.buildShareOffer('level_win', '分享第 5 关通关');
         }
         return null;
       },
@@ -805,7 +847,7 @@ export class Main extends Component {
       Toast.show(this.root, result.message);
       return;
     }
-    Toast.show(this.root, '大橘已入住，接下来 3 局可以使用它的技能');
+    Toast.show(this.root, '大橘已入住，接下来 5 局可以使用它的技能');
     this.homeScreen.setActive(true);
   }
 
@@ -824,13 +866,17 @@ export class Main extends Component {
     this.hideExtraPages();
     this.analytics.track('level_enter_click', { mode: 'challenge', level: CHALLENGE_GENERATOR_LEVEL });
 
+    const savedChallenge = this.playerStore.getRunCheckpoint();
+    if (savedChallenge?.mode === 'challenge') this.challengeLevelDefinition = savedChallenge.definition;
     // 如果超萌挑战关卡还未准备好，显示加载动画
     if (!this.challengeLevelDefinition) {
       this.loadingOverlay = new LoadingOverlay(this.root);
       this.loadingOverlay.show('超萌挑战准备中...');
 
       // 等待关卡准备完成
+      const deadline = Date.now() + 15000;
       const checkReady = () => {
+        if (!this.node.isValid || !this.startingGame) return;
         if (this.challengeLevelDefinition) {
           this.loadingOverlay?.hide(() => {
             this.loadingOverlay = null;
@@ -839,6 +885,13 @@ export class Main extends Component {
               this.startingGame = false;
             });
           });
+        } else if (!this.challengePreparing || Date.now() >= deadline) {
+          this.loadingOverlay?.destroy();
+          this.loadingOverlay = null;
+          this.startingGame = false;
+          this.pauseChallengePreparation();
+          this.homeScreen.setActive(true);
+          Toast.show(this.root, '挑战准备失败，请重试');
         } else {
           setTimeout(checkReady, 100);
         }
@@ -928,6 +981,8 @@ export class Main extends Component {
       // 超萌挑战不属于任何主题，强制使用通用元素皮肤
       theme: -1,
       levelDefinition: this.challengeLevelDefinition || undefined,
+      checkpoint: this.playerStore.getRunCheckpoint()?.mode === 'challenge' ? this.playerStore.getRunCheckpoint() : undefined,
+      onSaveRun: () => this.playerStore.save(),
       challenge: { coinReward: challengeCoinReward },
       traySlots: CHALLENGE_TRAY_SLOTS,
       getCoins: () => this.playerStore.getCoins(),
@@ -935,11 +990,11 @@ export class Main extends Component {
       onStarsGranted: () => {},
       onChallengeWin: durationMs => {
         this.playerStore.markChallengeRewardClaimed();
-        this.profile.submitChallenge(durationMs);
+
       },
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
-      onToolShareGet: id => this.sharePromoter.shareForTool(id),
+      onToolSupplyGet: id => this.sharePromoter.claimToolSupply(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(false),
       hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(false),
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
@@ -960,10 +1015,10 @@ export class Main extends Component {
       onNextLevel: () => this.returnHomeFromGame(),
       onReturnHome: () => this.returnHomeFromGame(),
       onReplay: () => this.replayChallenge(),
-      onReviveShare: () => this.sharePromoter.shareForRevive(),
-      onDoubleRewardShare: () => this.sharePromoter.shareForDouble(),
+      onReviveAd: this.rewardedAd.isAvailable() ? () => this.watchReward('revive') : undefined,
+      onDoubleRewardAd: this.rewardedAd.isAvailable() ? () => this.watchReward('double_coins') : undefined,
       onTrack: (name, props) => this.analytics.track(name, props),
-      getShareOffer: () => this.sharePromoter.buildShareOffer('challenge_record', '分享挑战成果 · 领金币×30'),
+      getShareOffer: () => this.sharePromoter.buildShareOffer('challenge_record', '分享挑战成果'),
       onShare: type => this.sharePromoter.shareCard(type),
     });
     this.gameScreen.loadAndCreate(() => {
@@ -992,16 +1047,20 @@ export class Main extends Component {
   private openEndlessGame(onReady?: () => void) {
     const previous = this.gameScreen;
     previous?.destroy();
-    const endlessSeed = (Date.now() ^ 0x45e21a9b) | 0;
+    const savedEndless = this.playerStore.getRunCheckpoint();
+    const checkpoint = savedEndless?.mode === 'endless' ? savedEndless : undefined;
+    const endlessSeed = checkpoint?.endlessSeed ?? ((Date.now() ^ 0x45e21a9b) | 0);
     this.gameScreen = new GameScreen(this.root, this.assets, {
       level: this.playerStore.getLevel(),
       theme: -1,
+      checkpoint,
+      onSaveRun: () => this.playerStore.save(),
       endless: {
         seed: endlessSeed,
         bestEliminated: this.playerStore.getEndlessProgress().bestEliminated,
         onFinish: result => {
           const recorded = this.playerStore.recordEndlessRun(result);
-          this.profile.submitEndless(result.eliminated, result.durationMs);
+
           return recorded;
         },
       },
@@ -1010,7 +1069,7 @@ export class Main extends Component {
       onStarsGranted: () => {},
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
-      onToolShareGet: id => this.sharePromoter.shareForTool(id),
+      onToolSupplyGet: id => this.sharePromoter.claimToolSupply(id),
       getEquippedCat: () => this.playerStore.getEquippedCat(false),
       hasAnyUnlockedCat: () => this.playerStore.hasAnyUnlockedCat(false),
       getGamePetPosition: () => this.playerStore.getGamePetPosition(),
@@ -1031,10 +1090,10 @@ export class Main extends Component {
       onNextLevel: () => this.returnHomeFromGame(),
       onReturnHome: () => this.returnHomeFromGame(),
       onReplay: () => this.replayEndless(),
-      onDoubleRewardShare: () => this.sharePromoter.shareForDouble(),
+      onDoubleRewardAd: this.rewardedAd.isAvailable() ? () => this.watchReward('double_coins') : undefined,
       onTrack: (name, props) => this.analytics.track(name, props),
       getShareOffer: context => context?.isNewRecord
-        ? this.sharePromoter.buildShareOffer('endless_record', '分享新纪录 · 领金币×30')
+        ? this.sharePromoter.buildShareOffer('endless_record', '分享新纪录')
         : null,
       onShare: type => this.sharePromoter.shareCard(type),
     });
@@ -1390,6 +1449,7 @@ export class Main extends Component {
   }
 
   private returnHomeFromGame() {
+    this.playerStore.clearRunCheckpoint();
     this.startingGame = false;
     if (this.gameScreen) {
       this.gameScreen.destroy();
@@ -1414,6 +1474,7 @@ export class Main extends Component {
 
   private discardActiveGame() {
     if (!this.gameScreen?.hasStartedPlay()) return;
+    this.playerStore.clearRunCheckpoint();
     this.startingGame = false;
     this.gameScreen.destroy();
     this.assets.releaseOwner(this.gameScreen);
@@ -1432,7 +1493,22 @@ export class Main extends Component {
     this.townScreen?.setActive(false);
   }
 
+  private onAppHide() {
+    this.gameScreen?.pauseForBackground();
+    this.audio?.setBackground(true);
+    this.playerStore.save();
+  }
+
+  private onAppShow() {
+    this.audio?.setBackground(false);
+    this.gameScreen?.showResumePrompt();
+  }
+
   onDestroy() {
+    this.playerStore.save();
+    game.off(Game.EVENT_HIDE, this.onAppHide, this);
+    game.off(Game.EVENT_SHOW, this.onAppShow, this);
+    this.rewardedAd?.destroy();
     if (Main.instance === this) Main.instance = null;
     this.screenLoadWaiters.clear();
     this.readyScreens.clear();
@@ -1562,7 +1638,7 @@ export class Main extends Component {
   private advanceMainLevelAfterWin() {
     const clearedLevel = this.playerStore.getLevel();
     this.playerStore.setLevel(clearedLevel + 1);
-    this.profile.submitLevelBest();
+    this.leaderboard.reportStars(this.playerStore.getTotalStarsEarned());
     if (!isCampaignComplete(this.playerStore.getLevel())) {
       this.prepareNextMainLevel(this.playerStore.getLevel());
     }

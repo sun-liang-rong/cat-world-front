@@ -1,5 +1,6 @@
 import {
   BlockInputEvents,
+  Button,
   Color,
   Graphics,
   Label,
@@ -33,6 +34,7 @@ export class LoadingScreen {
   private readonly barWidth = 560;
   private readonly fillInset = 15;
   private destroyed = false;
+  private errorUI: Node | null = null;
 
   constructor(
     private readonly root: Node,
@@ -55,6 +57,44 @@ export class LoadingScreen {
 
   finish() {
     this.finishLoading();
+  }
+
+  showLoadFailure(onRetry: () => void, onContinue: () => void) {
+    if (this.destroyed || !this.loadingUI) return;
+    this.errorUI?.destroy();
+    Tween.stopAllByTarget(this.progressProxy);
+    const panel = new Node('LoadFailure');
+    this.loadingUI.addChild(panel);
+    this.errorUI = panel;
+    panel.addComponent(UITransform).setContentSize(610, 320);
+    panel.addComponent(BlockInputEvents);
+    const art = panel.addComponent(Graphics);
+    art.fillColor = new Color(255, 248, 226);
+    art.strokeColor = new Color(235, 205, 158);
+    art.lineWidth = 3;
+    art.roundRect(-305, -160, 610, 320, 24); art.fill(); art.stroke();
+    const message = new Node('Message');
+    panel.addChild(message);
+    message.setPosition(0, 100);
+    message.addComponent(UITransform).setContentSize(550, 48);
+    const label = message.addComponent(Label);
+    label.string = '图片没加载完整，联网后再试一次';
+    label.fontSize = 26; label.lineHeight = 34; label.color = new Color(112, 69, 40);
+    const button = (text: string, y: number, action: () => void) => {
+      const node = new Node('LoadAction');
+      panel.addChild(node); node.setPosition(0, y);
+      node.addComponent(UITransform).setContentSize(460, 96);
+      const bg = node.addComponent(Graphics);
+      bg.fillColor = new Color(255, 224, 108);
+      bg.roundRect(-230, -48, 460, 96, 24); bg.fill();
+      const caption = node.addComponent(Label);
+      caption.string = text; caption.fontSize = 28; caption.lineHeight = 36; caption.color = new Color(112, 69, 40);
+      const control = node.addComponent(Button);
+      control.transition = Button.Transition.SCALE; control.zoomScale = 0.93;
+      node.on(Button.EventType.CLICK, () => { panel.destroy(); this.errorUI = null; action(); });
+    };
+    button('重新加载', 20, onRetry);
+    button('先进入首页', -92, onContinue);
   }
 
   bringToFront() {

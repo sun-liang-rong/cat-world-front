@@ -13,7 +13,6 @@ import {
   getCatDefinition,
   getCatSkillChargeRequired,
   getCatSkillConfig,
-  getCatSkillCooldownMs,
   getCatUpgradeCost,
   getItemDefinition,
   MAX_CAT_LEVEL,
@@ -25,6 +24,7 @@ import {
   BuildingId,
   BuildingProgress,
   CatId,
+  GameRunCheckpoint,
   CatJourneyClaimResult,
   CatJourneySnapshot,
   CatJourneyState,
@@ -166,6 +166,20 @@ type SavedPlayerState = Omit<Partial<PlayerState>, 'version'> & { version?: numb
 export class PlayerStore {
   private state: PlayerState = this.createDefaultState();
   private analytics: Analytics | null = null;
+  private checkpointProvider: (() => GameRunCheckpoint | null | undefined) | null = null;
+
+  bindCheckpointProvider(provider: () => GameRunCheckpoint | null | undefined) {
+    this.checkpointProvider = provider;
+  }
+
+  getRunCheckpoint(): GameRunCheckpoint | null {
+    return this.state.currentRun ? this.clone(this.state.currentRun) : null;
+  }
+
+  clearRunCheckpoint() {
+    delete this.state.currentRun;
+    this.save(false);
+  }
 
   constructor(private readonly storageKey = STORAGE_KEY) {}
 
@@ -175,19 +189,19 @@ export class PlayerStore {
 
   load() {
     this.state = this.createDefaultState();
-    try {
-      const serialized = sys.localStorage.getItem(this.storageKey);
-      if (serialized) {
+    for (const key of [this.storageKey, this.storageKey + '-backup']) {
+      try {
+        const serialized = sys.localStorage.getItem(key);
+        if (!serialized) continue;
         const parsed = JSON.parse(serialized) as SavedPlayerState | null;
-        if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4 && parsed.version !== 5 && parsed.version !== 6)) {
-          console.error('[CatWorld] Invalid player save, reset to defaults');
-        } else {
-          // v1~v5 旧档走同一套逐字段校验，新增字段保持默认值，写回时升级为 v6
-          this.state = this.normalize(parsed);
+        if (!parsed || typeof parsed !== 'object' || ![1, 2, 3, 4, 5, 6].includes(parsed.version)) {
+          throw new Error('Invalid player save version');
         }
+        this.state = this.normalize(parsed);
+        break;
+      } catch (error) {
+        console.error('[CatWorld] Failed to load player save, trying local backup', error);
       }
-    } catch (error) {
-      console.error('[CatWorld] Failed to load player save', error);
     }
     this.resetDailyState(false);
     this.syncUnlocks(false);
@@ -195,9 +209,14 @@ export class PlayerStore {
     this.save();
   }
 
-  save() {
+  save(captureRun = true) {
     try {
-      sys.localStorage.setItem(this.storageKey, JSON.stringify(this.state));
+      const checkpoint = captureRun ? this.checkpointProvider?.() : undefined;
+      if (checkpoint === null) delete this.state.currentRun;
+      else if (checkpoint) this.state.currentRun = checkpoint;
+      const serialized = JSON.stringify(this.state);
+      sys.localStorage.setItem(this.storageKey, serialized);
+      sys.localStorage.setItem(this.storageKey + '-backup', serialized);
     } catch (error) {
       console.error('[CatWorld] Failed to save player state', error);
     }
@@ -303,7 +322,7 @@ export class PlayerStore {
   }
 
   shouldShowCatEquipHint() {
-    return this.hasDecoratedTown() && !this.hasEquippedPet();
+    return this.hasAnyUnlockedCat() && !this.hasEquippedPet();
   }
 
   // —— 大橘试住 ——
@@ -372,7 +391,7 @@ export class PlayerStore {
     }
     this.state.catTrial = {
       catId: 'orange',
-      remainingGames: 3,
+      remainingGames: 5,
       active: true,
       offerShown: true,
       started: false,
@@ -386,7 +405,7 @@ export class PlayerStore {
       cat_id: this.state.catTrial.catId,
       remaining_games: this.state.catTrial.remainingGames,
     });
-    return { ok: true, message: '大橘已入住，接下来 3 局可以使用它的技能' };
+    return { ok: true, message: '大橘已入住，接下来 5 局可以使用它的技能' };
   }
 
   // 在 GameScreen 真正 startPlay 后调用，返回本局使用的临时猫咪。
@@ -568,7 +587,9 @@ export class PlayerStore {
     const stageName = definition.stageNames[stage] ?? '';
     return {
       ok: true,
-      message: stageJustCompleted
+      message: id === 'cat_house' && stage === 0 && stageJustCompleted
+        ? '今晚大橘不用淋雨啦！已永久加入并自动出战'
+        : stageJustCompleted
         ? buildingCompleted ? `${definition.name}建设完成！` : `${stageName}完成！`
         : `${stageName}进度 ${nextSub}/${cellCount}`,
       stageJustCompleted,
@@ -577,7 +598,7 @@ export class PlayerStore {
   }
 
   // —— 第 1 关一次性建设引导 ——
-  // 过关且从未点亮过任何格子时弹引导；跳过不置标记，点亮过则永不再弹。
+  // 过关且从未点亮过任何格子时弹引导；跳过也记录已看过，点亮过则永不再弹。
   shouldShowFirstTownGuide() {
     return this.hasClearedAnyLevel() && !this.state.firstTownGuideDone && !this.hasBuiltTown();
   }
@@ -654,7 +675,7 @@ export class PlayerStore {
 
   // —— 猫咪技能：充能 + 冷却 ——
   // 充能（收集元素/完成三消）在关卡内累计并持久化；充能完成后由玩家手动触发。
-  // 升级猫咪缩短冷却时间（getCatSkillCooldownMs：40 分钟 → 30 分钟）。
+  // 旧 readyAt 字段保留兼容，当前版本技能无墙上时间冷却。
   getCatSkillState(id: CatId): { readyAt: number; charge: number; level: number } {
     const cat = this.state.cats[id];
     if (this.isCatTrialActive() && id === this.state.catTrial.catId) {
@@ -665,7 +686,7 @@ export class PlayerStore {
       };
     }
     return {
-      readyAt: cat?.skillReadyAt ?? 0,
+      readyAt: 0,
       charge: cat?.skillCharge ?? 0,
       level: cat?.level ?? 1,
     };
@@ -674,7 +695,7 @@ export class PlayerStore {
   fireCatSkill(id: CatId): CatSkillFireResult {
     const cat = this.state.cats[id];
     if (!cat) return { readyAt: Date.now(), giftCoins: 0 };
-    cat.skillReadyAt = Date.now() + getCatSkillCooldownMs(cat.level);
+    cat.skillReadyAt = 0;
     cat.skillCharge = 0;
     let giftCoins = 0;
     const today = this.todayKey();
@@ -1152,7 +1173,7 @@ export class PlayerStore {
   claimToolByShare(id: ItemId): { ok: boolean; message: string } {
     this.resetDailyState(false);
     if (this.state.toolShareDates[id] === this.todayKey()) {
-      return { ok: false, message: '今天已经分享领取过这个道具啦，明天再来' };
+      return { ok: false, message: '今天的这个道具补给已领取，明天再来' };
     }
     if (this.state.inventory[id] === undefined) {
       return { ok: false, message: '道具类型异常' };
@@ -1160,11 +1181,11 @@ export class PlayerStore {
     this.state.toolShareDates[id] = this.todayKey();
     this.state.inventory[id] += 1;
     this.save();
-    this.analytics?.track('tool_share_claim', { item_id: id });
-    return { ok: true, message: '分享成功，道具已放进背包' };
+    this.analytics?.track('tool_supply_claim', { item_id: id });
+    return { ok: true, message: '每日补给已放进背包，再点一次使用' };
   }
 
-  // —— 首页金币分享：原「观看广告领 888 金币」改为分享好友，每天 1 次 ——
+  // —— 旧版本金币奖励数据接口：仅保留存档兼容，当前 UI 不调用 ——
   canClaimCoinByShare() {
     this.resetDailyState(false);
     return this.state.coinShareDate !== this.todayKey();
@@ -1250,6 +1271,7 @@ export class PlayerStore {
     if ((interaction === 'feed' || interaction === 'play') && !this.spendCoins(10)) {
       return { ok: false, message: '金币不足，完成关卡可以获得金币' };
     }
+    const oldAffection = cat.affection;
     cat.interactionCounts[interaction] += 1;
     cat.affection = Math.min(MAX_AFFECTION, cat.affection + (interaction === 'pet' ? 1 : 2));
     cat.experience = Math.min(MAX_CAT_EXPERIENCE, cat.experience + 1);
@@ -1263,7 +1285,7 @@ export class PlayerStore {
         ? `${catName}：今天也要把快乐分给你呀！`
         : `${catName}开心地蹭了蹭你`
       : '互动成功，好感度提升啦';
-    return { ok: true, message };
+    return { ok: true, message: oldAffection < 20 && cat.affection >= 20 ? `${catName}把爪爪放在你手心，已收录新照片「最安心的位置」` : message };
   }
 
   upgradeCat(id: CatId): CatUpgradeResult {
@@ -1273,7 +1295,6 @@ export class PlayerStore {
     const cost = getCatUpgradeCost(cat.level);
     if (!this.spendCoins(cost)) return { ok: false, message: `升级需要 ${cost} 金币` };
     cat.level += 1;
-    cat.experience = 0;
     const milestones = CAT_MILESTONES
       .filter(milestone => milestone.level === cat.level)
       .filter(milestone => (this.state.claimedCatMilestones[id] || []).indexOf(milestone.level) < 0);
@@ -1355,9 +1376,9 @@ export class PlayerStore {
   }
 
   private syncUnlocks(shouldSave: boolean) {
-    // 第 N 栋建筑装饰完成 → 解锁第 N 只猫咪
+    // 大橘清理阶段解锁；其他猫咪在对应建筑装饰完成后解锁
     BUILDING_DEFINITIONS.forEach((definition, index) => {
-      if (this.isBuildingCompleted(definition.id)) {
+      if (this.isBuildingCompleted(definition.id) || (definition.id === 'cat_house' && this.getBuildingStage('cat_house') >= 1)) {
         const catId = BUILDING_CATS[index];
         if (catId) this.state.cats[catId].unlocked = true;
       }
@@ -1369,6 +1390,7 @@ export class PlayerStore {
       this.state.equippedCat = catId;
       this.analytics?.track('cat_trial_converted', { cat_id: catId });
     }
+    if (!this.state.equippedCat && this.state.cats.orange.unlocked) this.state.equippedCat = 'orange';
     if (shouldSave) this.save();
   }
 
@@ -1880,7 +1902,36 @@ export class PlayerStore {
         : '';
     });
     state.coinShareDate = typeof value.coinShareDate === 'string' ? value.coinShareDate : '';
+    const run = value.currentRun;
+    if (run && this.isValidCheckpoint(run, state.level)) state.currentRun = this.clone(run);
     return state;
+  }
+
+  private isValidCheckpoint(run: GameRunCheckpoint, level: number) {
+    if (run.version !== 1 || !['main', 'challenge', 'endless'].includes(run.mode)) return false;
+    if (!Number.isInteger(run.level) || run.level < 1 || run.level > (run.mode === 'endless' ? 161 : 160)) return false;
+    if (run.mode === 'main' && run.level !== level) return false;
+    if (run.mode !== 'endless' && (!run.definition || run.definition.level !== run.level
+      || run.definition.version !== 1 || !Array.isArray(run.definition.tiles)
+      || run.definition.tiles.length < 1 || run.definition.tiles.length > 150
+      || !run.definition.plan || !Array.isArray(run.definition.plan.solution)
+      || !run.definition.score || !Number.isInteger(run.definition.kindCount)
+      || run.definition.kindCount < 1 || run.definition.kindCount > 15
+      || ![5, 6].includes(run.definition.slotCapacity))) return false;
+    if (run.mode === 'endless' && (!Number.isInteger(run.endlessSeed) || !Number.isInteger(run.endlessWave) || run.endlessWave < 1)) return false;
+    if (!Array.isArray(run.board) || run.board.length > 150) return false;
+    if (!Array.isArray(run.tray) || run.tray.length > 7) return false;
+    const cards = [...run.board, ...run.tray];
+    if (!cards.every(card => card && Number.isInteger(card.kind) && card.kind >= 0 && card.kind < 15
+      && ['x', 'y', 'width', 'height', 'layer'].every(key => Number.isFinite(card[key]))
+      && card.width > 0 && card.height > 0)) return false;
+    if (!['elapsedMs', 'collectedTotal', 'collectProgress', 'eliminatedCount', 'matchCount', 'mistakes', 'decisionCount', 'nearFailureCount', 'catCharge', 'catSkillPicksLeft']
+      .every(key => Number.isFinite(run[key]) && run[key] >= 0)) return false;
+    if (!['extraSlot', 'reviveUsed', 'catSkillUsed', 'trialConsumed'].every(key => typeof run[key] === 'boolean')) return false;
+    if (run.trialStartRemaining !== null && (!Number.isInteger(run.trialStartRemaining) || run.trialStartRemaining < 0 || run.trialStartRemaining > 5)) return false;
+    if (!Array.isArray(run.usedTools) || !run.usedTools.every(id => DAILY_SHOP_ITEM_IDS.includes(id))) return false;
+    if (run.equippedCat !== null && !BUILDING_CATS.includes(run.equippedCat)) return false;
+    return true;
   }
 
   private recordActivityRun(run: PlayerRun) {

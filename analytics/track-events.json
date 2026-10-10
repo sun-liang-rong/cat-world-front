@@ -1,51 +1,418 @@
 {
-  "version": 1,
+  "version": 2,
   "comment": "《猫爪星球奇遇记》埋点事件目录（单一事实源）。由 cat-world/scripts/generate_track_contract.js 生成客户端 assets/scripts/TrackEvents.ts 与 service/src/track/track-events.gen.ts；两份产物分别提交到各自 Git 仓库，联调用 cat-world/scripts/check_track_contract.js 比对。属性类型取值：string | number | boolean | boolean_null | number_null | string[] 。可选属性标 optional:true。",
   "events": [
-    { "name": "app_launch", "description": "应用启动", "props": { "is_new_user": "boolean", "has_profile": "boolean" } },
-    { "name": "loading_finish", "description": "启动加载页完成", "props": { "duration_ms": "number" } },
-    { "name": "page_view", "description": "页面浏览（page_id 必带；game/settlement 页附带 mode/level/result）", "props": { "page_id": "string", "mode": { "type": "string", "optional": true }, "level": { "type": "number", "optional": true }, "result": { "type": "string", "optional": true } } },
-    { "name": "level_enter_click", "description": "点击进入关卡入口", "props": { "mode": "string", "level": { "type": "number", "optional": true } } },
-    { "name": "level_start", "description": "对局开始", "props": { "mode": "string", "level": "number" } },
-    { "name": "level_end", "description": "对局结束（胜利/失败/无尽结算）", "props": { "mode": "string", "level": "number", "result": "string", "duration_ms": "number", "collected": "number", "match_count": "number", "remaining_slots": "number", "fail_had_pair": "boolean_null", "fail_progress": "number_null", "revive_used": "boolean", "used_items": "string[]" } },
-    { "name": "level_next", "description": "结算页点击下一关", "props": { "mode": "string", "level": "number" } },
-    { "name": "level_replay", "description": "结算页点击重试", "props": { "mode": "string", "level": "number" } },
-    { "name": "level_home", "description": "从对局返回首页", "props": { "mode": "string", "level": "number", "mid_run": "boolean" } },
-    { "name": "level_go_build", "description": "结算页点击去建设", "props": { "mode": "string", "level": "number" } },
-    { "name": "tutorial_done", "description": "第 1 关对局内新手教学完成", "props": { "level": "number", "mode": "string" } },
-    { "name": "ad_entrance_show", "description": "广告入口展示（当前版本预留，结算/商店复用 ad_result 链路）", "props": { "scene": "string" } },
-    { "name": "ad_click", "description": "点击观看激励视频", "props": { "scene": "string" } },
-    { "name": "ad_result", "description": "激励视频结果", "props": { "scene": "string", "result": "string", "simulated": "boolean" } },
-    { "name": "building_light", "description": "小镇建筑点亮进度变化", "props": { "building_id": "string", "stage": "number", "sub_progress": "number", "cell_count": "number", "stage_completed": "boolean", "building_completed": "boolean" } },
-    { "name": "shop_buy", "description": "商店购买道具", "props": { "item_id": "string", "price": "number" } },
-    { "name": "cat_trial_offer_show", "description": "猫咪试住邀请展示", "props": { "cat_id": "string", "remaining_games": "number" } },
-    { "name": "cat_trial_offer_click", "description": "猫咪试住邀请点击", "props": { "accepted": "boolean" } },
-    { "name": "cat_trial_start", "description": "猫咪试住开始", "props": { "cat_id": "string", "remaining_games": "number" } },
-    { "name": "cat_trial_game_start", "description": "试住期间对局开始", "props": { "cat_id": "string", "remaining_games": "number" } },
-    { "name": "cat_trial_game_end", "description": "试住期间对局结束", "props": { "level": "number", "remaining_games": "number", "trial_result": "string", "skill_used": "boolean" } },
-    { "name": "cat_trial_expire", "description": "试住次数用尽", "props": { "level": "number", "trial_result": "string" } },
-    { "name": "cat_trial_converted", "description": "试住猫咪因建筑完成转正", "props": { "cat_id": "string" } },
-    { "name": "challenge_locked_click", "description": "点击未解锁的超萌挑战", "props": { "required_level": "number", "current_level": "number" } },
-    { "name": "challenge_lock_show", "description": "超萌挑战未解锁面板展示", "props": { "current_level": "number" } },
-    { "name": "challenge_unlock_show", "description": "超萌挑战解锁通知展示", "props": { "current_level": "number" } },
-    { "name": "journey_start", "description": "猫咪 7 日旅程开启", "props": { "day": "number" } },
-    { "name": "journey_open", "description": "旅程面板打开（无属性）", "props": {} },
-    { "name": "journey_claim", "description": "领取旅程每日奖励", "props": { "day": "number", "reward": "string", "completed": "boolean" } },
-    { "name": "journey_complete", "description": "旅程完成", "props": { "day": "number" } },
-    { "name": "town_daily_show", "description": "小镇每日任务展示", "props": { "task_id": "string" } },
-    { "name": "town_daily_complete", "description": "小镇每日任务完成", "props": { "task_id": "string" } },
-    { "name": "town_daily_reward_claim", "description": "领取小镇每日任务奖励", "props": { "task_id": "string", "reward": "string" } },
-    { "name": "town_cat_dialogue_show", "description": "小镇猫咪对话展示", "props": { "building_id": "string" } },
-    { "name": "town_stage_complete", "description": "小镇建筑阶段完成", "props": { "building_id": "string", "stage": "number", "building_completed": "boolean" } },
-    { "name": "cat_milestone_unlock", "description": "猫咪升级里程碑解锁", "props": { "cat_id": "string", "level": "number", "milestone_levels": "string" } },
-    { "name": "cat_upgrade", "description": "猫咪升级", "props": { "cat_id": "string", "level": "number", "cost": "number", "milestone_unlocked": "boolean" } },
-    { "name": "cat_interact", "description": "猫咪互动", "props": { "cat_id": "string", "interaction": "string" } },
-    { "name": "cat_skill_gift", "description": "猫咪技能发放道具礼物", "props": { "cat_id": "string", "coins": "number" } },
-    { "name": "share_entrance_show", "description": "分享入口展示（每 session 首次自动提示）", "props": { "card_type": "string", "prompt": "string" } },
-    { "name": "share_click", "description": "点击分享", "props": { "card_type": "string", "item_id": { "type": "string", "optional": true }, "scene": { "type": "string", "optional": true } } },
-    { "name": "share_result", "description": "分享回调结果", "props": { "card_type": "string", "result": "string", "platform": "string", "item_id": { "type": "string", "optional": true }, "scene": { "type": "string", "optional": true } } },
-    { "name": "share_reward_claim", "description": "分享奖励领取", "props": { "card_type": "string", "reward": "string" } },
-    { "name": "share_card_open", "description": "分享卡片拉起", "props": { "card_type": "string" } },
-    { "name": "tool_share_claim", "description": "分享补领道具到账", "props": { "item_id": "string" } }
+    {
+      "name": "app_launch",
+      "description": "应用启动",
+      "props": {
+        "is_new_user": "boolean",
+        "has_profile": "boolean"
+      }
+    },
+    {
+      "name": "loading_finish",
+      "description": "启动加载页完成",
+      "props": {
+        "duration_ms": "number"
+      }
+    },
+    {
+      "name": "page_view",
+      "description": "页面浏览（page_id 必带；game/settlement 页附带 mode/level/result）",
+      "props": {
+        "page_id": "string",
+        "mode": {
+          "type": "string",
+          "optional": true
+        },
+        "level": {
+          "type": "number",
+          "optional": true
+        },
+        "result": {
+          "type": "string",
+          "optional": true
+        }
+      }
+    },
+    {
+      "name": "level_enter_click",
+      "description": "点击进入关卡入口",
+      "props": {
+        "mode": "string",
+        "level": {
+          "type": "number",
+          "optional": true
+        }
+      }
+    },
+    {
+      "name": "level_start",
+      "description": "对局开始",
+      "props": {
+        "mode": "string",
+        "level": "number"
+      }
+    },
+    {
+      "name": "level_end",
+      "description": "对局结束（胜利/失败/无尽结算）",
+      "props": {
+        "mode": "string",
+        "level": "number",
+        "result": "string",
+        "duration_ms": "number",
+        "collected": "number",
+        "match_count": "number",
+        "remaining_slots": "number",
+        "fail_had_pair": "boolean_null",
+        "fail_progress": "number_null",
+        "revive_used": "boolean",
+        "used_items": "string[]"
+      }
+    },
+    {
+      "name": "level_next",
+      "description": "结算页点击下一关",
+      "props": {
+        "mode": "string",
+        "level": "number"
+      }
+    },
+    {
+      "name": "level_replay",
+      "description": "结算页点击重试",
+      "props": {
+        "mode": "string",
+        "level": "number"
+      }
+    },
+    {
+      "name": "level_home",
+      "description": "从对局返回首页",
+      "props": {
+        "mode": "string",
+        "level": "number",
+        "mid_run": "boolean"
+      }
+    },
+    {
+      "name": "level_go_build",
+      "description": "结算页点击去建设",
+      "props": {
+        "mode": "string",
+        "level": "number"
+      }
+    },
+    {
+      "name": "tutorial_done",
+      "description": "第 1 关对局内新手教学完成",
+      "props": {
+        "level": "number",
+        "mode": "string"
+      }
+    },
+    {
+      "name": "ad_entrance_show",
+      "description": "广告入口展示（当前版本预留，结算/商店复用 ad_result 链路）",
+      "props": {
+        "scene": "string"
+      }
+    },
+    {
+      "name": "ad_click",
+      "description": "点击观看激励视频",
+      "props": {
+        "scene": "string"
+      }
+    },
+    {
+      "name": "ad_result",
+      "description": "激励视频结果",
+      "props": {
+        "scene": "string",
+        "result": "string",
+        "simulated": "boolean"
+      }
+    },
+    {
+      "name": "building_light",
+      "description": "小镇建筑点亮进度变化",
+      "props": {
+        "building_id": "string",
+        "stage": "number",
+        "sub_progress": "number",
+        "cell_count": "number",
+        "stage_completed": "boolean",
+        "building_completed": "boolean"
+      }
+    },
+    {
+      "name": "shop_buy",
+      "description": "商店购买道具",
+      "props": {
+        "item_id": "string",
+        "price": "number"
+      }
+    },
+    {
+      "name": "cat_trial_offer_show",
+      "description": "猫咪试住邀请展示",
+      "props": {
+        "cat_id": "string",
+        "remaining_games": "number"
+      }
+    },
+    {
+      "name": "cat_trial_offer_click",
+      "description": "猫咪试住邀请点击",
+      "props": {
+        "accepted": "boolean"
+      }
+    },
+    {
+      "name": "cat_trial_start",
+      "description": "猫咪试住开始",
+      "props": {
+        "cat_id": "string",
+        "remaining_games": "number"
+      }
+    },
+    {
+      "name": "cat_trial_game_start",
+      "description": "试住期间对局开始",
+      "props": {
+        "cat_id": "string",
+        "remaining_games": "number"
+      }
+    },
+    {
+      "name": "cat_trial_game_end",
+      "description": "试住期间对局结束",
+      "props": {
+        "level": "number",
+        "remaining_games": "number",
+        "trial_result": "string",
+        "skill_used": "boolean"
+      }
+    },
+    {
+      "name": "cat_trial_expire",
+      "description": "试住次数用尽",
+      "props": {
+        "level": "number",
+        "trial_result": "string"
+      }
+    },
+    {
+      "name": "cat_trial_converted",
+      "description": "试住猫咪因建筑完成转正",
+      "props": {
+        "cat_id": "string"
+      }
+    },
+    {
+      "name": "challenge_locked_click",
+      "description": "点击未解锁的超萌挑战",
+      "props": {
+        "required_level": "number",
+        "current_level": "number"
+      }
+    },
+    {
+      "name": "challenge_lock_show",
+      "description": "超萌挑战未解锁面板展示",
+      "props": {
+        "current_level": "number"
+      }
+    },
+    {
+      "name": "challenge_unlock_show",
+      "description": "超萌挑战解锁通知展示",
+      "props": {
+        "current_level": "number"
+      }
+    },
+    {
+      "name": "journey_start",
+      "description": "猫咪 7 日旅程开启",
+      "props": {
+        "day": "number"
+      }
+    },
+    {
+      "name": "journey_open",
+      "description": "旅程面板打开（无属性）",
+      "props": {}
+    },
+    {
+      "name": "journey_claim",
+      "description": "领取旅程每日奖励",
+      "props": {
+        "day": "number",
+        "reward": "string",
+        "completed": "boolean"
+      }
+    },
+    {
+      "name": "journey_complete",
+      "description": "旅程完成",
+      "props": {
+        "day": "number"
+      }
+    },
+    {
+      "name": "town_daily_show",
+      "description": "小镇每日任务展示",
+      "props": {
+        "task_id": "string"
+      }
+    },
+    {
+      "name": "town_daily_complete",
+      "description": "小镇每日任务完成",
+      "props": {
+        "task_id": "string"
+      }
+    },
+    {
+      "name": "town_daily_reward_claim",
+      "description": "领取小镇每日任务奖励",
+      "props": {
+        "task_id": "string",
+        "reward": "string"
+      }
+    },
+    {
+      "name": "town_cat_dialogue_show",
+      "description": "小镇猫咪对话展示",
+      "props": {
+        "building_id": "string"
+      }
+    },
+    {
+      "name": "town_stage_complete",
+      "description": "小镇建筑阶段完成",
+      "props": {
+        "building_id": "string",
+        "stage": "number",
+        "building_completed": "boolean"
+      }
+    },
+    {
+      "name": "cat_milestone_unlock",
+      "description": "猫咪升级里程碑解锁",
+      "props": {
+        "cat_id": "string",
+        "level": "number",
+        "milestone_levels": "string"
+      }
+    },
+    {
+      "name": "cat_upgrade",
+      "description": "猫咪升级",
+      "props": {
+        "cat_id": "string",
+        "level": "number",
+        "cost": "number",
+        "milestone_unlocked": "boolean"
+      }
+    },
+    {
+      "name": "cat_interact",
+      "description": "猫咪互动",
+      "props": {
+        "cat_id": "string",
+        "interaction": "string"
+      }
+    },
+    {
+      "name": "cat_skill_gift",
+      "description": "猫咪技能发放道具礼物",
+      "props": {
+        "cat_id": "string",
+        "coins": "number"
+      }
+    },
+    {
+      "name": "share_entrance_show",
+      "description": "分享入口展示（每 session 首次自动提示）",
+      "props": {
+        "card_type": "string",
+        "prompt": "string"
+      }
+    },
+    {
+      "name": "share_click",
+      "description": "点击分享",
+      "props": {
+        "card_type": "string",
+        "item_id": {
+          "type": "string",
+          "optional": true
+        },
+        "scene": {
+          "type": "string",
+          "optional": true
+        }
+      }
+    },
+    {
+      "name": "share_result",
+      "description": "分享发起结果，不代表好友收到或发送成功",
+      "props": {
+        "card_type": "string",
+        "result": "string",
+        "platform": "string",
+        "item_id": {
+          "type": "string",
+          "optional": true
+        },
+        "scene": {
+          "type": "string",
+          "optional": true
+        }
+      }
+    },
+    {
+      "name": "share_reward_claim",
+      "description": "分享奖励领取",
+      "props": {
+        "card_type": "string",
+        "reward": "string"
+      }
+    },
+    {
+      "name": "share_card_open",
+      "description": "带 share_card 参数的新启动，发生在接收端",
+      "props": {
+        "card_type": "string"
+      }
+    },
+    {
+      "name": "tool_supply_claim",
+      "description": "本地每日免费道具补给到账",
+      "props": {
+        "item_id": "string"
+      }
+    },
+    {
+      "name": "level_resume",
+      "description": "恢复本地对局，不重复计开局",
+      "props": {
+        "mode": "string",
+        "level": "number"
+      }
+    },
+    {
+      "name": "cat_skill_use",
+      "description": "猫技能实际生效",
+      "props": {
+        "cat_id": "string",
+        "mode": "string",
+        "level": "number"
+      }
+    }
   ]
 }

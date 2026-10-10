@@ -24,6 +24,11 @@ names.forEach((name) => {
   if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error(`非法事件名：${name}`);
 });
 
+const schemas = Object.fromEntries(catalog.events.map(event => [event.name,
+  Object.fromEntries(Object.entries(event.props || {}).map(([key, rule]) => [key, typeof rule === 'string' ? rule : rule.type])),
+]));
+const schemaSource = `export const TRACK_PROP_SCHEMAS: Record<TrackEventName, Record<string, string>> = ${JSON.stringify(schemas, null, 2)};`;
+
 const banner = (sourceNote) => [
   `// 由 cat-world/scripts/generate_track_contract.js 从 analytics/track-events.json 生成，勿手改。`,
   `// 目录版本 v${catalog.version}；${sourceNote}`,
@@ -40,6 +45,8 @@ const clientSource = [
   '',
   'export type TrackEventName = (typeof TRACK_EVENT_NAMES)[number];',
   '',
+  schemaSource,
+  '',
   '/** 允许上报的事件属性类型：仅有限原语，禁止任意对象。 */',
   'export type TrackProps = Record<string, string | number | boolean | string[] | null>;',
   '',
@@ -54,6 +61,8 @@ const serviceSource = [
   '] as const;',
   '',
   'export type TrackEventName = (typeof TRACK_EVENT_NAMES)[number];',
+  '',
+  schemaSource,
   '',
 ].join('\n');
 

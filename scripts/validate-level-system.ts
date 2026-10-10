@@ -61,12 +61,12 @@ for (let index = 0; index < 1000; index += 1) {
   assert(!hasSameLayerOverlap(level), `Seed ${level.seed} has overlapping cards on one layer`);
   assert(hasOnlyAllowedParentCoverage(level), `Seed ${level.seed} has an invalid parent cover ratio`);
   const expectedKindCount = expectedKinds(levelNumber);
-  const expectedLayerCount = levelNumber <= 1 ? 2 : Math.min(9, 5 + Math.floor((levelNumber - 2) / 4));
+  const expectedLayerCount = levelNumber <= 1 ? 2 : levelNumber <= 5 ? (levelNumber <= 3 ? 3 : 4) : Math.min(9, 5 + Math.floor((levelNumber - 2) / 4));
   assert(level.kindCount === expectedKindCount, `Seed ${level.seed} has ${level.kindCount} kinds, expected ${expectedKindCount}`);
   assert(new Set(level.tiles.map(tile => tile.kind)).size === expectedKindCount, `Seed ${level.seed} does not use all configured kinds`);
   assert(Math.max(...level.tiles.map(tile => tile.layer)) + 1 === expectedLayerCount, `Seed ${level.seed} has an invalid layer count`);
   if (levelNumber > 1) {
-    assert(level.tiles.length >= 45, `Seed ${level.seed} has too few cards for a normal level`);
+    assert(level.tiles.length >= (levelNumber <= 5 ? [18, 27, 33, 42, 48][levelNumber - 1] : 45), `Seed ${level.seed} has too few cards for a normal level`);
     assert(level.tiles.length <= 90, `Seed ${level.seed} exceeds the 90-card limit`);
   }
   const counts = new Map<number, number>();
@@ -402,7 +402,7 @@ function round(value: number) {
 }
 
 function expectedKinds(level: number) {
-  if (level <= 1) return 4;
+  if (level <= 5) return [4, 4, 5, 6, 6][level - 1];
   if (level <= 10) {
     if (level === 2) return 8;
     if (level <= 4) return 9;

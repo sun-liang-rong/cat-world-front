@@ -24,6 +24,7 @@ export class AudioManager {
   private soundEnabled = true;
   private vibrationEnabled = true;
   private musicPlaying = false;
+  private background = false;
 
   constructor(parent: Node) {
     this.loadSettings();
@@ -99,7 +100,7 @@ export class AudioManager {
   }
 
   playEffect(effect: AudioEffect) {
-    if (!this.soundEnabled) return;
+    if (!this.soundEnabled || this.background) return;
     // 产品决定：按钮点击不发声，只保留玩法音效（收卡/三消/胜负）。
     // 各页面 onPlaySound('click') 调用点保留不动，在这里统一静音。
     if (effect === 'click') return;
@@ -107,8 +108,14 @@ export class AudioManager {
     if (clip) this.effectSource.playOneShot(clip);
   }
 
+  setBackground(background: boolean) {
+    this.background = background;
+    if (background) this.effectSource.stop();
+    this.applyMusic();
+  }
+
   private applyMusic() {
-    if (this.musicEnabled) {
+    if (this.musicEnabled && !this.background) {
       const clip = this.clips.bgm;
       if (clip && !this.musicPlaying) {
         this.musicSource.clip = clip;

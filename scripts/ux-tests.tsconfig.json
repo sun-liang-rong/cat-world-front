@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2018",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "strict": false,
+    "skipLibCheck": true,
+    "types": [],
+    "rootDir": "..",
+    "outDir": "../.codex/ux-tests"
+  },
+  "files": [
+    "player-store-test-types.d.ts",
+    "validate-player-store.ts",
+    "validate-level-system.ts",
+    "validate-endless-director.ts",
+    "../assets/scripts/LeaderboardService.ts",
+    "../assets/scripts/RewardedAdService.ts"
+  ]
+}

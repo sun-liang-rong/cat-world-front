@@ -39,6 +39,10 @@ function testBuildingAndCatUnlock() {
   assert(store.hasBuiltTown(), 'lighting one cell should count as having built the town');
   store.addReward({ stars: 57 });
   for (let index = 0; index < 19; index += 1) {
+    if (index === 4) {
+      assert(store.getCat('orange').unlocked, 'five cells should permanently unlock orange');
+      assert(store.getEquippedCat() === 'orange', 'first cat should equip automatically');
+    }
     assert(store.lightBuildingCell('cat_house').ok, `cell ${index + 2} should light`);
   }
   assert(store.isBuildingCompleted('cat_house'), '20 cells should complete the cat house');
@@ -252,10 +256,10 @@ function testCatTrialAndChallengeGate() {
   assert(fresh.getEquippedCat() === 'orange', 'active trial should temporarily equip orange cat');
   assert(fresh.getEquippedCat(false) === null, 'trial cat should not count as a formal equipped cat');
   assert(fresh.getCatSkillState('orange').charge === 20, 'trial game should start with a full orange skill charge');
-  assert(fresh.consumeCatTrialGame()?.remainingGames === 2, 'first trial game should leave two games');
-  assert(fresh.consumeCatTrialGame()?.remainingGames === 1, 'second trial game should leave one game');
-  assert(fresh.consumeCatTrialGame()?.remainingGames === 0, 'third trial game should finish the trial');
-  assert(!fresh.isCatTrialActive(), 'trial should deactivate after three mainline games');
+  for (let remaining = 4; remaining >= 0; remaining -= 1) {
+    assert(fresh.consumeCatTrialGame()?.remainingGames === remaining, 'trial should last five effective games');
+  }
+  assert(!fresh.isCatTrialActive(), 'trial should deactivate after five mainline games');
   assert(!fresh.shouldShowCatTrialOffer(), 'completed or dismissed trial should not reappear');
 
   const journey = new PlayerStore('player-store-cat-journey');
@@ -363,7 +367,11 @@ function testSaveNormalization() {
   assert(state.endless.bestEliminated === 0, 'legacy saves should receive empty endless progress');
   sys.localStorage.setItem(key, JSON.stringify({ version: 999, coins: 999999 }));
   store.load();
-  assert(store.getCoins() === 100, 'invalid save version should reset to defaults');
+  assert(store.getCoins() === 0, 'invalid primary version should recover the last valid backup');
+  sys.localStorage.removeItem(key + '-backup');
+  sys.localStorage.setItem(key, JSON.stringify({ version: 999 }));
+  store.load();
+  assert(store.getCoins() === 100, 'two invalid/missing saves should use defaults');
 }
 
 function testLegacyBuildingSave() {
@@ -446,6 +454,44 @@ function testCollectGoalHintFlag() {
   assert(!legacy.isCollectGoalHintDone(), 'legacy saves should default the collect hint flag to false');
 }
 
+function testCheckpointAndBackup() {
+  const key = 'player-store-checkpoint';
+  const store = new PlayerStore(key);
+  store.load();
+  const definition = new LevelGenerator().generate({ level: 1, seed: 42, maxAttempts: 8, solverAnalyzeBranches: false });
+  const run = {
+    version: 1 as const, mode: 'main' as const, level: 1, definition,
+    board: definition.tiles.slice(1), tray: definition.tiles.slice(0, 1), elapsedMs: 1234,
+    extraSlot: true, usedTools: ['extra_slot' as const], collectedTotal: 1, collectProgress: 0,
+    eliminatedCount: 0, matchCount: 0, mistakes: 1, decisionCount: 1, nearFailureCount: 0,
+    reviveUsed: false, equippedCat: null, catCharge: 0, catSkillUsed: false, catSkillPicksLeft: 0,
+    trialConsumed: true, trialStartRemaining: 5, performanceReported: true,
+  };
+  store.bindCheckpointProvider(() => run);
+  store.addReward({ coins: 6 });
+  const restored = new PlayerStore(key); restored.load();
+  assert(restored.getCoins() === 106, 'coins and checkpoint should persist together');
+  assert(restored.getRunCheckpoint()?.tray.length === 1 && restored.getRunCheckpoint()?.extraSlot, 'tray and used slot should recover');
+  assert(restored.getRunCheckpoint()?.performanceReported, 'revive performance must not report twice');
+  assert(restored.getRunCheckpoint()?.trialConsumed, 'resume must not consume trial again');
+  const copied = restored.getRunCheckpoint()!; copied.tray.length = 0;
+  assert(restored.getRunCheckpoint()?.tray.length === 1, 'checkpoint reads must be defensive copies');
+  sys.localStorage.setItem(key, '{broken');
+  const backup = new PlayerStore(key); backup.load();
+  assert(backup.getCoins() === 106 && backup.getRunCheckpoint()?.elapsedMs === 1234, 'corrupt primary must recover local backup');
+  restored.clearRunCheckpoint();
+  const cleared = new PlayerStore(key); cleared.load();
+  assert(cleared.getRunCheckpoint() === null, 'settled/cancelled runs must stay cleared after restart');
+  const state = cleared.getState();
+  sys.localStorage.setItem(key, JSON.stringify({ ...state, currentRun: { ...run, definition: { level: 1 }, tray: [] } }));
+  const invalid = new PlayerStore(key); invalid.load();
+  assert(invalid.getRunCheckpoint() === null && invalid.getCoins() === 106, 'invalid checkpoint must not reset player progress');
+  store.bindCheckpointProvider(() => ({ ...run, board: [], tray: [] })); store.save();
+  const terminal = new PlayerStore(key); terminal.load();
+  assert(terminal.getRunCheckpoint()?.board.length === 0, 'a clear awaiting settlement must recover, with match rewards already saved');
+}
+
+testCheckpointAndBackup();
 testDefaultsAndRewards();
 testBuildingAndCatUnlock();
 testBuildTargetsAndGuideFlag();

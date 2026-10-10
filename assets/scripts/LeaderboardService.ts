@@ -1,8 +1,7 @@
-import { ApiClient, ApiError, RankBoardType, RankEntry, SubmitRankPayload } from './ApiClient';
 import { getAnalyticsPlatform } from './Analytics';
 import { ShareCardType } from './PlayerTypes';
 
-export type LeaderboardSource = 'server' | 'empty';
+export type LeaderboardSource = 'server' | 'empty' | 'mock';
 export type LeaderboardTab = 'level' | 'endless' | 'challenge';
 
 export interface ShareCard {
@@ -11,7 +10,7 @@ export interface ShareCard {
   query?: string;
 }
 
-export type ShareResult = 'success' | 'cancelled' | 'failed' | 'unsupported';
+export type ShareResult = 'opened' | 'failed' | 'unsupported';
 
 export interface LeaderboardEntry {
   id: string;
@@ -42,69 +41,56 @@ const AVATAR_PATHS = [
 ];
 
 interface WechatApi {
+  setUserCloudStorage?: (options: { KVDataList: Array<{ key: string; value: string }>; fail: (error: unknown) => void }) => void;
   shareAppMessage?: (options: {
     title: string;
     query?: string;
-    success?: () => void;
-    fail?: (error?: unknown) => void;
   }) => void;
 }
 
 export class LeaderboardService {
-  constructor(private readonly api = new ApiClient()) {}
 
+  reportStars(stars: number) {
+    if (getAnalyticsPlatform() !== 'wechat') return;
+    try {
+      this.getWechatApi()?.setUserCloudStorage?.({
+        KVDataList: [{ key: 'cat_world_stars', value: String(Math.max(0, Math.floor(stars))) }],
+        fail: error => console.error('[CatWorld] Failed to report friend stars', error),
+      });
+    } catch (error) { console.error('[CatWorld] Failed to report friend stars', error); }
+  }
+
+  fetchPreviewBoard(stars: number): Promise<LeaderboardData> {
+    const entries: LeaderboardEntry[] = [
+      ...[36, 24, 12].map((score, index) => ({
+        id: `mock-${index}`, name: ['猫友小桃', '猫友阿圆', '猫友布丁'][index],
+        avatarPath: AVATAR_PATHS[index], rank: 0, score, scoreLabel: String(score),
+        level: 0, durationMs: 0, isSelf: false,
+      })),
+      { id: 'local', name: '我', avatarPath: 'rank/cat_crown', rank: 0, score: stars, scoreLabel: String(stars), level: 0, durationMs: 0, isSelf: true },
+    ].sort((left, right) => right.score - left.score);
+    entries.forEach((entry, index) => entry.rank = index + 1);
+    return Promise.resolve({ source: 'mock', tab: 'level', entries });
+  }
+
+  /** 兼容旧调用方：身份留在本机，不请求后端。 */
   ensureProfile(userId: string, name: string) {
-    if (userId && name) return Promise.resolve({ userId, name });
-    return this.api.generateProfile().then(profile => ({
-      userId: profile.user_id,
-      name: profile.name,
-    }));
+    return Promise.resolve({ userId: userId || `local-${Date.now().toString(36)}`, name: name || '猫咪的朋友' });
   }
 
-  fetchBoard(tab: LeaderboardTab, userId: string, date?: string): Promise<LeaderboardData> {
-    if (!userId) {
-      // 身份缺失必须以错误呈现，绝不能渲染成「还没有人上榜」（需求 A-3）。
-      return Promise.reject(new ApiError('玩家身份尚未就绪'));
-    }
-    return this.api.listRank(this.tabType(tab), userId, date).then(entries => ({
-      source: 'server' as const,
-      tab,
-      entries: this.mapEntries(tab, entries, userId),
-    }));
+  fetchBoard(tab: LeaderboardTab, userId: string): Promise<LeaderboardData> {
+    return this.fetchPreviewBoard(0);
   }
 
-  submitLevel(userId: string, levelCount: number, starCount: number) {
-    return this.submit({
-      user_id: userId,
-      type: 1,
-      level_count: Math.max(0, Math.floor(levelCount)),
-      star_count: Math.max(0, Math.floor(starCount)),
-    });
-  }
-
-  submitEndless(userId: string, clearCount: number, durationMs: number) {
-    return this.submit({
-      user_id: userId,
-      type: 2,
-      clear_count: Math.max(0, Math.floor(clearCount)),
-      duration_ms: Math.max(1, Math.floor(durationMs)),
-    });
-  }
-
-  submitChallenge(userId: string, durationMs: number, date: string) {
-    return this.submit({
-      user_id: userId,
-      type: 3,
-      date,
-      duration_ms: Math.max(1, Math.floor(durationMs)),
-    });
-  }
+  submitLevel(userId: string, levelCount: number, stars: number) { this.reportStars(stars); }
+  submitEndless(userId: string, clearCount: number, durationMs: number) {}
+  submitChallenge(userId: string, durationMs: number, date: string) {}
 
   invite(): boolean {
     const wxApi = this.getWechatApi();
     if (!wxApi?.shareAppMessage || getAnalyticsPlatform() !== 'wechat') return false;
-    wxApi.shareAppMessage({ title: INVITE_TITLE });
-    return true;
+    try { wxApi.shareAppMessage({ title: INVITE_TITLE }); return true; }
+    catch (error) { console.error('[CatWorld] Failed to invite friends', error); return false; }
   }
 
   canShare() {
@@ -117,73 +103,14 @@ export class LeaderboardService {
     if (getAnalyticsPlatform() !== 'wechat' || !shareAppMessage) {
       return Promise.resolve('unsupported');
     }
-    return new Promise(resolve => {
-      let settled = false;
-      const finish = (result: ShareResult) => {
-        if (settled) return;
-        settled = true;
-        resolve(result);
-      };
-      try {
-        shareAppMessage({
-          title: card.title,
-          query: card.query,
-          success: () => finish('success'),
-          fail: () => finish('cancelled'),
-        });
-      } catch (error) {
-        console.error('[CatWorld] Failed to share card', error);
-        finish('failed');
-      }
-    });
-  }
-
-  private submit(payload: SubmitRankPayload) {
-    return this.api.submitRank(payload).catch(error => {
-      console.error('[CatWorld] Failed to submit rank', error);
-    });
-  }
-
-  private mapEntries(tab: LeaderboardTab, entries: RankEntry[], selfId: string): LeaderboardEntry[] {
-    return entries.map((entry, index) => {
-      const isSelf = entry.user_id === selfId;
-      return {
-        id: entry.user_id,
-        name: isSelf ? `${entry.name}（我）` : entry.name,
-        avatarPath: isSelf ? 'rank/cat_crown' : AVATAR_PATHS[index % AVATAR_PATHS.length],
-        rank: entry.rank || index + 1,
-        score: this.scoreValue(tab, entry),
-        scoreLabel: this.scoreLabel(tab, entry),
-        level: entry.level_count,
-        durationMs: entry.duration_ms,
-        isSelf,
-      };
-    });
-  }
-
-  private scoreValue(tab: LeaderboardTab, entry: RankEntry) {
-    if (tab === 'level') return entry.star_count;
-    if (tab === 'endless') return entry.clear_count;
-    return entry.duration_ms;
-  }
-
-  private scoreLabel(tab: LeaderboardTab, entry: RankEntry) {
-    if (tab === 'level') return `${entry.star_count}`;
-    if (tab === 'endless') return `${entry.clear_count}`;
-    return this.formatDuration(entry.duration_ms);
-  }
-
-  private formatDuration(durationMs: number) {
-    const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${seconds < 10 ? `0${seconds}` : seconds}`;
-  }
-
-  private tabType(tab: LeaderboardTab): RankBoardType {
-    if (tab === 'level') return 1;
-    if (tab === 'endless') return 2;
-    return 3;
+    try {
+      // 微信不提供分享成功/取消结果；发起分享即结束本地等待，不据此领奖。
+      wxApi.shareAppMessage({ title: card.title, query: card.query });
+      return Promise.resolve('opened');
+    } catch (error) {
+      console.error('[CatWorld] Failed to share card', error);
+      return Promise.resolve('failed');
+    }
   }
 
   private getWechatApi() {

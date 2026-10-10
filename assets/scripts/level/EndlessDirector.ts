@@ -56,6 +56,12 @@ export class EndlessDirector {
     this.startedAt = now;
   }
 
+  getWaveIndex() { return this.waveIndex; }
+
+  restoreWaveIndex(index: number) {
+    this.waveIndex = Math.max(1, Math.floor(index));
+  }
+
   elapsedMs(now = Date.now()) {
     return Math.max(0, now - this.startedAt);
   }

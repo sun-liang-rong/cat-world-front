@@ -19,7 +19,7 @@ import { Toast } from './Toast';
 import {
   CAT_DEFINITIONS,
   CAT_MILESTONES,
-  formatCatSkillCooldown,
+  getCatSkillConfig,
   getCatSkillChargeRequired,
   getCatDefinition,
   getCatUpgradeCost,
@@ -170,7 +170,7 @@ export class CatDetailScreen {
     this.coinLabel = this.label(coinChip, '', 18, 0, 23, COLOR_BODY);
     this.coinLabel.isBold = true;
 
-    const panel = this.creamPanel(this.detailUI, 0, -55, 680, 970, 30, new Color(255, 248, 226, 245), COLOR_STROKE);
+    const panel = this.creamPanel(this.detailUI, 0, -70, 680, 1030, 30, new Color(255, 248, 226, 245), COLOR_STROKE);
 
     // 头像区：光晕徽章 + 立绘 + 出战中角标
     this.buildPortraitBadge(panel, 0, 300);
@@ -237,7 +237,7 @@ export class CatDetailScreen {
         if (result.ok) this.playUpgradeAnimation();
       },
     });
-    upgradeNode.setPosition(-156, -430);
+    upgradeNode.setPosition(-156, -464);
     this.upgradeButton = upgradeNode.getComponent(Button);
     this.upgradeLabel = upgradeNode.getChildByName('Label')?.getComponent(Label) ?? null;
     this.upgradeOpacity = upgradeNode.addComponent(UIOpacity);
@@ -256,29 +256,15 @@ export class CatDetailScreen {
         this.refresh();
       },
     });
-    equipNode.setPosition(156, -430);
+    equipNode.setPosition(156, -464);
     this.equipButton = equipNode.getComponent(Button);
     this.equipLabel = equipNode.getChildByName('Label')?.getComponent(Label) ?? null;
     this.equipOpacity = equipNode.addComponent(UIOpacity);
 
-    this.unlockLabel = this.label(this.detailUI, '', 0, -508, 21, COLOR_BODY);
+    this.unlockLabel = this.label(panel, '', 0, -394, 21, COLOR_BODY);
+    this.unlockLabel.node.getComponent(UITransform)!.setContentSize(600, 36);
     this.unlockLabel.isBold = true;
 
-    // 成长路线：9 个里程碑一排小签，已达成金色 + 对勾，未达成灰剪影
-    CAT_MILESTONES.forEach((milestone, index) => {
-      const chip = new Node(`Milestone_${milestone.level}`);
-      this.detailUI!.addChild(chip);
-      chip.setPosition(-278 + index * 70, -552);
-      chip.addComponent(UITransform).setContentSize(62, 44);
-      const graphics = chip.addComponent(Graphics);
-      const label = this.label(chip, `Lv.${milestone.level}`, 0, 4, 15, COLOR_MUTED);
-      label.isBold = true;
-      const checkNode = new Node('Check');
-      chip.addChild(checkNode);
-      checkNode.setPosition(0, -11);
-      const check = checkNode.addComponent(Graphics);
-      this.milestoneChips.push({ level: milestone.level, graphics, label, check });
-    });
     this.refresh();
   }
 
@@ -440,7 +426,7 @@ export class CatDetailScreen {
     if (cards) {
       cards.level.titleLabel.string = showAsUnlocked ? `等级 Lv.${progress.level}` : '等级 --';
       const experience = showAsUnlocked ? progress.experience : 0;
-      cards.level.barLabel.string = showAsUnlocked ? `${experience}/${EXPERIENCE_MAX}` : '--';
+      cards.level.barLabel.string = showAsUnlocked ? `互动 ${experience}/${EXPERIENCE_MAX}` : '--';
       this.drawBar(cards.level.bar, showAsUnlocked ? experience / EXPERIENCE_MAX : 0);
       cards.affection.titleLabel.string = '好感度';
       const affection = showAsUnlocked ? progress.affection : 0;
@@ -449,30 +435,24 @@ export class CatDetailScreen {
     }
 
     if (this.skillDescLabel) {
-      if (trialMode) {
-        const required = getCatSkillChargeRequired(this.catId, progress.level);
-        const skillText = definition.skill.replace(/\d+/, `${required}`);
-        this.skillDescLabel.string = `${skillText}\n试住期间每局自动充满，可发动 1 次`;
-      } else if (!unlocked) {
-        this.skillDescLabel.string = definition.unlockHint;
-      } else {
-        const required = getCatSkillChargeRequired(this.catId, progress.level);
-        const skillText = definition.skill.replace(/\d+/, `${required}`);
-        this.skillDescLabel.string = `${skillText}\n${progress.level >= 5 ? 'Lv5 充能减负已生效' : '升级到 Lv5 可减少 1 次充能'}`;
-      }
+      const effects: Record<CatId, string> = {
+        orange: '自选清除1张棋盘牌', white: '自选清除1张棋盘牌',
+        black: '清除槽位中1张牌', ragdoll: '获得1个随机道具', aurora: '自选清除2张棋盘牌',
+      };
+      const required = getCatSkillChargeRequired(this.catId, progress.level);
+      const config = getCatSkillConfig(this.catId);
+      const charge = config.chargeType === 'collect' ? `收集${required}张牌` : `完成${required}次三消`;
+      this.skillDescLabel.string = !showAsUnlocked ? definition.unlockHint
+        : `${effects[this.catId]}\n${trialMode ? '试住每局满充能' : charge + '充能'} · 每局1次`;
     }
-    if (this.skillCooldownLabel) {
-      this.skillCooldownLabel.string = trialMode
-        ? '试住免冷却'
-        : unlocked ? `冷却 ${formatCatSkillCooldown(progress.level)}` : '';
-    }
+    if (this.skillCooldownLabel) this.skillCooldownLabel.string = showAsUnlocked ? '无需等待' : '';
     if (this.skillIcon) {
       const opacity = this.skillIcon.getComponent(UIOpacity) || this.skillIcon.addComponent(UIOpacity);
       opacity.opacity = showAsUnlocked ? 255 : 120;
     }
     if (this.unlockLabel) {
       if (trialMode) {
-        this.unlockLabel.string = `剩余试住 ${trialStatus!.remainingGames} 局 · 完成流浪猫小屋装饰即可正式解锁`;
+        this.unlockLabel.string = `剩余试住 ${trialStatus!.remainingGames} 局 · 清理小屋后正式加入`;
       } else if (!unlocked) {
         this.unlockLabel.string = definition.unlockHint;
       } else {
