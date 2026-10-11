@@ -1,4 +1,4 @@
-import { ensureButtonControl, styleActionNode } from './Theme';
+import { ensureButtonControl } from './Theme';
 import {
   _decorator,
   BlockInputEvents,
@@ -22,6 +22,7 @@ import { AdScene, TrackEventName, TrackProps } from './Analytics';
 import { AssetStore, COMMON_UI_ASSETS } from './AssetStore';
 import { SettlementButton, SettlementButtonTone } from './SettlementButton';
 import type { ShareCardType } from './PlayerTypes';
+import type { RewardActionMode } from './RewardedAdService';
 
 const { ccclass } = _decorator;
 
@@ -57,14 +58,15 @@ export interface SettlementPopupOptions {
   onNextLevel: () => void;
   onReturnHome: () => void;
   onReplay: () => void;
-  /** 复活：视频完播（或免费复活）后，将本局从失败状态恢复为可继续操作。 */
+  rewardMode?: RewardActionMode;
+  /** 分享返回、视频完播或免费复活后，恢复本局操作。 */
   onRevive?: () => void;
-  /** 激励视频复活：Promise resolve true 视为视频完播。 */
+  /** 激励操作复活：Promise resolve true 后发放。保留旧回调名兼容广告模式。 */
   onReviveAd?: () => Promise<boolean>;
   /**
    * 免费复活（连败中打难关的留存兜底）：不看广告直接执行 onRevive。
    * 由 DifficultyController 在连败 ≥1 且触发 spike 时随关卡透传，每局仍只复活一次；
-   * 无连败的难关失败不附带此标记，正常走广告复活。
+   * 无连败的难关失败不附带此标记，正常走当前配置的激励操作。
    */
   freeRevive?: boolean;
   /** 失败时槽内是否已有听牌对子，用于「就差一对」文案。 */
@@ -72,9 +74,9 @@ export interface SettlementPopupOptions {
   /** 覆盖失败信息卡标题 / 正文（收集关目标不足等） */
   failTitle?: string;
   failMessage?: string;
-  /** 「看视频×2金币」视频完播后补发与基础通关奖励相同数量的金币。 */
+  /** 激励操作后补发与基础通关奖励相同数量的金币。 */
   onDoubleReward?: () => void;
-  /** 「看视频×2金币」：Main 播放激励视频，成功 resolve true。 */
+  /** Main 发起分享或视频，完成后 resolve true。 */
   onDoubleRewardAd?: () => Promise<boolean>;
   onTrack?: (name: TrackEventName, props?: TrackProps) => void;
   /**
@@ -89,7 +91,7 @@ export interface SettlementPopupOptions {
 // —— 结算弹窗套件（assets/resources/popup2/，对齐用户设计稿）——
 // 单一粉紫描边九宫格面板（底角绿植雏菊），胜败共用；猫咪趴在面板上沿、爪子搭在绶带上；
 // 标题是粉/灰绶带底图 + 动态 Label；评价/奖励行带浅粉胶囊底；失败为工具箱信息卡；
-// 主操作为暖黄圆角按钮，视频与返回共用一排奶油次按钮。
+// 主操作为橙金缝线木纹按钮，视频与返回共用一排浅金木纹次按钮。
 const POPUP_ASSETS = {
   panel: 'popup2/panel_result',
   catWin: 'popup2/cat_win_wave',
@@ -118,7 +120,7 @@ const SECTION_GAP = 16;
 const ROW_PILL_WIDTH = 440;
 const ROW_PILL_HEIGHT = 56;
 const ACTION_WIDTH = 440;
-const PRIMARY_HEIGHT = 104;
+const PRIMARY_HEIGHT = 136;
 const ACTION_GAP = 16;
 const SECONDARY_GAP = 24;
 const SECONDARY_HEIGHT = 88;
@@ -243,6 +245,15 @@ export class SettlementPopup extends Component {
     const buttonSectionHeight = ACTION_SECTION_HEIGHT
       + (hasShareRow ? SHARE_ROW_GAP + SHARE_HEIGHT : 0);
     const sections = this.collectSections(mode);
+    if (hasAdRow && this.options.rewardMode === 'share' && !(mode === 'fail' && this.options.freeRevive)) {
+      sections.push({
+        height: 32,
+        build: (parent, y) => {
+          const hint = this.label(parent, '发起好友分享，返回游戏后领取', 0, y, 20, new Color(136, 94, 63));
+          hint.node.getComponent(UITransform)!.setContentSize(ACTION_WIDTH, 32);
+        },
+      });
+    }
     const sectionsTotal = sections.reduce((sum, section) => sum + section.height, 0)
       + SECTION_GAP * Math.max(0, sections.length - 1);
     const naturalHeight = HEADER_ZONE
@@ -286,19 +297,22 @@ export class SettlementPopup extends Component {
     if (hasAdRow) {
       const freeRevive = mode === 'fail' && this.options.freeRevive === true;
       const adText = mode === 'fail'
-        ? (freeRevive ? '免费复活' : '视频复活')
-        : '看视频×2金币';
+        ? (freeRevive ? '免费复活' : this.rewardLabel('revive'))
+        : this.rewardLabel('double_coins');
       const onCompleted = mode === 'fail'
         ? () => this.options.onRevive!()
         : () => this.options.onDoubleReward!();
       this.createAdButton(group, adText, 'orange', -(AD_WIDTH + SECONDARY_GAP) / 2, secondaryY, onCompleted, freeRevive);
-      if (!freeRevive) this.options.onTrack?.('ad_entrance_show', { scene: this.adScene() });
+      if (!freeRevive) {
+        if (this.options.rewardMode === 'share') {
+          this.options.onTrack?.('share_entrance_show', { card_type: `reward_${this.adScene()}` });
+        } else this.options.onTrack?.('ad_entrance_show', { scene: this.adScene() });
+      }
     }
   }
 
   private hasAdRow(mode: PopupMode) {
-    // 次操作使用可选激励视频：失败给「看视频清出一对」复活（或难关失败的免费复活），
-    // 胜利/无尽给「看视频×2金币」。回调由 GameScreen 按模式与剩余机会注入。
+    // 次操作由 Main 统一选择分享或广告；免费救援仍直接发放。
     if (mode === 'fail') {
       return !!this.options.onRevive && (!!this.options.onReviveAd || this.options.freeRevive === true);
     }
@@ -576,13 +590,13 @@ export class SettlementPopup extends Component {
       : this.options.onNextLevel;
     const next = SettlementButton.create(parent, this.assets, {
       text: leftText, tone: 'orange', appearance: 'primary', width: ACTION_WIDTH, height: PRIMARY_HEIGHT,
-      scale: 1, fontSize: 40, onClick: leftClick,
+      scale: 1, fontSize: 48, onClick: leftClick,
     });
     next.setPosition(0, primaryY);
     const home = SettlementButton.create(parent, this.assets, {
       text: this.options.homeButtonLabel ?? '返回首页', tone: 'orange', appearance: 'secondary',
       width: hasAd ? AD_WIDTH : ACTION_WIDTH, height: SECONDARY_HEIGHT,
-      scale: 1, fontSize: 24, onClick: this.options.onReturnHome,
+      scale: 1, fontSize: 32, onClick: this.options.onReturnHome,
     });
     home.setPosition(hasAd ? (AD_WIDTH + SECONDARY_GAP) / 2 : 0, secondaryY);
   }
@@ -596,7 +610,7 @@ export class SettlementPopup extends Component {
       width: SHARE_WIDTH,
       height: SHARE_HEIGHT,
       scale: 1,
-      fontSize: 28,
+      fontSize: 32,
       onClick: () => this.options.share?.onShare(),
     });
     node.setPosition(0, y);
@@ -666,7 +680,7 @@ export class SettlementPopup extends Component {
       width: AD_WIDTH,
       height: AD_HEIGHT,
       scale: 1,
-      fontSize: 24,
+      fontSize: 28,
       onClick: skipAd
         ? () => this.completeWithoutAd(onCompleted)
         : this.options.onRevive
@@ -683,24 +697,24 @@ export class SettlementPopup extends Component {
     if (this.adBusy || !this.adButton) return;
     this.adBusy = true;
     this.adButton.interactable = false;
-    styleActionNode(this.adButton.node, 'disabled', AD_WIDTH, AD_HEIGHT);
+    SettlementButton.setAppearance(this.adButton.node, 'disabled');
     if (this.adButtonLabel) this.adButtonLabel.string = '已领取';
     onCompleted();
   }
 
-  /** 激励视频复活：播放激励视频，回调成功才执行复活；失败恢复按钮可重试。 */
+  /** 激励操作完成才复活；失败恢复按钮可重试。 */
   private async watchRevive(onCompleted: () => void) {
     if (this.adBusy || !this.options.onReviveAd || !this.adButton) return;
     this.adBusy = true;
     this.adButton.interactable = false;
-    styleActionNode(this.adButton.node, 'disabled', AD_WIDTH, AD_HEIGHT);
-    if (this.adButtonLabel) this.adButtonLabel.string = '视频准备中...';
+    SettlementButton.setAppearance(this.adButton.node, 'disabled');
+    if (this.adButtonLabel) this.adButtonLabel.string = this.rewardLoadingLabel();
 
     let completed = false;
     try {
       completed = await this.options.onReviveAd();
     } catch (error) {
-      console.error('[CatWorld] Settlement revive ad failed', error);
+      console.error('[CatWorld] Settlement revive reward failed', error);
       completed = false;
     }
     if (!this.node.isValid) return;
@@ -713,23 +727,23 @@ export class SettlementPopup extends Component {
 
     this.adBusy = false;
     this.adButton.interactable = true;
-    styleActionNode(this.adButton.node, 'secondary', AD_WIDTH, AD_HEIGHT);
-    if (this.adButtonLabel) this.adButtonLabel.string = '视频复活';
+    SettlementButton.setAppearance(this.adButton.node, 'secondary');
+    if (this.adButtonLabel) this.adButtonLabel.string = this.rewardLabel('revive');
   }
 
-  /** 激励视频双倍金币：播放激励视频，成功后补发与基础奖励相同数量的金币；失败可重试。 */
+  /** 激励操作完成后追加金币；失败可重试。 */
   private async watchDouble(onCompleted: () => void) {
     if (this.adBusy || !this.options.onDoubleRewardAd || !this.adButton) return;
     this.adBusy = true;
     this.adButton.interactable = false;
-    styleActionNode(this.adButton.node, 'disabled', AD_WIDTH, AD_HEIGHT);
-    if (this.adButtonLabel) this.adButtonLabel.string = '视频准备中...';
+    SettlementButton.setAppearance(this.adButton.node, 'disabled');
+    if (this.adButtonLabel) this.adButtonLabel.string = this.rewardLoadingLabel();
 
     let completed = false;
     try {
       completed = await this.options.onDoubleRewardAd();
     } catch (error) {
-      console.error('[CatWorld] Settlement double ad failed', error);
+      console.error('[CatWorld] Settlement double reward failed', error);
       completed = false;
     }
     if (!this.node.isValid) return;
@@ -742,8 +756,17 @@ export class SettlementPopup extends Component {
 
     this.adBusy = false;
     this.adButton.interactable = true;
-    styleActionNode(this.adButton.node, 'secondary', AD_WIDTH, AD_HEIGHT);
-    if (this.adButtonLabel) this.adButtonLabel.string = '看视频×2金币';
+    SettlementButton.setAppearance(this.adButton.node, 'secondary');
+    if (this.adButtonLabel) this.adButtonLabel.string = this.rewardLabel('double_coins');
+  }
+
+  private rewardLabel(scene: 'revive' | 'double_coins'): string {
+    if (this.options.rewardMode === 'share') return scene === 'revive' ? '分享复活' : '分享×2金币';
+    return scene === 'revive' ? '视频复活' : '视频×2金币';
+  }
+
+  private rewardLoadingLabel(): string {
+    return this.options.rewardMode === 'share' ? '等待分享返回' : '视频加载中';
   }
 
   private adScene(): AdScene {

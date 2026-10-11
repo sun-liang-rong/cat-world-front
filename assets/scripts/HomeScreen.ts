@@ -1,5 +1,6 @@
-import { styleActionNode, styleActionLabel, ensureButtonControl } from './Theme';
-import { BlockInputEvents, Button, Color, Graphics, Label, Node, Sprite, tween, UIOpacity, UITransform, Vec2, Vec3, view } from 'cc';
+import { SettlementButton } from './SettlementButton';
+import { ensureButtonControl } from './Theme';
+import { BlockInputEvents, Button, Color, Graphics, Label, Node, Sprite, Tween, tween, UIOpacity, UITransform, Vec2, Vec3, view } from 'cc';
 import { TrackEventName, TrackProps } from './Analytics';
 import { ActivitySnapshot } from './ActivityContent';
 import { AssetStore, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
@@ -79,6 +80,12 @@ export interface HomeChapterInfo {
   campaignComplete?: boolean;
 }
 
+export interface HomeCompanionMessage {
+  text: string;
+  action?: 'play' | 'town' | 'tasks';
+  actionLabel?: string;
+}
+
 export interface HomeScreenOptions {
   hasRunCheckpoint?: () => boolean;
   getExperienceInfo: () => PlayerExperienceInfo;
@@ -123,7 +130,7 @@ export interface HomeScreenOptions {
   getDailyTaskBadgeCount: () => number;
   getChapterInfo: () => HomeChapterInfo;
   getPlayerName: () => string;
-  getCurrentGoal?: () => string;
+  getCompanionMessage?: () => HomeCompanionMessage;
   getResidentCats?: () => CatId[];
   onTrack?: (name: TrackEventName, props?: TrackProps) => void;
 }
@@ -132,7 +139,12 @@ export class HomeScreen {
   private homeUI: Node | null = null;
   private homeCoinLabel: Label | null = null;
   private startLabel: Label | null = null;
-  private goalLabel: Label | null = null;
+  private companionBubble: Node | null = null;
+  private companionInner: Node | null = null;
+  private companionTitle: Label | null = null;
+  private companionText: Label | null = null;
+  private companionAction: Label | null = null;
+  private companionTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionPromptShown = false;
   private plazaCats: Node | null = null;
   private residentCatsKey = '';
@@ -150,14 +162,13 @@ export class HomeScreen {
   private challengeLockLabel: Label | null = null;
   private catTrialUI: Node | null = null;
   private catTrialLoading = false;
-  private catTrialPill: Node | null = null;
-  private catTrialPillLabel: Label | null = null;
   private challengeUnlockUI: Node | null = null;
   private challengeUnlockLoading = false;
   private challengeLockUI: Node | null = null;
   private challengeLockIcon: Node | null = null;
   private challengeTagGraphics: Graphics | null = null;
   private endlessLabel: Label | null = null;
+  private endlessEntry: Node | null = null;
   private homeChapterTitleLabel: Label | null = null;
   private moreBadge: Node | null = null;
   private taskBadge: Node | null = null;
@@ -214,6 +225,7 @@ export class HomeScreen {
     if (!active && this.guideUI) this.guideUI.active = false;
     if (!active && this.moreUI) this.moreUI.active = false;
     if (!active) {
+      this.hideCompanionMessage();
       this.closeCatTrialOffer();
       this.closeChallengeUnlockNotice();
       this.closeChallengeLockPanel();
@@ -231,7 +243,6 @@ export class HomeScreen {
       this.refreshMoreEntries();
       this.refreshTownHintBubble();
       this.refreshCatEquipHintBubble();
-      this.refreshCatTrialPill();
       this.refreshCoinShareBadge();
       this.maybeShowFirstTownGuide();
       this.maybeShowCatTrialOffer();
@@ -242,6 +253,12 @@ export class HomeScreen {
   }
 
   destroy() {
+    this.hideCompanionMessage();
+    this.companionBubble = null;
+    this.companionInner = null;
+    this.companionTitle = null;
+    this.companionText = null;
+    this.companionAction = null;
     this.settingsPopup?.close();
     this.settingsPopup = null;
     this.homeUI?.destroy();
@@ -264,14 +281,13 @@ export class HomeScreen {
     this.coinShareBadge = null;
     this.catTrialUI = null;
     this.catTrialLoading = false;
-    this.catTrialPill = null;
-    this.catTrialPillLabel = null;
     this.challengeUnlockUI = null;
     this.challengeUnlockLoading = false;
     this.challengeLockUI = null;
     this.challengeLockIcon = null;
     this.challengeTagGraphics = null;
     this.endlessLabel = null;
+    this.endlessEntry = null;
     this.homeChapterTitleLabel = null;
     this.moreBadge = null;
     this.taskBadge = null;
@@ -510,10 +526,9 @@ export class HomeScreen {
     this.plazaCats = new Node('ResidentCats');
     holder.addChild(this.plazaCats);
     this.refreshResidentCats();
-    this.addTapFeedback(holder, this.options.onOpenCatCollection, 0.98);
-    // 试住期间猫咪群下方挂「试住中」状态气泡；非试住对局自动隐藏
-    this.buildCatTrialPill(holder, -catHeight / 2 - 34);
-    this.refreshCatTrialPill();
+    this.addTapFeedback(holder, () => this.showCompanionMessage(), 0.98);
+    // 对白锚定猫咪头顶，与底部两个模式入口分开；独立节点避免跟随猫咪摇摆。
+    this.buildCompanionBubble(centerY + 164);
 
     holder.setScale(new Vec3(0, 0, 1));
     const opacity = holder.addComponent(UIOpacity);
@@ -720,8 +735,8 @@ export class HomeScreen {
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const startLabel = this.label(startButton, '立即试住', 0, -1, 25, new Color(111, 62, 28));
-    styleActionNode(startButton, 'primary');
-    styleActionLabel(startLabel, startButton.getComponent(UITransform)!.contentSize.width, startButton.getComponent(UITransform)!.contentSize.height, startLabel.fontSize);
+    SettlementButton.apply(startButton, 'primary');
+    SettlementButton.styleLabel(startLabel, startButton.getComponent(UITransform)!.contentSize.width, startButton.getComponent(UITransform)!.contentSize.height, startLabel.fontSize);
     this.addTapFeedback(startButton, () => {
       this.options.onTrack?.('cat_trial_offer_click', { accepted: true });
       this.closeCatTrialOffer();
@@ -733,8 +748,8 @@ export class HomeScreen {
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const laterLabel = this.label(laterButton, '稍后再说', 0, -1, 23, new Color(135, 104, 76));
-    styleActionNode(laterButton, 'secondary');
-    styleActionLabel(laterLabel, laterButton.getComponent(UITransform)!.contentSize.width, laterButton.getComponent(UITransform)!.contentSize.height, laterLabel.fontSize);
+    SettlementButton.apply(laterButton, 'secondary');
+    SettlementButton.styleLabel(laterLabel, laterButton.getComponent(UITransform)!.contentSize.width, laterButton.getComponent(UITransform)!.contentSize.height, laterLabel.fontSize);
     this.addTapFeedback(laterButton, () => {
       this.options.onTrack?.('cat_trial_offer_click', { accepted: false });
       this.closeCatTrialOffer();
@@ -748,43 +763,110 @@ export class HomeScreen {
     this.maybeShowChallengeUnlockNotice();
   }
 
-  // —— 首页试住气泡：猫咪群上方「大橘试住中 · 剩余 X/5 局」 ——
-  private buildCatTrialPill(parent: Node, y: number) {
-    const pill = new Node('CatTrialPill');
-    parent.addChild(pill);
-    pill.setPosition(0, y);
-    const text = '大橘试住中 · 剩余 5/5 局';
-    const width = Math.max(250, text.length * 17 + 40);
-    pill.addComponent(UITransform).setContentSize(width, 46);
-    const graphics = pill.addComponent(Graphics);
-    graphics.fillColor = new Color(255, 248, 226, 246);
-    graphics.strokeColor = new Color(214, 151, 38);
-    graphics.lineWidth = 3;
-    graphics.roundRect(-width / 2, -23, width, 46, 23);
+  private buildCompanionBubble(y: number) {
+    const bubble = new Node('CompanionBubble');
+    this.homeUI!.addChild(bubble);
+    bubble.setPosition(148, y);
+    bubble.addComponent(UITransform).setContentSize(328, 124);
+    bubble.addComponent(UIOpacity);
+    const inner = new Node('CompanionInner');
+    bubble.addChild(inner);
+    inner.addComponent(UITransform).setContentSize(328, 124);
+    this.companionBubble = bubble;
+    this.companionInner = inner;
+
+    const shadow = new Node('CompanionShadow');
+    inner.addChild(shadow);
+    const shadowGraphics = shadow.addComponent(Graphics);
+    shadowGraphics.fillColor = new Color(92, 54, 22, 38);
+    shadowGraphics.ellipse(0, -66, 136, 10);
+    shadowGraphics.fill();
+    const panel = this.creamPanel(inner, 0, 0, 328, 124, 24);
+    const graphics = panel.getComponent(Graphics)!;
+    // 下方短尾巴指向猫咪，遮掉底框连接处，形成完整对白轮廓。
+    graphics.moveTo(-120, -61);
+    graphics.lineTo(-104, -82);
+    graphics.lineTo(-88, -61);
+    graphics.close();
     graphics.fill();
+    graphics.moveTo(-120, -61);
+    graphics.lineTo(-104, -82);
+    graphics.lineTo(-88, -61);
     graphics.stroke();
-    // 左侧大橘头像位：黄底圆 + 猫耳三角，暗示这是大橘的状态条
-    graphics.fillColor = new Color(255, 224, 108);
-    graphics.circle(-width / 2 + 26, 0, 16);
-    graphics.fill();
-    const label = this.label(pill, text, 14, 0, 17, new Color(111, 62, 28));
-    label.isBold = true;
-    label.overflow = Label.Overflow.SHRINK;
-    label.enableWrapText = false;
-    label.verticalAlign = Label.VerticalAlign.CENTER;
-    label.node.getComponent(UITransform)!.setContentSize(width - 58, 30);
-    pill.active = false;
-    this.catTrialPill = pill;
-    this.catTrialPillLabel = label;
+
+    this.companionTitle = this.label(panel, '', -140, 36, 18, new Color(157, 112, 74));
+    const titleTransform = this.companionTitle.node.getComponent(UITransform)!;
+    titleTransform.setAnchorPoint(0, 0.5);
+    titleTransform.setContentSize(188, 28);
+    this.companionTitle.horizontalAlign = Label.HorizontalAlign.LEFT;
+    this.companionTitle.enableWrapText = false;
+    this.companionTitle.overflow = Label.Overflow.SHRINK;
+
+    this.companionAction = this.label(panel, '', 102, 36, 18, new Color(191, 125, 27));
+    this.companionAction.node.getComponent(UITransform)!.setContentSize(80, 28);
+    this.companionAction.isBold = true;
+    this.companionAction.enableWrapText = false;
+
+    this.companionText = this.label(panel, '', 0, -12, 24, new Color(112, 69, 40));
+    this.companionText.node.getComponent(UITransform)!.setContentSize(280, 64);
+    this.companionText.horizontalAlign = Label.HorizontalAlign.LEFT;
+    this.companionText.verticalAlign = Label.VerticalAlign.CENTER;
+    this.companionText.enableWrapText = true;
+    this.companionText.overflow = Label.Overflow.SHRINK;
+    this.companionText.isBold = true;
+    this.addTapFeedback(bubble, () => {
+      const message = this.options.getCompanionMessage?.();
+      this.hideCompanionMessage();
+      if (message?.action === 'town') this.options.onOpenTown();
+      else if (message?.action === 'tasks') this.options.onOpenDailyTasks();
+      else if (message?.action === 'play') this.options.onStartGame();
+      else this.options.onOpenCatCollection();
+    });
+    bubble.active = false;
   }
 
-  private refreshCatTrialPill() {
-    if (!this.catTrialPill || !this.catTrialPillLabel) return;
-    const status = this.options.getCatTrialStatus?.() ?? null;
-    this.catTrialPill.active = !!status;
-    if (status) {
-      this.catTrialPillLabel.string = `大橘试住中 · 剩余 ${status.remainingGames}/5 局`;
+  private showCompanionMessage() {
+    if (!this.homeUI?.active || !this.companionBubble || !this.companionInner
+      || !this.companionTitle || !this.companionText || !this.companionAction) return;
+    const message = this.options.getCompanionMessage?.();
+    if (!message?.text) {
+      this.hideCompanionMessage();
+      return;
     }
+    if (this.companionTimer !== null) clearTimeout(this.companionTimer);
+    this.companionTimer = null;
+    const trial = this.options.getCatTrialStatus?.();
+    this.companionTitle.string = trial ? `试住中 · 剩余 ${trial.remainingGames}/5 局` : '大橘说';
+    this.companionText.string = message.text;
+    this.companionAction.string = `${message.actionLabel || '看猫咪'} ›`;
+    const bubble = this.companionBubble;
+    const opacity = bubble.getComponent(UIOpacity)!;
+    Tween.stopAllByTarget(opacity);
+    Tween.stopAllByTarget(this.companionInner);
+    bubble.active = true;
+    bubble.setScale(new Vec3(1, 1, 1));
+    opacity.opacity = 0;
+    this.companionInner.setScale(new Vec3(0.94, 0.94, 1));
+    tween(opacity).to(0.2, { opacity: 255 }).start();
+    tween(this.companionInner).to(0.24, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' }).start();
+    // 问候短暂展示，重要的建设/领奖目标保留；点猫咪可以再次唤出。
+    if (!message.action && !trial) {
+      this.companionTimer = setTimeout(() => {
+        this.companionTimer = null;
+        if (!bubble.isValid || !this.homeUI?.active) return;
+        tween(opacity).to(0.2, { opacity: 0 }).call(() => { bubble.active = false; }).start();
+      }, 6000);
+    }
+  }
+
+  private hideCompanionMessage() {
+    if (this.companionTimer !== null) clearTimeout(this.companionTimer);
+    this.companionTimer = null;
+    if (this.companionInner) Tween.stopAllByTarget(this.companionInner);
+    if (!this.companionBubble) return;
+    const opacity = this.companionBubble.getComponent(UIOpacity);
+    if (opacity) Tween.stopAllByTarget(opacity);
+    this.companionBubble.active = false;
   }
 
   // 保留旧金币提示节点的布局兼容，当前版本隐藏
@@ -869,8 +951,8 @@ export class HomeScreen {
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const goLabel = this.label(goButton, '去看看', 0, -1, 25, new Color(111, 62, 28));
-    styleActionNode(goButton, 'primary');
-    styleActionLabel(goLabel, goButton.getComponent(UITransform)!.contentSize.width, goButton.getComponent(UITransform)!.contentSize.height, goLabel.fontSize);
+    SettlementButton.apply(goButton, 'primary');
+    SettlementButton.styleLabel(goLabel, goButton.getComponent(UITransform)!.contentSize.width, goButton.getComponent(UITransform)!.contentSize.height, goLabel.fontSize);
     this.addTapFeedback(goButton, () => {
       this.closeChallengeUnlockNotice();
       this.options.onStartChallenge();
@@ -881,8 +963,8 @@ export class HomeScreen {
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const laterLabel = this.label(laterButton, '稍后再说', 0, -1, 22, new Color(135, 104, 76));
-    styleActionNode(laterButton, 'secondary');
-    styleActionLabel(laterLabel, laterButton.getComponent(UITransform)!.contentSize.width, laterButton.getComponent(UITransform)!.contentSize.height, laterLabel.fontSize);
+    SettlementButton.apply(laterButton, 'secondary');
+    SettlementButton.styleLabel(laterLabel, laterButton.getComponent(UITransform)!.contentSize.width, laterButton.getComponent(UITransform)!.contentSize.height, laterLabel.fontSize);
     this.addTapFeedback(laterButton, () => this.closeChallengeUnlockNotice(), 0.95);
   }
 
@@ -953,8 +1035,8 @@ export class HomeScreen {
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const okLabel = this.label(okButton, '知道了', 0, -1, 24, new Color(111, 62, 28));
-    styleActionNode(okButton, 'primary');
-    styleActionLabel(okLabel, okButton.getComponent(UITransform)!.contentSize.width, okButton.getComponent(UITransform)!.contentSize.height, okLabel.fontSize);
+    SettlementButton.apply(okButton, 'primary');
+    SettlementButton.styleLabel(okLabel, okButton.getComponent(UITransform)!.contentSize.width, okButton.getComponent(UITransform)!.contentSize.height, okLabel.fontSize);
     this.addTapFeedback(okButton, () => this.closeChallengeLockPanel(), 0.95);
   }
 
@@ -1067,8 +1149,8 @@ export class HomeScreen {
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const goLabel = this.label(goButton, '去建设', 0, -1, 26, new Color(111, 62, 28));
-    styleActionNode(goButton, 'primary');
-    styleActionLabel(goLabel, goButton.getComponent(UITransform)!.contentSize.width, goButton.getComponent(UITransform)!.contentSize.height, goLabel.fontSize);
+    SettlementButton.apply(goButton, 'primary');
+    SettlementButton.styleLabel(goLabel, goButton.getComponent(UITransform)!.contentSize.width, goButton.getComponent(UITransform)!.contentSize.height, goLabel.fontSize);
     this.addTapFeedback(goButton, () => {
       this.closeFirstTownGuide(false);
       this.options.onFirstTownGuideDone?.();
@@ -1080,8 +1162,8 @@ export class HomeScreen {
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const skipLabel = this.label(skipButton, '稍后再说', 0, -1, 22, new Color(135, 104, 76));
-    styleActionNode(skipButton, 'secondary');
-    styleActionLabel(skipLabel, skipButton.getComponent(UITransform)!.contentSize.width, skipButton.getComponent(UITransform)!.contentSize.height, skipLabel.fontSize);
+    SettlementButton.apply(skipButton, 'secondary');
+    SettlementButton.styleLabel(skipLabel, skipButton.getComponent(UITransform)!.contentSize.width, skipButton.getComponent(UITransform)!.contentSize.height, skipLabel.fontSize);
     this.addTapFeedback(skipButton, () => {
       this.options.onFirstTownGuideDone?.();
       this.closeFirstTownGuide(true);
@@ -1229,7 +1311,12 @@ export class HomeScreen {
     });
     this.refreshLevelBadge();
 
-    const coin = this.image(this.homeUI!, COMMON_UI_ASSETS.coinHud, 168, hudY, 176, 54);
+    // 热区与图片分开，避免按钮补足 88px 高度时把金币和加号一起拉成椭圆。
+    const coin = new Node('HomeCoinButton');
+    this.homeUI!.addChild(coin);
+    coin.setPosition(168, hudY);
+    coin.addComponent(UITransform).setContentSize(176, 88);
+    this.image(coin, COMMON_UI_ASSETS.coinHud, 0, 0, 176, 54);
 
     // 添加金币底部阴影
     const coinShadow = new Node('CoinShadow');
@@ -1244,6 +1331,8 @@ export class HomeScreen {
     this.homeCoinLabel = this.label(coin, `${this.options.getCoins()}`, 0, 0, 22, new Color(91, 53, 34));
     this.homeCoinLabel.node.getComponent(UITransform)!.setContentSize(72, 36);
     this.homeCoinLabel.verticalAlign = Label.VerticalAlign.CENTER;
+    this.homeCoinLabel.enableWrapText = false;
+    this.homeCoinLabel.overflow = Label.Overflow.SHRINK;
     this.homeCoinLabel.isBold = true;
     this.addTapFeedback(coin, () => {
       this.toggleCoinAdPopup();
@@ -1354,7 +1443,7 @@ export class HomeScreen {
 
     const inner = new Node('StartInner');
     start.addChild(inner);
-    styleActionNode(inner, 'primary', 420, 118);
+    SettlementButton.apply(inner, 'primary', 420, 118);
     const text = this.label(inner, '开始闯关', 0, 0, 44, new Color(255, 251, 238));
     this.startLabel = text;
     text.isBold = true;
@@ -1363,7 +1452,7 @@ export class HomeScreen {
     text.enableShadow = true;
     text.shadowColor = new Color(150, 66, 14, 160);
     text.shadowOffset = new Vec2(0, -4);
-    styleActionLabel(text, 420, 118, 44);
+    SettlementButton.styleLabel(text, 420, 118, 44);
 
     const button = start.addComponent(Button);
     ensureButtonControl(button);
@@ -1381,16 +1470,11 @@ export class HomeScreen {
       )
       .start();
 
-    const goalPanel = this.creamPanel(cluster, 0, 152, 624, 56, 22, new Color(255, 248, 226, 240), new Color(235, 205, 158));
-    this.goalLabel = this.label(goalPanel, '', 0, 0, 21, new Color(111, 62, 28));
-    this.goalLabel.isBold = true;
-    this.goalLabel.outlineWidth = 4;
-    this.goalLabel.outlineColor = new Color(255, 248, 226);
-
     const endless = new Node('EndlessButton');
+    this.endlessEntry = endless;
     cluster.addChild(endless);
     endless.setPosition(0, -92);
-    endless.addComponent(UITransform).setContentSize(300, 78);
+    endless.addComponent(UITransform).setContentSize(300, 88);
 
     const endlessShadow = new Node('EndlessShadow');
     endless.addChild(endlessShadow);
@@ -1403,11 +1487,11 @@ export class HomeScreen {
 
     const endlessInner = new Node('EndlessInner');
     endless.addChild(endlessInner);
-    styleActionNode(endlessInner, 'secondary', 300, 88);
+    SettlementButton.apply(endlessInner, 'secondary', 300, 88);
     this.endlessLabel = this.label(endlessInner, '无尽模式', 0, 0, 30, new Color(255, 251, 238));
     this.endlessLabel.isBold = true;
     this.endlessLabel.outlineWidth = 4;
-    styleActionLabel(this.endlessLabel, 300, 88, 28);
+    SettlementButton.styleLabel(this.endlessLabel, 300, 88, 28);
     this.addTapFeedback(endless, () => {
       if (!this.options.isEndlessUnlocked()) {
         this.toast('先通关第 1 关再来挑战无尽');
@@ -1451,9 +1535,9 @@ export class HomeScreen {
   private refreshPlayEntries() {
     if (this.startLabel) this.startLabel.string = this.options.hasRunCheckpoint?.() ? '继续本局' : '开始闯关';
     this.refreshResidentCats();
-    if (this.goalLabel) this.goalLabel.string = this.options.getCurrentGoal?.() || '';
+    this.showCompanionMessage();
     if (this.challengeEntry) this.challengeEntry.active = this.options.isChallengeUnlocked();
-    if (this.endlessLabel?.node.parent) this.endlessLabel.node.parent.active = this.options.isEndlessUnlocked();
+    if (this.endlessEntry) this.endlessEntry.active = this.options.isEndlessUnlocked();
     const challengeUnlocked = this.options.isChallengeUnlocked();
     const claimed = this.options.isChallengeRewardClaimed();
     if (this.challengeEntry) this.challengeEntry.setScale(new Vec3(challengeUnlocked ? 1 : 0.92, challengeUnlocked ? 1 : 0.92, 1));
@@ -1483,7 +1567,9 @@ export class HomeScreen {
     if (this.endlessLabel) {
       const unlocked = this.options.isEndlessUnlocked();
       this.endlessLabel.string = unlocked ? '无尽模式' : '无尽未解锁';
-      this.endlessLabel.color = unlocked ? new Color(111, 62, 28) : new Color(150, 137, 121);
+      if (this.endlessLabel.node.parent) {
+        SettlementButton.setAppearance(this.endlessLabel.node.parent, unlocked ? 'secondary' : 'disabled');
+      }
     }
   }
 
@@ -1965,8 +2051,8 @@ export class HomeScreen {
     const close = this.creamPanel(parent, 0, -320, 240, 88, 28,
       new Color(255, 224, 108), new Color(201, 148, 47));
     const closeLabel = this.label(close, '知道了', 0, -2, 30, new Color(111, 62, 28));
-    styleActionNode(close, 'secondary', 240, 88);
-    styleActionLabel(closeLabel, 240, 88, 24);
+    SettlementButton.apply(close, 'secondary', 240, 88);
+    SettlementButton.styleLabel(closeLabel, 240, 88, 24);
     this.addTapFeedback(close, () => this.toggleGuide(false), 0.93);
   }
 
@@ -2071,12 +2157,12 @@ export class HomeScreen {
 
     // 分享按钮（复用结算弹窗的绿色胶囊底图）
     const shareButtonNode = this.image(panel, 'popup/btn_green', 0, -150, 236, 88);
-    styleActionNode(shareButtonNode, 'primary', 236, 88);
+    SettlementButton.apply(shareButtonNode, 'primary', 236, 88);
     const shareLabel = this.label(shareButtonNode, '去闯关', 0, 0, 24, Color.WHITE);
     shareLabel.isBold = true;
     shareLabel.outlineWidth = 3;
     shareLabel.outlineColor = new Color(43, 94, 34);
-    styleActionLabel(shareLabel, 236, 88, 24);
+    SettlementButton.styleLabel(shareLabel, 236, 88, 24);
     const shareButton = shareButtonNode.addComponent(Button);
     ensureButtonControl(shareButton);
     shareButton.node.on(Button.EventType.CLICK, () => {

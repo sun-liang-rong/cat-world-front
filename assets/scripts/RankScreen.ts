@@ -1,5 +1,6 @@
-import { styleActionNode, styleActionLabel, ensureButtonControl } from './Theme';
-import { Button, Color, Graphics, Label, Mask, Node, ScrollView, Sprite, SubContextView, Size, UITransform, view } from 'cc';
+import { SettlementButton } from './SettlementButton';
+import { ensureButtonControl } from './Theme';
+import { Button, Color, Graphics, Label, Mask, Node, ScrollView, Sprite, UITransform, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { LeaderboardData, LeaderboardEntry, LeaderboardTab } from './LeaderboardService';
@@ -7,7 +8,7 @@ import { Toast } from './Toast';
 
 export interface RankScreenOptions {
   getStars: () => number;
-  isWechat: () => boolean;
+  getName?: () => string;
   onPlaySound: (effect: AudioEffect) => void;
   fetchEntries: (tab: LeaderboardTab) => Promise<LeaderboardData>;
   onInvite: () => boolean;
@@ -26,10 +27,12 @@ const NAME_BAR_HEIGHT = 52;
 const STAR_X = 186;
 const SCORE_BAR_X = 270;
 const SCORE_BAR_WIDTH = 108;
-const LIST_VIEW_TOP_INSET = 360;
+const LIST_VIEW_TOP_INSET = 400;
 const LIST_VIEW_BOTTOM_INSET = 252;
 const TABS: Array<{ id: LeaderboardTab; label: string }> = [
-  { id: 'level', label: '好友星星榜' },
+  { id: 'level', label: '关卡模式' },
+  { id: 'endless', label: '无尽模式' },
+  { id: 'challenge', label: '超萌挑战' },
 ];
 
 export class RankScreen {
@@ -37,7 +40,8 @@ export class RankScreen {
   private scrollView: ScrollView | null = null;
   private listContent: Node | null = null;
   private emptyState: Node | null = null;
-  private mockCaption: Label | null = null;
+  private emptyLabel: Label | null = null;
+  private statusCaption: Label | null = null;
   private selfRankLabel: Label | null = null;
   private selfRankBadge: Node | null = null;
   private selfStarsLabel: Label | null = null;
@@ -49,7 +53,6 @@ export class RankScreen {
   private loadToken = 0;
   private listViewHeight = 0;
   private active = false;
-  private friendView: Node | null = null;
 
   constructor(
     private readonly root: Node,
@@ -87,16 +90,19 @@ export class RankScreen {
     if (!this.rankUI) return;
     this.rankUI.active = active;
     if (active) this.reloadList();
-    else this.postFriendMessage('hide');
+    else this.loadToken += 1;
   }
 
   destroy() {
+    this.active = false;
+    this.loadToken += 1;
     this.rankUI?.destroy();
     this.rankUI = null;
     this.scrollView = null;
     this.listContent = null;
     this.emptyState = null;
-    this.mockCaption = null;
+    this.emptyLabel = null;
+    this.statusCaption = null;
     this.selfRankLabel = null;
     this.selfRankBadge = null;
     this.selfStarsLabel = null;
@@ -124,24 +130,7 @@ export class RankScreen {
     this.buildSelfCard(bottom);
     this.buildEmptyState(top, bottom);
     this.buildRetryButton(top);
-    if (this.options.isWechat()) {
-      this.friendView = new Node('WechatFriendBoard');
-      this.rankUI.addChild(this.friendView);
-      const height = Math.min(720, this.listViewHeight);
-      this.friendView.setPosition(0, top - LIST_VIEW_TOP_INSET - height / 2);
-      this.friendView.addComponent(UITransform).setContentSize(660, height);
-      const subContext = this.friendView.addComponent(SubContextView);
-      subContext.designResolutionSize = new Size(660, height);
-      subContext.fps = 10;
-    }
-    this.reloadList();
-  }
-
-  private postFriendMessage(type: string) {
-    if (!this.options.isWechat()) return;
-    const runtime = globalThis as typeof globalThis & { wx?: { getOpenDataContext?: () => { postMessage: (data: { type: string }) => void } } };
-    try { runtime.wx?.getOpenDataContext?.().postMessage({ type }); }
-    catch (error) { console.error('[CatWorld] Failed to open friend stars', error); }
+    if (this.active) this.reloadList();
   }
 
   private buildHeader(top: number) {
@@ -151,7 +140,10 @@ export class RankScreen {
     title.isBold = true;
     title.outlineWidth = 2;
     title.outlineColor = new Color(255, 248, 226, 200);
-    this.mockCaption = this.label(this.rankUI!, '', 10, top - 338, 18, new Color(150, 124, 95));
+    this.statusCaption = this.label(this.rankUI!, '', 0, top - 376, 20, new Color(150, 124, 95));
+    this.statusCaption.enableWrapText = false;
+    this.statusCaption.overflow = Label.Overflow.SHRINK;
+    this.statusCaption.node.getComponent(UITransform)!.setContentSize(660, 28);
 
     const back = new Node('RankBackButton');
     this.rankUI!.addChild(back);
@@ -195,22 +187,17 @@ export class RankScreen {
   private buildTabs(top: number) {
     const bar = new Node('RankTabs');
     this.rankUI!.addChild(bar);
-    bar.setPosition(0, top - 286);
-    bar.addComponent(UITransform).setContentSize(660, 64);
+    bar.setPosition(0, top - 304);
+    bar.addComponent(UITransform).setContentSize(660, 88);
     TABS.forEach((tab, index) => {
       const node = new Node(`RankTab_${tab.id}`);
       bar.addChild(node);
-      node.setPosition(0, 0);
-      node.addComponent(UITransform).setContentSize(200, 64);
-      const graphics = node.addComponent(Graphics);
-      graphics.fillColor = new Color(255, 248, 226);
-      graphics.strokeColor = new Color(235, 205, 158);
-      graphics.lineWidth = 3;
-      graphics.roundRect(-100, -32, 200, 64, 22);
-      graphics.fill();
-      graphics.stroke();
+      node.setPosition((index - 1) * 220, 0);
+      node.addComponent(UITransform).setContentSize(200, 88);
+      SettlementButton.apply(node, tab.id === this.currentTab ? 'primary' : 'secondary', 200, 88);
       const label = this.label(node, tab.label, 0, 0, 22, new Color(112, 69, 40));
       label.isBold = true;
+      SettlementButton.styleLabel(label, 200, 88, 24);
       const button = node.addComponent(Button);
       ensureButtonControl(button);
       button.node.on(Button.EventType.CLICK, () => {
@@ -227,52 +214,38 @@ export class RankScreen {
 
   private refreshTabs() {
     this.tabButtons.forEach(tab => {
-      const graphics = tab.node.getComponent(Graphics);
-      if (!graphics) return;
-      const selected = tab.id === this.currentTab;
-      graphics.clear();
-      graphics.fillColor = selected ? new Color(255, 224, 108) : new Color(255, 248, 226);
-      graphics.strokeColor = selected ? new Color(221, 158, 28) : new Color(235, 205, 158);
-      graphics.lineWidth = selected ? 4 : 3;
-      graphics.roundRect(-100, -32, 200, 64, 22);
-      graphics.fill();
-      graphics.stroke();
-      tab.label.color = selected ? new Color(111, 62, 28) : new Color(136, 94, 63);
+      SettlementButton.setAppearance(tab.node, tab.id === this.currentTab ? 'primary' : 'secondary');
     });
   }
 
   private reloadList() {
-    if (!this.listContent || !this.scrollView || !this.rankUI) return;
-    if (this.options.isWechat()) {
-      this.listContent.parent!.active = false;
-      this.emptyState!.active = false;
-      if (this.retryButton) this.retryButton.active = false;
-      this.mockCaption!.string = '仅展示好友累计星星，其他纪录保存在本机';
-      this.mockCaption!.node.active = true;
-      this.selfStarsLabel!.string = String(this.options.getStars());
-      this.selfNameLabel!.string = '我';
-      this.selfCaptionLabel!.string = '继续闯关，为猫咪收集星星';
-      this.postFriendMessage('friend_stars');
-      return;
-    }
+    if (!this.active || !this.listContent || !this.scrollView || !this.rankUI) return;
     const token = ++this.loadToken;
+    const tab = this.currentTab;
     // 重进页面或切换页签时先回到顶部，避免拉取期间停留在上次的滚动位置
     this.scrollView.scrollToTop(0, false);
     if (this.retryButton) this.retryButton.active = false;
-    this.mockCaption!.string = '正在拉取排行榜...';
-    this.mockCaption!.node.active = true;
-    this.options.fetchEntries(this.currentTab).then(data => {
-      if (token !== this.loadToken || !this.rankUI) return;
+    this.listContent.parent!.active = false;
+    this.emptyState!.active = false;
+    this.refreshSelfCard(tab, []);
+    this.selfRankLabel!.string = '读取中';
+    this.selfCaptionLabel!.string = '正在读取我的名次…';
+    this.statusCaption!.string = '正在拉取排行榜...';
+    this.statusCaption!.node.active = true;
+    this.options.fetchEntries(tab).then(data => {
+      if (token !== this.loadToken || !this.rankUI || !this.active || data.tab !== this.currentTab) return;
       this.renderList(data);
     }).catch(error => {
       console.error('[CatWorld] Failed to load rank list', error);
-      if (token !== this.loadToken || !this.rankUI) return;
+      if (token !== this.loadToken || !this.rankUI || !this.active) return;
       // 拉取失败只展示错误提示；不要走空列表渲染，否则「还没有人上榜」会和报错同屏矛盾
       this.listContent!.destroyAllChildren();
       this.emptyState!.active = false;
       this.listContent!.parent!.active = false;
-      this.mockCaption!.string = '网络暂不可用，请稍后重试';
-      this.mockCaption!.node.active = true;
+      this.statusCaption!.string = '排行榜加载失败，请点击重试';
+      this.statusCaption!.node.active = true;
+      this.selfRankLabel!.string = '--';
+      this.selfCaptionLabel!.string = '名次暂未读取成功';
       if (this.retryButton) this.retryButton.active = true;
     });
   }
@@ -281,7 +254,7 @@ export class RankScreen {
   private buildRetryButton(top: number) {
     const node = new Node('RankRetryButton');
     this.rankUI!.addChild(node);
-    node.setPosition(0, top - 416);
+    node.setPosition(0, top - LIST_VIEW_TOP_INSET - 76);
     node.addComponent(UITransform).setContentSize(200, 72);
     const graphics = node.addComponent(Graphics);
     graphics.fillColor = new Color(255, 224, 108);
@@ -290,9 +263,9 @@ export class RankScreen {
     graphics.roundRect(-100, -36, 200, 72, 36);
     graphics.fill();
     graphics.stroke();
-    styleActionNode(node, 'primary', 200, 96);
+    SettlementButton.apply(node, 'primary', 200, 96);
     const label = this.label(node, '点击重试', 0, 0, 24, new Color(112, 69, 40));
-    styleActionLabel(label, 200, 96, 24);
+    SettlementButton.styleLabel(label, 200, 96, 24);
     const button = node.addComponent(Button);
     ensureButtonControl(button);
     node.active = false;
@@ -306,14 +279,21 @@ export class RankScreen {
   private renderList(data: LeaderboardData) {
     if (!this.listContent || !this.scrollView || !this.rankUI) return;
     const viewHeight = this.listViewHeight;
-    this.mockCaption!.string = '预览示例好友，不是真实榜单';
-    this.mockCaption!.node.active = true;
+    this.statusCaption!.string = data.tab === 'level'
+      ? '累计星星越多排名越高，同分比较通关数'
+      : data.tab === 'endless' ? '消除数量越多排名越高，同分比较用时' : '今日最快通关榜，用时越短排名越高';
+    if (data.pendingSubmission) this.statusCaption!.string = '成绩待同步，重进排行榜可重试';
+    this.statusCaption!.node.active = true;
 
     this.listContent.destroyAllChildren();
     this.emptyState!.active = data.entries.length === 0;
+    if (this.emptyLabel) this.emptyLabel.string = data.tab === 'challenge'
+      ? '今天还没有通关记录\n去超萌挑战争夺榜首吧'
+      : data.tab === 'endless' ? '还没有无尽模式记录\n去消除卡牌，创造纪录吧' : '还没有关卡模式记录\n去闯关，为猫咪收集星星吧';
     this.listContent.parent!.active = data.entries.length > 0;
     if (data.entries.length === 0) {
       this.refreshSelfCard(data.tab, data.entries);
+      if (data.pendingSubmission) this.selfCaptionLabel!.string = '成绩待同步，重进榜单可重试';
       return;
     }
 
@@ -327,6 +307,7 @@ export class RankScreen {
       this.buildRow(data.tab, entry, index, -LIST_TOP_PAD - ROW_HEIGHT / 2 - index * ROW_STEP);
     });
     this.refreshSelfCard(data.tab, data.entries);
+    if (data.pendingSubmission) this.selfCaptionLabel!.string = '成绩待同步，重进榜单可重试';
   }
 
   private buildRow(tab: LeaderboardTab, entry: LeaderboardEntry, index: number, y: number) {
@@ -356,7 +337,7 @@ export class RankScreen {
 
     if (tab === 'level') this.image(row, COMMON_UI_ASSETS.starIcon, STAR_X, 2, 44, 43);
     this.drawScoreBar(row, SCORE_BAR_X);
-    const score = this.label(row, entry.scoreLabel, SCORE_BAR_X, 2, tab === 'challenge' ? 18 : 21, new Color(112, 69, 40));
+    const score = this.label(row, entry.scoreLabel, SCORE_BAR_X, 2, tab === 'challenge' ? 20 : 21, new Color(112, 69, 40));
     score.isBold = true;
     score.enableWrapText = false;
     score.overflow = Label.Overflow.SHRINK;
@@ -453,18 +434,18 @@ export class RankScreen {
     panel.addChild(node);
     node.setPosition(240, 0);
     node.addComponent(UITransform).setContentSize(192, 88);
-    styleActionNode(node, 'secondary', 192, 88);
+    SettlementButton.apply(node, 'secondary', 192, 88);
     const label = this.label(node, '邀请好友', 0, 0, 26, new Color(255, 251, 238));
     label.isBold = true;
     label.outlineWidth = 2;
     label.outlineColor = new Color(184, 74, 10);
-    styleActionLabel(label, 192, 88, 24);
+    SettlementButton.styleLabel(label, 192, 88, 24);
     const button = node.addComponent(Button);
     ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const sent = this.options.onInvite();
-      this.toast(sent ? '已发起邀请，等好友加入吧' : '预览环境：已模拟邀请好友');
+      this.toast(sent ? '已发起邀请，等好友加入吧' : '当前环境不支持微信分享');
     });
   }
 
@@ -484,12 +465,12 @@ export class RankScreen {
     if (icon) icon.active = tab === 'level';
     const self = entries.find(entry => entry.isSelf);
     if (this.selfNameLabel) {
-      this.selfNameLabel.string = self ? this.shortName(self.name.replace('（我）', ''), 7) : '我';
+      this.selfNameLabel.string = this.shortName(self ? self.name.replace('（我）', '') : this.options.getName?.() || '我', 7);
     }
     if (!self) {
       this.selfRankLabel.string = '未上榜';
       this.setSelfRankBadge(0);
-      this.selfStarsLabel.string = tab === 'challenge' ? '--' : '0';
+      this.selfStarsLabel.string = tab === 'level' ? String(this.options.getStars()) : '--';
       this.selfCaptionLabel.string = this.emptyCaption(tab);
       return;
     }
@@ -559,7 +540,8 @@ export class RankScreen {
     state.active = false;
     this.emptyState = state;
 
-    const text = this.label(state, '还没有人上榜\n先去闯关、无尽或超萌挑战吧', 0, -20, 24, new Color(112, 69, 40));
+    const text = this.label(state, '', 0, -20, 24, new Color(112, 69, 40));
+    this.emptyLabel = text;
     text.lineHeight = 44;
     text.isBold = true;
 
@@ -567,18 +549,18 @@ export class RankScreen {
     state.addChild(button);
     button.setPosition(0, -128);
     button.addComponent(UITransform).setContentSize(232, 100);
-    styleActionNode(button, 'secondary', 288, 96);
+    SettlementButton.apply(button, 'secondary', 288, 96);
     const label = this.label(button, '邀请好友一起玩', 0, 0, 26, new Color(255, 251, 238));
     label.isBold = true;
     label.outlineWidth = 2;
     label.outlineColor = new Color(184, 74, 10);
-    styleActionLabel(label, 288, 96, 24);
+    SettlementButton.styleLabel(label, 288, 96, 24);
     const buttonComponent = button.addComponent(Button);
     ensureButtonControl(buttonComponent);
     buttonComponent.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const sent = this.options.onInvite();
-      this.toast(sent ? '已发起邀请，等好友加入吧' : '预览环境：已模拟邀请好友');
+      this.toast(sent ? '已发起邀请，等好友加入吧' : '当前环境不支持微信分享');
     });
   }
 

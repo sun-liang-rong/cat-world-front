@@ -1,4 +1,5 @@
-import { drawActionSurface, styleActionNode, styleActionLabel, ensureButtonControl, Theme, TITLE_SIGN } from './Theme';
+import { SettlementButton } from './SettlementButton';
+import { ensureButtonControl, Theme, TITLE_SIGN } from './Theme';
 import {
   BlockInputEvents,
   Button,
@@ -240,18 +241,18 @@ export class TownScreen {
 
     this.buildResourceChip(
       this.townUI!,
-      116,
+      104,
       belowWeChatCapsule(top, 62),
-      144,
+      152,
       COMMON_UI_ASSETS.starIcon,
       () => '' + this.options.getStars(),
       () => this.toast('星星来自三消通关'),
     );
     this.buildResourceChip(
       this.townUI!,
-      276,
+      268,
       belowWeChatCapsule(top, 62),
-      144,
+      192,
       COMMON_UI_ASSETS.coinIcon,
       () => '' + this.options.getCoins(),
       () => this.toast('金币可在商店购买道具'),
@@ -259,13 +260,13 @@ export class TownScreen {
   }
 
   private buildDailyCard(top: number) {
-    // 整体下移：离顶部标题/资源胶囊更远，也给下方建筑展示区留出呼吸空间
+    // 保持卡片顶边不变，向下扩展，为完整的两行说明留出空间。
     this.dailyCard = this.roundPanel(
       this.townUI!,
       0,
-      top - 310,
+      top - 336,
       660,
-      124,
+      176,
       26,
       new Color(255, 248, 226, 246),
       new Color(235, 205, 158),
@@ -287,22 +288,28 @@ export class TownScreen {
       )
       .start();
     // 文案列统一「左锚点 + 左对齐」，从立绘右侧 16px 起，任何状态都不会压到猫身上
-    this.dailyTitle = this.label(this.dailyCard, '', -246, 36, 22, new Color(111, 62, 28));
+    this.dailyTitle = this.label(this.dailyCard, '', -246, 56, 22, new Color(111, 62, 28));
     this.dailyTitle.isBold = true;
     this.dailyTitle.horizontalAlign = Label.HorizontalAlign.LEFT;
     this.dailyTitle.overflow = Label.Overflow.CLAMP;
-    this.anchorLeft(this.dailyTitle, 390, 28);
-    this.dailyDescription = this.label(this.dailyCard, '', -246, 8, 18, new Color(136, 94, 63));
+    this.dailyTitle.enableWrapText = false;
+    this.anchorLeft(this.dailyTitle, 400, 36);
+    this.dailyDescription = this.label(this.dailyCard, '', -246, 0, 20, new Color(136, 94, 63));
     this.dailyDescription.horizontalAlign = Label.HorizontalAlign.LEFT;
     this.dailyDescription.overflow = Label.Overflow.CLAMP;
-    this.anchorLeft(this.dailyDescription, 400, 24);
-    this.dailyProgress = this.label(this.dailyCard, '', -246, -22, 18, new Color(157, 112, 74));
+    this.dailyDescription.enableWrapText = true;
+    this.anchorLeft(this.dailyDescription, 400, 60);
+    this.dailyProgress = this.label(this.dailyCard, '', -246, -56, 18, new Color(157, 112, 74));
     this.dailyProgress.horizontalAlign = Label.HorizontalAlign.LEFT;
-    this.anchorLeft(this.dailyProgress, 250, 22);
-    this.dailyReward = this.label(this.dailyCard, '', 10, -22, 18, new Color(191, 125, 27));
+    this.dailyProgress.overflow = Label.Overflow.SHRINK;
+    this.dailyProgress.enableWrapText = false;
+    this.anchorLeft(this.dailyProgress, 224, 32);
+    this.dailyReward = this.label(this.dailyCard, '', -6, -56, 18, new Color(191, 125, 27));
     this.dailyReward.isBold = true;
     this.dailyReward.horizontalAlign = Label.HorizontalAlign.LEFT;
-    this.anchorLeft(this.dailyReward, 160, 22);
+    this.dailyReward.overflow = Label.Overflow.CLAMP;
+    this.dailyReward.enableWrapText = false;
+    this.anchorLeft(this.dailyReward, 160, 32);
 
     this.dailyActionNode = this.roundPanel(
       this.dailyCard,
@@ -315,8 +322,8 @@ export class TownScreen {
       new Color(214, 151, 38),
     );
     this.dailyActionLabel = this.label(this.dailyActionNode, '', 0, -1, 20, new Color(112, 69, 40));
-    styleActionNode(this.dailyActionNode, 'primary', 146, 88);
-    styleActionLabel(this.dailyActionLabel, 146, 88, 22);
+    SettlementButton.apply(this.dailyActionNode, 'primary', 146, 88);
+    SettlementButton.styleLabel(this.dailyActionLabel, 146, 88, 22);
     this.dailyActionButton = this.dailyActionNode.addComponent(Button);
     ensureButtonControl(this.dailyActionButton);
     this.dailyActionButton.node.on(Button.EventType.CLICK, () => {
@@ -329,21 +336,24 @@ export class TownScreen {
     if (!this.dailyCard || !this.dailyTitle || !this.dailyDescription || !this.dailyProgress
       || !this.dailyReward || !this.dailyActionLabel || !this.dailyActionButton) return;
     const snapshot = this.options.getTownDaily();
+    this.dailyCard.active = !snapshot.claimed;
+    if (snapshot.claimed) {
+      Tween.stopAllByTarget(this.dailyActionLabel.node);
+      this.dailyActionLabel.node.setScale(new Vec3(1, 1, 1));
+      return;
+    }
     this.dailyTitle.string = snapshot.unlocked ? `今日小事 · ${snapshot.title}` : snapshot.title;
     this.dailyDescription.string = snapshot.description;
     this.dailyProgress.string = snapshot.unlocked
-      ? snapshot.claimed ? '今日已完成，明天再来' : snapshot.completed ? '小事办完啦，可以领奖' : '进行中，去完成它'
+      ? snapshot.completed ? '小事办完啦，可以领奖' : '进行中，去完成它'
       : '点亮流浪猫小屋第一格后开启';
     this.dailyReward.string = `奖励：${snapshot.rewardText}`;
     this.dailyActionLabel.string = snapshot.actionLabel;
-    this.dailyActionButton.interactable = snapshot.unlocked && !snapshot.claimed;
+    this.dailyActionButton.interactable = snapshot.unlocked;
     const graphics = this.dailyActionNode?.getComponent(Graphics);
     if (graphics) {
-      drawActionSurface(graphics, 146, 88, this.dailyActionButton.interactable ? 'primary' : 'disabled');
+      SettlementButton.draw(graphics, 146, 88, this.dailyActionButton.interactable ? 'primary' : 'disabled');
     }
-    this.dailyActionLabel.color = snapshot.claimed
-      ? new Color(157, 145, 127)
-      : new Color(112, 69, 40);
     // 可以领奖时按钮里的文字轻轻呼吸（循环动画放内层节点，不和按钮按压缩放打架）
     if (this.dailyActionLabel) {
       Tween.stopAllByTarget(this.dailyActionLabel.node);
@@ -426,10 +436,11 @@ export class TownScreen {
     formatValue: () => string,
     onTap: () => void,
   ) {
+    const chipScale = 0.85;
     const hitArea = new Node('ResourceChip');
     parent.addChild(hitArea);
     hitArea.setPosition(x, y);
-    hitArea.addComponent(UITransform).setContentSize(width, 62);
+    hitArea.addComponent(UITransform).setContentSize(width * chipScale, 88);
 
     const chip = this.roundPanel(
       hitArea,
@@ -441,16 +452,21 @@ export class TownScreen {
       new Color(255, 248, 226, 250),
       new Color(238, 174, 51),
     );
-    const chipScale = 0.85;
     const iconScale = 0.75 / chipScale;
     chip.setScale(new Vec3(chipScale, chipScale, 1));
     const iconSize = (iconPath === COMMON_UI_ASSETS.starIcon ? 48 : 46) * iconScale;
-    this.image(chip, iconPath, -width / 2 + 32, 0, iconSize, iconSize);
-    const label = this.label(chip, formatValue(), 10, -2, 25, new Color(112, 69, 40));
+    const iconX = -width / 2 + 32;
+    const plusX = width / 2 - 25;
+    // 数字区域由两侧图标的边界计算，各留 8px 间距，长数字只在区域内缩放。
+    const valueLeft = iconX + iconSize / 2 + 8;
+    const valueRight = plusX - 22 * iconScale - 8;
+    this.image(chip, iconPath, iconX, 0, iconSize, iconSize);
+    const label = this.label(chip, formatValue(), (valueLeft + valueRight) / 2, -2, 25, new Color(112, 69, 40));
     label.isBold = true;
     label.overflow = Label.Overflow.SHRINK;
-    label.node.getComponent(UITransform)!.setContentSize(width - 96, 40);
-    this.drawPlus(chip, width / 2 - 25, 0, iconScale);
+    label.enableWrapText = false;
+    label.node.getComponent(UITransform)!.setContentSize(valueRight - valueLeft, 40);
+    this.drawPlus(chip, plusX, 0, iconScale);
 
     const button = hitArea.addComponent(Button);
     ensureButtonControl(button);
@@ -594,7 +610,7 @@ export class TownScreen {
     this.conditionLabel.isBold = true;
 
     this.actionNode = this.image(this.townPanel, 'town/button_action', 0, -172, 450, 74);
-    styleActionNode(this.actionNode, 'primary', 450, 96);
+    SettlementButton.apply(this.actionNode, 'primary', 450, 96);
     this.actionLabel = this.label(this.actionNode, '', 0, 0, 33, new Color(255, 251, 238));
     this.actionLabel.isBold = true;
     this.actionLabel.outlineWidth = 4;
@@ -602,7 +618,7 @@ export class TownScreen {
     this.actionLabel.enableShadow = true;
     this.actionLabel.shadowColor = new Color(150, 66, 14, 150);
     this.actionLabel.shadowOffset = new Vec2(0, -3);
-    styleActionLabel(this.actionLabel, 450, 96, 32);
+    SettlementButton.styleLabel(this.actionLabel, 450, 96, 32);
     this.actionButton = this.actionNode.addComponent(Button);
     ensureButtonControl(this.actionButton);
     this.actionButton.node.on(Button.EventType.CLICK, () => {
@@ -1042,7 +1058,7 @@ export class TownScreen {
     this.actionLabel.color = canAct
       ? Theme.title
       : Theme.mutedSoft;
-    if (this.actionNode) styleActionNode(this.actionNode, canAct ? 'primary' : 'disabled', 450, 96);
+    if (this.actionNode) SettlementButton.apply(this.actionNode, canAct ? 'primary' : 'disabled', 450, 96);
     if (this.actionGuideRing) {
       // 首次建设引导：只对小屋、当前大节点一格未亮时出现
       this.actionGuideRing.active = canAct
@@ -1182,8 +1198,8 @@ export class TownScreen {
         new Color(244, 131, 165), new Color(184, 74, 110),
       );
       const shareLabel = this.label(shareNode, shareOffer.label, 0, -1, 25, Color.WHITE);
-      styleActionNode(shareNode, 'secondary', 440, 88);
-      styleActionLabel(shareLabel, 440, 88, 24);
+      SettlementButton.apply(shareNode, 'secondary', 440, 88);
+      SettlementButton.styleLabel(shareLabel, 440, 88, 24);
       const shareButton = shareNode.addComponent(Button);
       ensureButtonControl(shareButton);
       shareButton.node.on(Button.EventType.CLICK, () => {
@@ -1198,8 +1214,8 @@ export class TownScreen {
       new Color(255, 224, 108), new Color(201, 148, 47),
     );
     const primaryLabel = this.label(primary, '去装备', 0, -1, 27, new Color(111, 62, 28));
-    styleActionNode(primary, 'primary', 208, 88);
-    styleActionLabel(primaryLabel, 208, 88, 24);
+    SettlementButton.apply(primary, 'primary', 208, 88);
+    SettlementButton.styleLabel(primaryLabel, 208, 88, 24);
     const primaryButton = primary.addComponent(Button);
     ensureButtonControl(primaryButton);
     primaryButton.node.on(Button.EventType.CLICK, () => {
@@ -1213,8 +1229,8 @@ export class TownScreen {
       new Color(255, 252, 241), new Color(228, 215, 193),
     );
     const secondaryLabel = this.label(secondary, '留在这里', 0, -1, 24, new Color(135, 104, 76));
-    styleActionNode(secondary, 'secondary', 208, 88);
-    styleActionLabel(secondaryLabel, 208, 88, 24);
+    SettlementButton.apply(secondary, 'secondary', 208, 88);
+    SettlementButton.styleLabel(secondaryLabel, 208, 88, 24);
     const secondaryButton = secondary.addComponent(Button);
     ensureButtonControl(secondaryButton);
     secondaryButton.node.on(Button.EventType.CLICK, () => {

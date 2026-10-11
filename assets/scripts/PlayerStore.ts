@@ -67,7 +67,7 @@ import {
   isCampaignComplete,
 } from './TownContent';
 
-// 全部玩法进度只写本机；排行榜累计星星由 LeaderboardService 单独上报微信，不经过这里。
+// 玩法存档只写本机；三榜成绩由 ProfileCoordinator / LeaderboardService 单独上报。
 const STORAGE_KEY = 'cat-world-player-state-v1';
 const MAX_AFFECTION = 100;
 const MAX_CAT_EXPERIENCE = 20;
@@ -1136,6 +1136,7 @@ export class PlayerStore {
     return true;
   }
 
+  /** 分享/视频激励共用追加领取限额；沿用 adClaims 字段兼容旧存档。 */
   claimItemByAd(id: ItemId) {
     this.resetDailyState(false);
     const definition = getItemDefinition(id);

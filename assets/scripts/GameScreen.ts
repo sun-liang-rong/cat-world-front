@@ -1,4 +1,5 @@
-import { styleActionNode, styleActionLabel, ensureButtonControl } from './Theme';
+import { SettlementButton } from './SettlementButton';
+import { ensureButtonControl } from './Theme';
 import {
   BlockInputEvents,
   Button,
@@ -21,6 +22,7 @@ import { BoardTutorial } from './BoardTutorial';
 import { ComboTracker } from './ComboTracker';
 import { getCatDefinition, getCatSkillChargeRequired, getCatSkillConfig } from './GameContent';
 import { SettlementPopup } from './SettlementPopup';
+import type { RewardActionMode } from './RewardedAdService';
 import { Toast } from './Toast';
 import { EndlessDirector } from './level/EndlessDirector';
 import { LevelRules, LevelSolver } from './level/LevelSolver';
@@ -237,9 +239,11 @@ export interface GameScreenOptions {
   /** 满足重要节点时显示的好友分享入口；展示成果由 Main 发起。 */
   getShareOffer?: (context?: { isNewRecord?: boolean }) => ShareOffer | null;
   onShare?: (type: ShareCardType) => void;
-  /** 失败结算「看视频清出一对」：Main 验证完播，完成 resolve true。 */
+  /** 激励操作模式，由 Main 统一配置。 */
+  rewardMode?: RewardActionMode;
+  /** 失败结算复活：分享返回或视频完播后 resolve true。 */
   onReviveAd?: () => Promise<boolean>;
-  /** 胜利/无尽结算「看视频×2金币」：Main 验证完播，完成 resolve true。 */
+  /** 胜利/无尽结算追加金币：激励操作结束后 resolve true。 */
   onDoubleRewardAd?: () => Promise<boolean>;
   onTrack?: (name: TrackEventName, props?: TrackProps) => void;
   /**
@@ -499,9 +503,9 @@ export class GameScreen {
     buttonGraphics.fillColor = new Color(255, 224, 108);
     buttonGraphics.roundRect(-180, -56, 360, 112, 24);
     buttonGraphics.fill();
-    styleActionNode(buttonNode, 'primary', 360, 112);
+    SettlementButton.apply(buttonNode, 'primary', 360, 112);
     const continueLabel = this.label(buttonNode, '继续本局', 0, 0, 36, new Color(111, 62, 28));
-    styleActionLabel(continueLabel, 360, 112, 36);
+    SettlementButton.styleLabel(continueLabel, 360, 112, 36);
     const button = buttonNode.addComponent(Button);
     ensureButtonControl(button);
     buttonNode.on(Button.EventType.CLICK, () => {
@@ -2103,9 +2107,9 @@ export class GameScreen {
     graphics.roundRect(-110, -36, 220, 72, 18);
     graphics.fill();
     graphics.stroke();
-    styleActionNode(node, x < 0 ? 'primary' : 'secondary', 220, 88);
+    SettlementButton.apply(node, x < 0 ? 'primary' : 'secondary', 220, 88);
     const label = this.label(node, text, 0, 0, 24, new Color(111, 62, 28));
-    styleActionLabel(label, 220, 88);
+    SettlementButton.styleLabel(label, 220, 88);
     label.isBold = true;
     const button = node.addComponent(Button);
     ensureButtonControl(button);
@@ -2241,6 +2245,7 @@ export class GameScreen {
         this.options.onReplay();
       },
       onDoubleRewardAd: this.options.onDoubleRewardAd,
+      rewardMode: this.options.rewardMode,
       onTrack: this.options.onTrack,
       // 复活每局只开放一次；复活后再次失败时不再展示无效按钮。
       onRevive: win || this.reviveUsed ? undefined : () => this.reviveFromAd(),
@@ -2345,6 +2350,7 @@ export class GameScreen {
         this.options.onReplay();
       },
       onDoubleRewardAd: result.coins > 0 ? this.options.onDoubleRewardAd : undefined,
+      rewardMode: this.options.rewardMode,
       onTrack: this.options.onTrack,
       onDoubleReward: result.coins > 0 ? () => this.doubleRewardFromAd() : undefined,
       share: result.isNewRecord
@@ -2479,7 +2485,7 @@ export class GameScreen {
     if (!this.settlementWin || this.doubleRewardUsed || this.settlementCoinReward <= 0) return;
     this.doubleRewardUsed = true;
     this.addCoins(this.settlementCoinReward);
-    this.toast(`视频奖励：金币 +${this.settlementCoinReward}`);
+    this.toast(`${this.options.rewardMode === 'share' ? '分享奖励' : '视频奖励'}：金币 +${this.settlementCoinReward}`);
   }
 
   // 星星固定 3 颗后，结算评价按底部空闲槽位区分表现（沿用原星级分档边界）

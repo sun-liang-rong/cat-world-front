@@ -1,4 +1,5 @@
-import { styleActionNode, styleActionLabel, ensureButtonControl } from './Theme';
+import { SettlementButton } from './SettlementButton';
+import { ensureButtonControl } from './Theme';
 import {
   BlockInputEvents,
   Button,
@@ -88,13 +89,13 @@ export class LoadingScreen {
       const bg = node.addComponent(Graphics);
       bg.fillColor = new Color(255, 224, 108);
       bg.roundRect(-230, -48, 460, 96, 24); bg.fill();
-      styleActionNode(node, text === '重新加载' ? 'primary' : 'secondary', 460, 96);
+      SettlementButton.apply(node, text === '重新加载' ? 'primary' : 'secondary', 460, 96);
       const captionNode = new Node('Label');
       node.addChild(captionNode);
       captionNode.addComponent(UITransform);
       const caption = captionNode.addComponent(Label);
       caption.string = text; caption.fontSize = 28; caption.lineHeight = 36; caption.color = new Color(112, 69, 40);
-      styleActionLabel(caption, 460, 96, 28);
+      SettlementButton.styleLabel(caption, 460, 96, 28);
       const control = node.addComponent(Button);
 
       ensureButtonControl(control);

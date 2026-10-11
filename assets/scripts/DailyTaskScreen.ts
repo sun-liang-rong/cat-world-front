@@ -1,4 +1,5 @@
-import { createVerticalContent, drawActionSurface, styleActionNode, styleActionLabel, ensureButtonControl, Theme, TITLE_SIGN } from './Theme';
+import { SettlementButton } from './SettlementButton';
+import { createVerticalContent, ensureButtonControl, Theme, TITLE_SIGN } from './Theme';
 import {
   BlockInputEvents,
   Button,
@@ -612,14 +613,14 @@ export class DailyTaskScreen {
 
     if (shareOffer) {
       const shareView = this.actionButton(panel, 0, shareY, 400, 88, shareOffer.label);
-      drawActionSurface(shareView.background, 400, 88, 'secondary');
+      SettlementButton.draw(shareView.background, 400, 88, 'secondary');
       shareView.button.node.on(Button.EventType.CLICK, () => {
         this.options.onShare?.(shareOffer.type);
       });
     }
 
     const close = this.actionButton(panel, 116, buttonsY, 208, 88, '稍后查看');
-    drawActionSurface(close.background, 208, 88, 'secondary');
+    SettlementButton.draw(close.background, 208, 88, 'secondary');
     close.button.node.on(Button.EventType.CLICK, () => this.closeJourneyPanel());
   }
 
@@ -651,7 +652,7 @@ export class DailyTaskScreen {
     parent.addChild(node);
     node.setPosition(x, y);
     node.addComponent(UITransform).setContentSize(Math.max(width, 88), Math.max(height, 88));
-    const background = styleActionNode(node, 'primary', width, height);
+    const background = SettlementButton.apply(node, 'primary', width, height);
     const labelNode = new Node('Label');
     node.addChild(labelNode);
     labelNode.addComponent(UITransform).setContentSize(width - 10, height - 10);
@@ -666,7 +667,7 @@ export class DailyTaskScreen {
     label.horizontalAlign = Label.HorizontalAlign.CENTER;
     label.verticalAlign = Label.VerticalAlign.CENTER;
 
-    styleActionLabel(label, width, height, 24);
+    SettlementButton.styleLabel(label, width, height, 24);
     const button = node.addComponent(Button);
     ensureButtonControl(button);
     return { button, label, background };
@@ -675,7 +676,7 @@ export class DailyTaskScreen {
   private setButtonVisual(background: Graphics | null, active: boolean) {
     if (!background) return;
     const size = background.node.getComponent(UITransform)!.contentSize;
-    drawActionSurface(background, size.width, size.height, active ? 'primary' : 'disabled');
+    SettlementButton.draw(background, size.width, size.height, active ? 'primary' : 'disabled');
   }
 
   private buildBackButton(parent: Node, x: number, y: number, callback: () => void) {

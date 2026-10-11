@@ -1,10 +1,11 @@
-import { styleActionNode, styleActionLabel, ensureButtonControl } from './Theme';
+import { SettlementButton } from './SettlementButton';
+import { ensureButtonControl } from './Theme';
 import { Button, Color, Graphics, Label, Node, Sprite, UITransform, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
 import { ITEM_DEFINITIONS, ItemDefinition } from './GameContent';
-import { RewardedAdResult } from './RewardedAdService';
+import { RewardActionMode, RewardedAdResult } from './RewardedAdService';
 import { ItemId, ShopItemStatus } from './PlayerTypes';
 
 export interface ShopScreenOptions {
@@ -14,6 +15,7 @@ export interface ShopScreenOptions {
   onBuyItem: (id: ItemId) => boolean;
   getShopItemStatus: (id: ItemId) => ShopItemStatus;
   onClaimItemByAd: (id: ItemId) => boolean;
+  rewardMode?: RewardActionMode;
   onWatchAd?: (scene?: 'revive' | 'double_coins' | 'home_coins' | 'shop_item') => Promise<RewardedAdResult>;
   onReturnHome: () => void;
 }
@@ -169,9 +171,9 @@ export class ShopScreen {
     description.node.getComponent(UITransform)!.setContentSize(250, 52);
 
     const buttonNode = this.image(card, 'shop/button_buy', 0, -147, 236, 88);
-    styleActionNode(buttonNode, 'primary', 236, 88);
+    SettlementButton.apply(buttonNode, 'primary', 236, 88);
     const buttonLabel = this.label(buttonNode, '', 0, 0, 24, new Color(150, 78, 20));
-    styleActionLabel(buttonLabel, 236, 88);
+    SettlementButton.styleLabel(buttonLabel, 236, 88);
     const button = buttonNode.addComponent(Button);
     ensureButtonControl(button);
     button.node.on(Button.EventType.CLICK, () => {
@@ -222,10 +224,11 @@ export class ShopScreen {
 
   private buildHintRibbon(bottom: number) {
     const ribbon = this.image(this.shopUI!, 'shop/hint_ribbon', 0, bottom + 112, 380, 84);
-    // TODO: 暂时隐藏广告提示，后续接入广告接口后再放开
-    const hint = this.label(ribbon, '每种道具每天最多获取 5 次\n首次金币购买即可获得', 0, 2, 18, new Color(136, 94, 63));
-    // const hint = this.label(ribbon, '每种道具每天最多获取 5 次\n首次金币购买，之后观看广告', 0, 2, 18, new Color(136, 94, 63));
-    hint.lineHeight = 24;
+    const text = this.options.rewardMode === 'share'
+      ? '每日最多5次，首次金币购买\n之后发起分享，返回游戏领取'
+      : '每种道具每天最多获取 5 次\n首次金币购买，之后观看广告';
+    const hint = this.label(ribbon, text, 0, 2, 20, new Color(136, 94, 63));
+    hint.lineHeight = 28;
     hint.isBold = true;
   }
 
@@ -242,52 +245,29 @@ export class ShopScreen {
       const count = this.options.getItemCount(viewData.id);
       viewData.countLabel.string = `已有${count}`;
 
-      // TODO: 暂时隐藏广告入口，只允许金币购买一次
-      const alreadyPurchased = status.coinPurchased;
+      const canReward = status.coinPurchased && !!this.options.onWatchAd;
       viewData.button.interactable = definition.purchasable
-        && !alreadyPurchased
+        && !atLimit
         && !busy
-        && affordable;
+        && (status.coinPurchased ? canReward : affordable);
 
       viewData.buttonLabel.string = !definition.purchasable
         ? '未开放'
         : waitingOnThis
-          ? '处理中...'
-          : alreadyPurchased
-            ? '已购买'
-            : affordable ? `${definition.price}金币` : '金币不足';
+          ? (this.options.rewardMode === 'share' ? '分享中...' : '广告中...')
+          : atLimit
+            ? '明日再来'
+            : status.coinPurchased
+              ? (canReward ? this.rewardLabel() : '已购买')
+              : affordable ? `${definition.price}金币` : '金币不足';
 
-      viewData.buttonLabel.color = !definition.purchasable || alreadyPurchased || waitingOnThis
+      viewData.buttonLabel.color = !definition.purchasable || atLimit || waitingOnThis || (status.coinPurchased && !canReward)
         ? new Color(150, 137, 121)
-        : !affordable
+        : !status.coinPurchased && !affordable
           ? new Color(190, 59, 51)
           : new Color(150, 78, 20);
 
-      styleActionNode(viewData.button.node, viewData.button.interactable ? 'primary' : 'disabled', 236, 88);
-
-      // 原有逻辑（已注释）：
-      // viewData.button.interactable = definition.purchasable
-      //   && !atLimit
-      //   && !busy
-      //   && (status.coinPurchased || affordable);
-      // viewData.buttonLabel.string = !definition.purchasable
-      //   ? '未开放'
-      //   : waitingOnThis
-      //     ? '广告中...'
-      //     : atLimit
-      //       ? '明日再来'
-      //       : status.coinPurchased
-      //         ? '观看广告'
-      //         : affordable ? `${definition.price}金币` : '金币不足';
-      // viewData.buttonLabel.color = !definition.purchasable || atLimit || waitingOnThis
-      //   ? new Color(150, 137, 121)
-      //   : !status.coinPurchased && !affordable
-      //     ? new Color(190, 59, 51)
-      //     : new Color(150, 78, 20);
-      // if (viewData.buttonSprite && status.coinPurchased && definition.purchasable) {
-      //   const adFrame = this.assets.getFrame('shop/button_ad');
-      //   if (adFrame) viewData.buttonSprite.spriteFrame = adFrame;
-      // }
+      SettlementButton.apply(viewData.button.node, viewData.button.interactable ? 'primary' : 'disabled', 236, 88);
     });
   }
 
@@ -308,8 +288,7 @@ export class ShopScreen {
       return;
     }
 
-    // 广告总开关关闭（onWatchAd 未注入）时不进入广告领取路径；
-    // 正常情况下按钮在金币首购后已置灰，这里只是兜底守卫。
+    // 激励能力不可用时不发放追加奖励。
     const watchAd = this.options.onWatchAd;
     if (!watchAd) {
       this.toast('今天已经买过啦，明天再来');
@@ -317,21 +296,21 @@ export class ShopScreen {
     }
 
     this.pendingAdItemId = id;
-    this.toast('正在准备广告...');
+    this.toast(this.options.rewardMode === 'share' ? '发起好友分享，返回游戏后领取道具' : '正在准备广告...');
     this.refresh();
 
     let result: RewardedAdResult;
     try {
       result = await watchAd('shop_item');
     } catch (error) {
-      console.error('[CatWorld] Rewarded ad callback failed', error);
+      console.error('[CatWorld] Shop reward callback failed', error);
       result = { completed: false, simulated: false };
     }
     if (this.pendingAdItemId !== id || !this.shopUI) return;
 
     this.pendingAdItemId = null;
     if (!result.completed) {
-      this.toast('广告未完整观看，未获得道具');
+      this.toast(this.options.rewardMode === 'share' ? '未完成分享返回，请重试' : '广告未完整观看，未获得道具');
       this.refresh();
       return;
     }
@@ -341,6 +320,10 @@ export class ShopScreen {
       ? `${name}已放入背包${result.simulated ? '（预览模拟）' : ''}`
       : '该道具今天已达到获取上限');
     this.refresh();
+  }
+
+  private rewardLabel(): string {
+    return this.options.rewardMode === 'share' ? '分享好友领取' : '观看广告';
   }
 
   private addWarmVeil(width: number, height: number) {

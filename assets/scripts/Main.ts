@@ -17,8 +17,9 @@ import { LevelDefinition } from './level/LevelTypes';
 import { LoadingScreen } from './LoadingScreen';
 import { AudioManager } from './AudioManager';
 import { LeaderboardService } from './LeaderboardService';
+import { ProfileCoordinator } from './ProfileCoordinator';
 import { RankScreen } from './RankScreen';
-import { RewardedAdService, TAP_REWARDED_AD_UNIT_ID } from './RewardedAdService';
+import { RewardedAdResult, RewardedAdService, TAP_REWARDED_AD_UNIT_ID } from './RewardedAdService';
 import { Toast } from './Toast';
 import { MomentScreen } from './MomentScreen';
 import { AdventureScreen, THEME_INFO } from './AdventureScreen';
@@ -43,7 +44,7 @@ const CHALLENGE_REPEAT_COIN_REWARD = 80;
 
 @ccclass('Main')
 export class Main extends Component {
-  @property({ tooltip: '微信小游戏激励视频广告位 ID；H5 / 预览使用 TapTap 广告位 1067058' })
+  @property({ tooltip: '微信激励视频广告位 ID；当前分享模式不使用，广告开通后配合 REWARD_ACTION_MODE 切回 ad' })
   rewardedAdUnitId = '';
 
   private static instance: Main | null = null;
@@ -53,6 +54,11 @@ export class Main extends Component {
   private readonly playerStore = new PlayerStore();
   private readonly leaderboard = new LeaderboardService();
   private readonly analytics = new Analytics();
+  private readonly rankProfile = new ProfileCoordinator({
+    playerStore: this.playerStore,
+    leaderboard: this.leaderboard,
+    isAlive: () => this.node.isValid,
+  });
   private launchedAt = 0;
   private audio!: AudioManager;
   private rewardedAd!: RewardedAdService;
@@ -118,7 +124,7 @@ export class Main extends Component {
     this.launchedAt = Date.now();
     this.playerStore.load();
     this.playerStore.bindCheckpointProvider(() => this.gameScreen?.createCheckpoint());
-    // 稳定的本机匿名统计 ID；不创建远端身份，也不上传存档。
+    // 稳定的本机匿名统计 ID；排行榜使用独立身份，玩法存档保存在本机。
     this.playerStore.bindAnalytics(this.analytics);
     this.sharePromoter = new SharePromoter({
       analytics: this.analytics,
@@ -164,11 +170,32 @@ export class Main extends Component {
 
   private buildWatchAdHandler() {
     if (!this.rewardedAd.isAvailable()) return undefined;
-    return (scene: AdScene = 'home_coins') => this.analytics.trackRewardedAd(scene, () => this.rewardedAd.watch());
+    return (scene: AdScene = 'home_coins') => this.requestReward(scene);
   }
 
   private watchReward(scene: AdScene): Promise<boolean> {
-    return this.analytics.trackRewardedAd(scene, () => this.rewardedAd.watch()).then(result => result.completed);
+    return this.requestReward(scene).then(result => result.completed);
+  }
+
+  private async requestReward(scene: AdScene): Promise<RewardedAdResult> {
+    if (this.rewardedAd.mode === 'ad') {
+      return this.analytics.trackRewardedAd(scene, () => this.rewardedAd.watch(scene));
+    }
+    this.analytics.track('share_click', { scene, card_type: `reward_${scene}` });
+    let result: RewardedAdResult;
+    try { result = await this.rewardedAd.watch(scene); }
+    catch (error) {
+      console.error('[CatWorld] Reward share callback failed', error);
+      result = { completed: false, simulated: false };
+    }
+    this.analytics.track('share_result', {
+      scene,
+      card_type: `reward_${scene}`,
+      platform: getAnalyticsPlatform(),
+      result: result.simulated ? 'simulated' : result.completed ? 'returned' : 'unavailable',
+    });
+    if (!result.completed && this.root?.isValid) Toast.show(this.root, '请发起分享并返回游戏后重试领取');
+    return result;
   }
 
   private trackPage(pageId: AnalyticsPageId) {
@@ -254,17 +281,19 @@ export class Main extends Component {
         if (!owned.includes('orange') && this.playerStore.isCatTrialActive()) owned.unshift('orange');
         return owned;
       },
-      getCurrentGoal: () => {
+      getCompanionMessage: () => {
         const state = this.playerStore.getState();
         if (!state.cats.orange.unlocked) {
           const cells = Math.max(0, 5 - state.buildings.cat_house.subProgress);
           const wins = Math.max(0, cells - Math.floor(state.stars / 3));
-          return wins > 0 ? `再赢 ${wins} 关，帮大橘准备小窝` : '星星够啦，去小镇给大橘安家';
+          return wins > 0
+            ? { text: `再赢 ${wins} 关，\n帮我准备一个小窝吧`, action: 'play', actionLabel: '去闯关' }
+            : { text: '星星攒够啦！\n带我去小镇安家吧', action: 'town', actionLabel: '去建设' };
         }
         const journey = this.playerStore.getCatJourneySnapshot();
-        if (journey.canClaim) return '今日猫咪旅程奖励已备好，去任务领取';
-        if (!journey.completed) return '大橘：明天也想和你一起冒险';
-        return '闯关攒星星，给猫咪们布置温暖的小镇';
+        if (journey.canClaim) return { text: '今天的旅程礼物，\n已经帮你准备好啦', action: 'tasks', actionLabel: '去领奖' };
+        if (!journey.completed) return { text: '明天也想和你\n一起冒险呀！' };
+        return { text: '一起攒星星，\n把我们的小镇装扮好吧' };
       },
     });
   }
@@ -367,6 +396,7 @@ export class Main extends Component {
       getShopItemStatus: id => this.playerStore.getShopItemStatus(id),
       onClaimItemByAd: id => this.playerStore.claimItemByAd(id),
       onWatchAd: this.buildWatchAdHandler(),
+      rewardMode: this.rewardedAd.mode,
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
   }
@@ -425,8 +455,17 @@ export class Main extends Component {
     this.rankScreen = new RankScreen(this.root, this.assets, {
       onPlaySound: effect => this.audio.playEffect(effect),
       getStars: () => this.playerStore.getTotalStarsEarned(),
-      isWechat: () => getAnalyticsPlatform() === 'wechat',
-      fetchEntries: () => this.leaderboard.fetchPreviewBoard(this.playerStore.getTotalStarsEarned()),
+      getName: () => this.playerStore.getUserName() || '我',
+      fetchEntries: async tab => {
+        let pendingSubmission = false;
+        try { await this.rankProfile.syncForBoard(); }
+        catch (error) {
+          pendingSubmission = true;
+          console.error('[CatWorld] Failed to sync pending rank scores', error);
+        }
+        const data = await this.leaderboard.fetchBoard(tab, this.rankProfile.hasProfile() ? this.playerStore.getUserId() : '');
+        return { ...data, pendingSubmission };
+      },
       onInvite: () => this.leaderboard.invite(),
       onReturnHome: () => this.returnHomeFromExtraPage(),
     });
@@ -802,6 +841,7 @@ export class Main extends Component {
       onCollectGoalHintShown: () => this.playerStore.markCollectGoalHintDone(),
       getBuildTargetInfo: () => this.playerStore.getNextBuildableInfo(),
       onGoBuild: () => this.goBuildFromGame(),
+      rewardMode: this.rewardedAd.mode,
       onDoubleRewardAd: this.rewardedAd.isAvailable() ? () => this.watchReward('double_coins') : undefined,
       onReviveAd: this.rewardedAd.isAvailable() ? () => this.watchReward('revive') : undefined,
       onTrack: (name, props) => this.analytics.track(name, props),
@@ -988,7 +1028,9 @@ export class Main extends Component {
       onStarsGranted: () => {},
       onChallengeWin: durationMs => {
         this.playerStore.markChallengeRewardClaimed();
-
+        void this.rankProfile.submitChallenge(durationMs).catch(error => {
+          console.error('[CatWorld] Failed to submit challenge rank', error);
+        });
       },
       getItemCount: id => this.playerStore.getItemCount(id),
       onConsumeItem: id => this.playerStore.consumeItem(id),
@@ -1012,6 +1054,7 @@ export class Main extends Component {
       onReturnHome: () => this.returnHomeFromGame(),
       onReplay: () => this.replayChallenge(),
       onReviveAd: this.rewardedAd.isAvailable() ? () => this.watchReward('revive') : undefined,
+      rewardMode: this.rewardedAd.mode,
       onDoubleRewardAd: this.rewardedAd.isAvailable() ? () => this.watchReward('double_coins') : undefined,
       onTrack: (name, props) => this.analytics.track(name, props),
       getShareOffer: () => this.sharePromoter.buildShareOffer('challenge_record', '分享挑战成果'),
@@ -1056,7 +1099,9 @@ export class Main extends Component {
         bestEliminated: this.playerStore.getEndlessProgress().bestEliminated,
         onFinish: result => {
           const recorded = this.playerStore.recordEndlessRun(result);
-
+          void this.rankProfile.submitEndless(result.eliminated, result.durationMs).catch(error => {
+            console.error('[CatWorld] Failed to submit endless rank', error);
+          });
           return recorded;
         },
       },
@@ -1084,6 +1129,7 @@ export class Main extends Component {
       onNextLevel: () => this.returnHomeFromGame(),
       onReturnHome: () => this.returnHomeFromGame(),
       onReplay: () => this.replayEndless(),
+      rewardMode: this.rewardedAd.mode,
       onDoubleRewardAd: this.rewardedAd.isAvailable() ? () => this.watchReward('double_coins') : undefined,
       onTrack: (name, props) => this.analytics.track(name, props),
       getShareOffer: context => context?.isNewRecord
@@ -1633,6 +1679,9 @@ export class Main extends Component {
     const clearedLevel = this.playerStore.getLevel();
     this.playerStore.setLevel(clearedLevel + 1);
     this.leaderboard.reportStars(this.playerStore.getTotalStarsEarned());
+    void this.rankProfile.submitLevelBest().catch(error => {
+      console.error('[CatWorld] Failed to submit level rank', error);
+    });
     if (!isCampaignComplete(this.playerStore.getLevel())) {
       this.prepareNextMainLevel(this.playerStore.getLevel());
     }

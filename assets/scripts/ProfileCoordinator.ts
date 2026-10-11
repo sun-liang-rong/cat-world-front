@@ -1,101 +1,140 @@
+import { sys } from 'cc';
 import { Analytics } from './Analytics';
+import { SubmitRankPayload } from './ApiClient';
 import { LeaderboardService } from './LeaderboardService';
 import { PlayerStore } from './PlayerStore';
 
 export interface ProfileCoordinatorOptions {
   playerStore: PlayerStore;
   leaderboard: LeaderboardService;
-  analytics: Analytics;
-  /** 宿主（Main）节点是否仍有效；无效时丢弃晚到的 profile 结果，不写状态。 */
+  /** 保留旧调用兼容；排行榜身份不替换匿名统计 ID。 */
+  analytics?: Analytics;
   isAlive: () => boolean;
 }
 
-/**
- * 远程玩家身份（profile）协调器：
- * - 单飞控制：多个入口同时需要 profile 时共用同一条进行中的 Promise，成功只写入一次 PlayerStore；
- * - 失败只记 [CatWorld] 日志：不写假用户 ID、不把空值当已创建、不重置本地进度；
- * - 失败后清除进行中记录，仅在下一个显式入口（打开排行榜）时重试，不盲目自动重试
- *   POST /user/generate，避免网络超时后生成多个孤儿 profile；
- * - 身份创建成功后按现有排行榜字段补报可从本机存档精确恢复的最好成绩（仅主线榜）。
- */
+type PendingScore = Omit<SubmitRankPayload, 'user_id'>;
+const PENDING_KEY = 'cat-world-rank-pending-v1';
+
+/** 排行榜匿名身份和成绩队列；玩法存档仍由 PlayerStore 在本机维护。 */
 export class ProfileCoordinator {
   private request: Promise<void> | null = null;
-  /** 本次会话是否已因新建身份补报过最好成绩（避免重复上报）。 */
-  private backfilled = false;
+  private syncing: Promise<void> | null = null;
+  private pending: PendingScore[] = [];
+  private readonly acknowledged = new Map<string, PendingScore>();
 
-  constructor(private readonly options: ProfileCoordinatorOptions) {}
-
-  hasProfile() {
-    return this.options.playerStore.hasProfile();
-  }
-
-  /**
-   * 获取可用身份；已有 profile 直接返回，进行中的请求共享同一条 Promise。
-   * 失败时 Promise 以原错误 reject，由调用方决定是否向用户展示（后台调用应吞掉）。
-   */
-  ensure(): Promise<void> {
-    if (this.options.playerStore.hasProfile()) return Promise.resolve();
-    if (this.request) return this.request;
-
-    let attempt: Promise<void>;
-    attempt = this.options.leaderboard
-      .ensureProfile(
-        this.options.playerStore.getUserId(),
-        this.options.playerStore.getUserName(),
-      )
-      .then(profile => {
-        if (!this.options.isAlive()) return;
-        // 写入后 hasProfile() 为真，后续 ensure() 直接短路，天然只写一次。
-        this.options.playerStore.setProfile(profile.userId, profile.name);
-        this.options.analytics.setUserId(profile.userId);
-        this.backfillBestScores();
-      })
-      .catch(error => {
-        console.error('[CatWorld] Failed to generate player profile', error);
-        // 清除进行中记录：排行榜入口的下一次显式调用才会重试，后台不自动重放。
-        if (this.request === attempt) this.request = null;
-        throw error;
-      });
-    this.request = attempt;
-    return attempt;
-  }
-
-  /** 主线榜补报/逐场上报：关卡进度与累计星星可从本机存档精确恢复。 */
-  submitLevelBest() {
-    const store = this.options.playerStore;
-    if (!store.hasProfile()) return;
-    this.options.leaderboard.submitLevel(
-      store.getUserId(),
-      Math.max(1, store.getLevel() - 1),
-      store.getTotalStarsEarned(),
-    );
-  }
-
-  submitEndless(clearCount: number, durationMs: number) {
-    const store = this.options.playerStore;
-    if (!store.hasProfile() || clearCount <= 0) return;
-    this.options.leaderboard.submitEndless(store.getUserId(), clearCount, durationMs);
-  }
-
-  submitChallenge(durationMs: number) {
-    const store = this.options.playerStore;
-    if (!store.hasProfile() || durationMs <= 0) return;
-    this.options.leaderboard.submitChallenge(store.getUserId(), durationMs, store.getDailyDateKey());
-  }
-
-  /**
-   * 新身份创建后的最好成绩补报：只上传主线榜的关卡数与累计星星（现有排行榜字段、
-   * 本机可精确恢复）。无尽/挑战榜缺少与最好成绩配对的用时字段，不做估算补报，
-   * 不上传整个 PlayerState，也不重复发放任何奖励。
-   */
-  private backfillBestScores() {
-    if (this.backfilled) return;
-    this.backfilled = true;
-    const store = this.options.playerStore;
-    if (!store.hasProfile()) return;
-    const levelCount = Math.max(1, store.getLevel() - 1);
-    if (levelCount > 1 || store.getTotalStarsEarned() > 0) {
-      this.options.leaderboard.submitLevel(store.getUserId(), levelCount, store.getTotalStarsEarned());
+  constructor(private readonly options: ProfileCoordinatorOptions) {
+    try {
+      const saved: unknown = JSON.parse(sys.localStorage.getItem(PENDING_KEY) || '[]');
+      if (Array.isArray(saved)) {
+        for (const score of saved) {
+          if (!score || typeof score !== 'object') continue;
+          if (score.type === 1 && this.validNumber(score.level_count) && this.validNumber(score.star_count)) {
+            this.pending.push({ type: 1, level_count: score.level_count, star_count: score.star_count });
+          } else if (score.type === 2 && this.validNumber(score.clear_count) && this.validNumber(score.duration_ms, 1)) {
+            this.pending.push({ type: 2, clear_count: score.clear_count, duration_ms: score.duration_ms });
+          } else if (score.type === 3 && this.validNumber(score.duration_ms, 1) && typeof score.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(score.date)) {
+            this.pending.push({ type: 3, date: score.date, duration_ms: score.duration_ms });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[CatWorld] Failed to restore pending rank scores', error);
     }
+  }
+
+  hasProfile(): boolean {
+    return this.options.playerStore.hasProfile()
+      && this.options.leaderboard.isRemoteProfile(this.options.playerStore.getUserId());
+  }
+
+  ensure(): Promise<void> {
+    if (this.hasProfile()) return Promise.resolve();
+    if (this.request) return this.request;
+    const store = this.options.playerStore;
+    this.request = this.options.leaderboard.ensureProfile(store.getUserId(), store.getUserName())
+      .then(profile => {
+        if (this.options.isAlive()) store.setProfile(profile.userId, profile.name);
+      })
+      .finally(() => { this.request = null; });
+    return this.request;
+  }
+
+  submitLevelBest(): Promise<void> {
+    const store = this.options.playerStore;
+    return this.queue({ type: 1, level_count: Math.max(0, store.getLevel() - 1), star_count: store.getTotalStarsEarned() });
+  }
+
+  /** 历史无尽记录只补报确实配对的最近一局，不给最好消除数虚构用时。 */
+  syncForBoard(): Promise<void> {
+    const endless = this.options.playerStore.getEndlessProgress();
+    return Promise.all([
+      this.submitLevelBest(),
+      this.submitEndless(endless.lastEliminated, endless.lastDurationMs),
+    ]).then(() => {});
+  }
+
+  submitEndless(clearCount: number, durationMs: number): Promise<void> {
+    if (clearCount <= 0 || durationMs <= 0) return Promise.resolve();
+    return this.queue({ type: 2, clear_count: Math.floor(clearCount), duration_ms: Math.max(1, Math.floor(durationMs)) });
+  }
+
+  submitChallenge(durationMs: number): Promise<void> {
+    if (durationMs <= 0) return Promise.resolve();
+    return this.queue({ type: 3, date: this.options.leaderboard.getChallengeDate(), duration_ms: Math.max(1, Math.floor(durationMs)) });
+  }
+
+  /** 失败的成绩留在本机，下一次结算或打开榜单时重试。 */
+  flush(): Promise<void> {
+    if (this.syncing) return this.syncing;
+    this.syncing = this.ensure().then(async () => {
+      if (!this.hasProfile()) return;
+      while (this.pending.length > 0 && this.options.isAlive()) {
+        const score = this.pending[0];
+        await this.options.leaderboard.submitScore(this.options.playerStore.getUserId(), score);
+        this.acknowledged.set(this.scoreKey(score), score);
+        // 请求期间可能已被更好的成绩替换，新的记录仍需继续发送。
+        const index = this.pending.indexOf(score);
+        if (index >= 0) this.pending.splice(index, 1);
+        this.saveQueue();
+      }
+    }).finally(() => { this.syncing = null; });
+    return this.syncing;
+  }
+
+  private queue(score: PendingScore): Promise<void> {
+    const index = this.pending.findIndex(item => item.type === score.type && item.date === score.date);
+    if (index < 0) {
+      const known = this.acknowledged.get(this.scoreKey(score));
+      if (known && !this.isBetter(score, known)) return this.flush();
+      this.pending.push(score);
+    }
+    else if (this.isBetter(score, this.pending[index])) this.pending[index] = score;
+    this.saveQueue();
+    return this.flush();
+  }
+
+  private isBetter(next: PendingScore, current: PendingScore): boolean {
+    if (next.type === 1) {
+      return next.star_count! > current.star_count!
+        || (next.star_count === current.star_count && next.level_count! > current.level_count!);
+    }
+    if (next.type === 2) {
+      return next.clear_count! > current.clear_count!
+        || (next.clear_count === current.clear_count && next.duration_ms! < current.duration_ms!);
+    }
+    return next.duration_ms! < current.duration_ms!;
+  }
+
+  private scoreKey(score: PendingScore): string {
+    return `${score.type}:${score.date || ''}`;
+  }
+
+  private validNumber(value: unknown, minimum = 0): boolean {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
+  }
+
+  private saveQueue(): void {
+    try { sys.localStorage.setItem(PENDING_KEY, JSON.stringify(this.pending)); }
+    catch (error) { console.error('[CatWorld] Failed to persist pending rank scores', error); }
   }
 }

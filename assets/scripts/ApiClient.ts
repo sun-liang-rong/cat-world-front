@@ -112,8 +112,9 @@ export class ApiClient {
     return this.request<SubmitRankResult>('POST', '/rank/submit', payload);
   }
 
-  listRank(type: RankBoardType, userId: string, date?: string) {
-    const query = [`type=${type}`, `user_id=${encodeURIComponent(userId)}`];
+  listRank(type: RankBoardType, userId = '', date?: string) {
+    const query = [`type=${type}`];
+    if (userId) query.push(`user_id=${encodeURIComponent(userId)}`);
     if (date) query.push(`date=${encodeURIComponent(date)}`);
     return this.request<RankEntry[]>('GET', `/rank/list?${query.join('&')}`);
   }

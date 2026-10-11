@@ -1,4 +1,4 @@
-import { styleActionNode, ensureButtonControl, createVerticalContent } from './Theme';
+import { ensureButtonControl, createVerticalContent } from './Theme';
 import {
   Button,
   Color,
@@ -227,7 +227,7 @@ export class CatDetailScreen {
     this.buildInteractionButton(panel, 'feed', '喂食', 'cat_detail/icon_feed', 0, -308);
     this.buildInteractionButton(panel, 'play', '玩耍', 'cat_detail/icon_play', 184, -308);
 
-    // 底部操作：复用结算弹窗的胶囊底图，保证全局按钮质感一致
+    // 底部操作：复用结算弹窗的木纹按钮，保证全局按钮质感一致
     const upgradeNode = SettlementButton.create(panel, this.assets, {
       text: '',
       tone: 'orange',
@@ -373,7 +373,7 @@ export class CatDetailScreen {
     graphics.roundRect(-84, -56, 168, 112, 20);
     graphics.fill();
     graphics.stroke();
-    styleActionNode(node, 'secondary', 168, 112);
+    SettlementButton.apply(node, 'secondary', 168, 112);
     this.image(node, iconPath, 0, 22, 46, 46);
     const name = this.label(node, text, 0, -14, 21, COLOR_TITLE);
     name.isBold = true;
@@ -488,7 +488,7 @@ export class CatDetailScreen {
         ? COLOR_MUTED
         : costsCoins && !affordable ? new Color(190, 59, 51) : COLOR_BODY;
       viewData.button.interactable = showAsUnlocked && !trialMode && !used && affordable;
-      styleActionNode(viewData.button.node, viewData.button.interactable ? 'secondary' : 'disabled', 168, 112);
+      SettlementButton.apply(viewData.button.node, viewData.button.interactable ? 'secondary' : 'disabled', 168, 112);
       viewData.opacity.opacity = 255;
     });
 
@@ -505,7 +505,7 @@ export class CatDetailScreen {
             : !affordable
               ? `还差 ${upgradeCost - coins} 金币`
               : `升级 · ${upgradeCost} 金币`;
-      styleActionNode(this.upgradeButton.node, this.upgradeButton.interactable ? 'secondary' : 'disabled', 280, 108);
+      SettlementButton.setAppearance(this.upgradeButton.node, this.upgradeButton.interactable ? 'secondary' : 'disabled');
       this.upgradeOpacity.opacity = 255;
     }
     if (this.equipButton && this.equipLabel && this.equipOpacity) {
@@ -513,7 +513,7 @@ export class CatDetailScreen {
       this.equipLabel.string = trialMode
         ? '试住中自动出战'
         : !unlocked ? '解锁后可装备' : equipped ? '当前装备' : '装备出战';
-      styleActionNode(this.equipButton.node, this.equipButton.interactable ? 'primary' : 'disabled', 280, 108);
+      SettlementButton.setAppearance(this.equipButton.node, this.equipButton.interactable ? 'primary' : 'disabled');
       this.equipOpacity.opacity = 255;
     }
   }

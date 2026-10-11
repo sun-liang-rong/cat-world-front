@@ -1,4 +1,4 @@
-import { Button, Color, Graphics, Label, Mask, Node, ScrollView, Sprite, UITransform } from 'cc';
+import { Button, Color, Mask, Node, ScrollView, UITransform } from 'cc';
 
 /**
  * 全局共享调色板：AGENTS.md「色板」一节的唯一代码出处。
@@ -73,63 +73,6 @@ export const UI_METRICS = {
 } as const;
 
 export type ActionAppearance = 'primary' | 'secondary' | 'disabled';
-
-/** 文字操作统一暖黄主按钮、奶油次按钮和灰奶油禁用态。 */
-export function drawActionSurface(graphics: Graphics, width: number, height: number, appearance: ActionAppearance = 'primary') {
-  const primary = appearance === 'primary';
-  const disabled = appearance === 'disabled';
-  const radius = Math.min(UI_METRICS.buttonRadius, height / 2);
-  graphics.clear();
-  graphics.fillColor = primary ? new Color(214, 157, 63) : new Color(231, 199, 178);
-  graphics.roundRect(-width / 2, -height / 2 - 4, width, height, radius);
-  graphics.fill();
-  graphics.fillColor = primary ? Theme.accentYellow : disabled ? new Color(238, 230, 211) : Theme.creamSolid;
-  graphics.strokeColor = primary ? new Color(226, 170, 71) : Theme.border;
-  graphics.lineWidth = 3;
-  graphics.roundRect(-width / 2, -height / 2, width, height, radius);
-  graphics.fill();
-  graphics.stroke();
-  graphics.strokeColor = primary ? new Color(255, 248, 206, 220) : new Color(255, 255, 255, 190);
-  graphics.lineWidth = 2;
-  graphics.roundRect(-width / 2 + 5, -height / 2 + 5, width - 10, height - 10, Math.max(4, radius - 5));
-  graphics.stroke();
-}
-
-export function styleActionLabel(label: Label, width: number, height: number, fontSize = 24) {
-  label.fontSize = Math.max(20, fontSize);
-  label.lineHeight = label.fontSize + 8;
-  label.color = Theme.title;
-  label.isBold = true;
-  label.outlineWidth = 0;
-  label.enableShadow = false;
-  label.enableWrapText = false;
-  label.overflow = Label.Overflow.SHRINK;
-  label.horizontalAlign = Label.HorizontalAlign.CENTER;
-  label.verticalAlign = Label.VerticalAlign.CENTER;
-  label.node.getComponent(UITransform)!.setContentSize(width - UI_METRICS.buttonTextInset * 2, height - 16);
-}
-
-export function styleActionNode(node: Node, appearance: ActionAppearance = 'primary', width?: number, height?: number) {
-  const transform = node.getComponent(UITransform) || node.addComponent(UITransform);
-  const w = width ?? transform.contentSize.width;
-  const h = height ?? transform.contentSize.height;
-  const sprite = node.getComponent(Sprite);
-  if (sprite) sprite.enabled = false;
-  // Cocos 每个节点只能注册一个 UIRenderer；原有 Sprite 仍占用渲染槽。
-  // 保留图片节点的点击与布局，在独立子节点绘制替换底板。
-  let surface = node;
-  if (sprite || node.getComponent(Label)) {
-    surface = node.getChildByName('ActionSurface') || new Node('ActionSurface');
-    if (!surface.parent) node.addChild(surface);
-    surface.setSiblingIndex(0);
-    const surfaceTransform = surface.getComponent(UITransform) || surface.addComponent(UITransform);
-    surfaceTransform.setContentSize(w, h);
-  }
-  const graphics = surface.getComponent(Graphics) || surface.addComponent(Graphics);
-  drawActionSurface(graphics, w, h, appearance);
-  transform.setContentSize(Math.max(88, w), Math.max(88, h));
-  return graphics;
-}
 
 /** 所有可点击控件共享反馈；固定缩放由调用方传入，避免入场动画改变热区。 */
 export function ensureButtonControl(button: Button, renderedScale = 1) {

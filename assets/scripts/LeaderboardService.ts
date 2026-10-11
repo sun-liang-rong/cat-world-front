@@ -1,4 +1,5 @@
 import { getAnalyticsPlatform } from './Analytics';
+import { ApiClient, RankBoardType, RankEntry, SubmitRankPayload } from './ApiClient';
 import { ShareCardType } from './PlayerTypes';
 
 export type LeaderboardSource = 'server' | 'empty' | 'mock';
@@ -28,6 +29,7 @@ export interface LeaderboardData {
   source: LeaderboardSource;
   tab: LeaderboardTab;
   entries: LeaderboardEntry[];
+  pendingSubmission?: boolean;
 }
 
 const INVITE_TITLE = '猫爪星球奇遇记：来和我一起闯关收集猫咪吧！';
@@ -39,6 +41,7 @@ const AVATAR_PATHS = [
   'rank/cat_calico',
   'rank/cat_grey',
 ];
+const BOARD_TYPES: Record<LeaderboardTab, RankBoardType> = { level: 1, endless: 2, challenge: 3 };
 
 interface WechatApi {
   setUserCloudStorage?: (options: { KVDataList: Array<{ key: string; value: string }>; fail: (error: unknown) => void }) => void;
@@ -49,6 +52,16 @@ interface WechatApi {
 }
 
 export class LeaderboardService {
+  constructor(private readonly api = new ApiClient()) {}
+
+  isRemoteProfile(userId: string): boolean {
+    return /^[A-HJ-NP-Z2-9]{8}$/.test(userId);
+  }
+
+  /** 与服务端一致，超萌挑战按上海自然日分榜。 */
+  getChallengeDate(): string {
+    return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  }
 
   reportStars(stars: number) {
     if (getAnalyticsPlatform() !== 'wechat') return;
@@ -73,18 +86,60 @@ export class LeaderboardService {
     return Promise.resolve({ source: 'mock', tab: 'level', entries });
   }
 
-  /** 兼容旧调用方：身份留在本机，不请求后端。 */
-  ensureProfile(userId: string, name: string) {
-    return Promise.resolve({ userId: userId || `local-${Date.now().toString(36)}`, name: name || '猫咪的朋友' });
+  async ensureProfile(userId: string, name: string) {
+    if (this.isRemoteProfile(userId) && name.trim()) return { userId, name };
+    const profile = await this.api.generateProfile();
+    if (!this.isRemoteProfile(profile?.user_id) || !profile.name?.trim()) {
+      throw new Error('排行榜昵称生成失败，请重试');
+    }
+    return { userId: profile.user_id, name: profile.name };
   }
 
-  fetchBoard(tab: LeaderboardTab, userId: string): Promise<LeaderboardData> {
-    return this.fetchPreviewBoard(0);
+  async fetchBoard(tab: LeaderboardTab, userId: string): Promise<LeaderboardData> {
+    const rows = await this.api.listRank(BOARD_TYPES[tab], userId, tab === 'challenge' ? this.getChallengeDate() : undefined);
+    if (!Array.isArray(rows)) throw new Error('排行榜返回数据异常，请重试');
+    return {
+      source: 'server',
+      tab,
+      entries: rows.map(row => this.toEntry(row, tab, userId)),
+    };
   }
 
-  submitLevel(userId: string, levelCount: number, stars: number) { this.reportStars(stars); }
-  submitEndless(userId: string, clearCount: number, durationMs: number) {}
-  submitChallenge(userId: string, durationMs: number, date: string) {}
+  submitScore(userId: string, score: Omit<SubmitRankPayload, 'user_id'>) {
+    return this.api.submitRank({ ...score, user_id: userId });
+  }
+
+  submitLevel(userId: string, levelCount: number, stars: number) {
+    this.reportStars(stars);
+    return this.submitScore(userId, { type: 1, level_count: Math.max(0, Math.floor(levelCount)), star_count: Math.max(0, Math.floor(stars)) });
+  }
+
+  submitEndless(userId: string, clearCount: number, durationMs: number) {
+    return this.submitScore(userId, { type: 2, clear_count: Math.max(0, Math.floor(clearCount)), duration_ms: Math.max(1, Math.floor(durationMs)) });
+  }
+
+  submitChallenge(userId: string, durationMs: number, date = this.getChallengeDate()) {
+    return this.submitScore(userId, { type: 3, date, duration_ms: Math.max(1, Math.floor(durationMs)) });
+  }
+
+  private toEntry(row: RankEntry, tab: LeaderboardTab, userId: string): LeaderboardEntry {
+    const isSelf = row.user_id === userId;
+    const avatarIndex = Array.from(row.user_id).reduce((sum, char) => sum + char.charCodeAt(0), 0) % AVATAR_PATHS.length;
+    const score = tab === 'level' ? row.star_count : tab === 'endless' ? row.clear_count : row.duration_ms;
+    const seconds = Math.floor(row.duration_ms / 1000);
+    const duration = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}.${String(Math.floor(row.duration_ms % 1000 / 10)).padStart(2, '0')}`;
+    return {
+      id: row.user_id,
+      name: isSelf ? `${row.name}（我）` : row.name,
+      avatarPath: isSelf ? 'rank/cat_crown' : AVATAR_PATHS[avatarIndex],
+      rank: row.rank,
+      score,
+      scoreLabel: tab === 'challenge' ? duration : String(score),
+      level: row.level_count,
+      durationMs: row.duration_ms,
+      isSelf,
+    };
+  }
 
   invite(): boolean {
     const wxApi = this.getWechatApi();

@@ -1,4 +1,5 @@
-import { styleActionNode, styleActionLabel, ensureButtonControl, Theme, TITLE_SIGN } from './Theme';
+import { SettlementButton } from './SettlementButton';
+import { ensureButtonControl, Theme, TITLE_SIGN } from './Theme';
 import { Button, Color, EventMouse, EventTouch, Graphics, Label, Mask, Node, Sprite, tween, Tween, UITransform, Vec3, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { isCampaignComplete, LEVELS_PER_THEME, MAIN_THEME_COUNT, themeIndexForLevel } from './TownContent';
@@ -528,13 +529,13 @@ export class AdventureScreen {
     const inner = new Node('AdventureStartButtonInner');
     start.addChild(inner);
     inner.addComponent(UITransform).setContentSize(204, 96);
-    // 统一主 CTA：橙色（tasks/daily_button_primary 与每日任务页同款素材），绿色底只留给次级元素。
-    styleActionNode(inner, 'primary', 204, 96);
+    // 主 CTA 复用全局橙金木纹组件，呼吸动画保留在内层。
+    SettlementButton.apply(inner, 'primary', 204, 96);
     const startLabel = this.label(inner, '开始挑战', 0, -2, 30, new Color(255, 251, 238));
     startLabel.isBold = true;
     startLabel.outlineWidth = 2;
     startLabel.outlineColor = new Color(184, 74, 10);
-    styleActionLabel(startLabel, 204, 96, 28);
+    SettlementButton.styleLabel(startLabel, 204, 96, 28);
     this.addButton(start, () => this.onStartPressed());
     tween(inner)
       .repeatForever(

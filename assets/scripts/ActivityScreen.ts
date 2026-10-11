@@ -1,4 +1,5 @@
-import { drawActionSurface, styleActionLabel, ensureButtonControl } from './Theme';
+import { SettlementButton } from './SettlementButton';
+import { ensureButtonControl } from './Theme';
 import {
   BlockInputEvents,
   Button,
@@ -495,8 +496,8 @@ export class ActivityScreen {
         progress / Math.max(1, task.target),
         task.completed ? GREEN : new Color(133, 192, 64),
       );
-      drawActionSurface(viewData.buttonGraphics, 118, 88, viewData.button.interactable ? 'primary' : 'disabled');
-      styleActionLabel(viewData.buttonLabel, 118, 88, 20);
+      SettlementButton.draw(viewData.buttonGraphics, 118, 88, viewData.button.interactable ? 'primary' : 'disabled');
+      SettlementButton.styleLabel(viewData.buttonLabel, 118, 88, 20);
       // Highlight rows that have a reward waiting for pickup.
       this.drawPanelCard(
         viewData.rowGraphics,
@@ -535,7 +536,7 @@ export class ActivityScreen {
       this.primaryButtonLabel.string =
         activity.status === 'locked' ? '暂未开放' : playable ? '开始挑战' : '活动已结束';
       this.drawActionButton(this.primaryGraphics, 320, 96, playable ? CORAL : DISABLED_FILL, playable ? CORAL_DARK : DISABLED_STROKE, 32);
-      styleActionLabel(this.primaryButtonLabel, 320, 96, 26);
+      SettlementButton.styleLabel(this.primaryButtonLabel, 320, 96, 26);
     }
   }
 
@@ -573,7 +574,7 @@ export class ActivityScreen {
   }
 
   private drawActionButton(graphics: Graphics, width: number, height: number, fill: Color, stroke: Color, radius: number) {
-    drawActionSurface(graphics, width, Math.max(88, height), fill === DISABLED_FILL ? 'disabled' : fill === CORAL ? 'primary' : 'secondary');
+    SettlementButton.draw(graphics, width, Math.max(88, height), fill === DISABLED_FILL ? 'disabled' : fill === CORAL ? 'primary' : 'secondary');
   }
 
   // Shared green capsule style for section tabs and the hero card tag.
@@ -690,7 +691,7 @@ export class ActivityScreen {
     label.isBold = true;
     label.outlineWidth = 2;
     label.outlineColor = stroke;
-    styleActionLabel(label, width, height, fontSize);
+    SettlementButton.styleLabel(label, width, height, fontSize);
     return { node, button, label, graphics };
   }
 
