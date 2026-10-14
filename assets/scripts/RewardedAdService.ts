@@ -131,11 +131,12 @@ export class RewardedAdService {
     return new Promise(resolve => {
       this.pending = resolve;
       let leftGame = false;
+      const deadline = Date.now() + 30000;
       const onHide = () => {
         if (this.pending === resolve) leftGame = true;
       };
       const onShow = () => {
-        if (this.pending === resolve && leftGame) this.finish(true);
+        if (this.pending === resolve && leftGame) this.finish(Date.now() < deadline);
       };
       this.clearShareListeners = () => {
         try { api.offHide(onHide); }

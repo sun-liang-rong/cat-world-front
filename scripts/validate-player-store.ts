@@ -2,10 +2,190 @@ import { sys } from 'cc';
 import { PlayerStore } from '../assets/scripts/PlayerStore';
 import { BUILDING_DEFINITIONS, isCampaignComplete, MAX_MAIN_LEVEL, themeIndexForLevel } from '../assets/scripts/TownContent';
 import { LevelGenerator } from '../assets/scripts/level/LevelGenerator';
-import { getCatSkillChargeRequired } from '../assets/scripts/GameContent';
+import { getCatSkillChargeRequired, getCatUpgradeCost } from '../assets/scripts/GameContent';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`[PlayerStore] ${message}`);
+}
+
+function withTime<T>(iso: string, run: () => T): T {
+  const OriginalDate = Date;
+  const now = OriginalDate.parse(iso);
+  class FixedDate extends OriginalDate {
+    constructor(value?: string | number) {
+      super(value === undefined ? now : typeof value === 'string' ? OriginalDate.parse(value) : value);
+    }
+    static now() { return now; }
+    // 模拟 UTC 设备，确保上海日期不依赖测试机的本地时区。
+    getFullYear() { return this.getUTCFullYear(); }
+    getMonth() { return this.getUTCMonth(); }
+    getDate() { return this.getUTCDate(); }
+  }
+  globalThis.Date = FixedDate as DateConstructor;
+  try {
+    return run();
+  } finally {
+    globalThis.Date = OriginalDate;
+  }
+}
+
+function testTrialReloadAndUpgradeCosts() {
+  const key = 'player-store-trial-reload';
+  const store = new PlayerStore(key);
+  store.load();
+  store.setLevel(2);
+  assert(store.startCatTrial().ok, 'trial should start after the first clear');
+  const reloaded = new PlayerStore(key);
+  reloaded.load();
+  assert(reloaded.getCatTrial().remainingGames === 5, 'reload must preserve all five trial games');
+  reloaded.consumeCatTrialGame();
+  const consumed = new PlayerStore(key);
+  consumed.load();
+  assert(consumed.getCatTrial().remainingGames === 4, 'reload must preserve four unconsumed trial games');
+  const saved = consumed.getState();
+  saved.catTrial.remainingGames = 3;
+  sys.localStorage.setItem(key, JSON.stringify(saved));
+  consumed.load();
+  assert(consumed.getCatTrial().remainingGames === 3, 'legacy remaining trial count should not be extended');
+
+  const expected = [10, 15, 28, 51, 84, 125, 176, 235, 304, 383, 470, 566, 672, 787, 911, 1045, 1187, 1339, 1500];
+  expected.forEach((cost, index) => assert(getCatUpgradeCost(index + 1) === cost, `Lv.${index + 1} upgrade should cost ${cost}`));
+  assert(expected.reduce((total, cost) => total + cost, 0) === 9888, 'full cat growth should cost 9888 coins');
+  assert(getCatUpgradeCost(20) === 0, 'max level should have no further upgrade fee');
+}
+
+function testShanghaiDailyDate() {
+  withTime('2026-10-13T15:59:59Z', () => {
+    const store = new PlayerStore('player-store-shanghai-day');
+    store.load();
+    assert(store.getDailyDateKey() === '2026-10-13', 'Shanghai date should remain Oct 13 before midnight');
+    assert(store.buyItem('hammer'), 'first shop purchase should succeed before midnight');
+  });
+  withTime('2026-10-13T16:00:00Z', () => {
+    const store = new PlayerStore('player-store-shanghai-day');
+    store.load();
+    assert(store.getDailyDateKey() === '2026-10-14', 'Shanghai date should advance at UTC 16:00 on a UTC device');
+    assert(store.buyItem('hammer'), 'shop quota should reset at Shanghai midnight');
+  });
+}
+
+function testActivityExpirationAndInteractionCap() {
+  withTime('2026-09-05T04:00:00Z', () => {
+    const store = new PlayerStore('player-store-activity-expiration');
+    store.load();
+    for (let level = 1; level <= 3; level += 1) {
+      store.recordRun({ won: true, level, remainingSlots: 3, mistakes: 0, elapsedMs: 10000,
+        decisionCount: 30, nearFailureCount: 0, collectedElements: 30, matchCount: 10 });
+    }
+    assert(store.getActivitySnapshot().points === 240, 'three ten-match wins should grant 240 direct activity points');
+  });
+  withTime('2026-09-10T04:00:00Z', () => {
+    const store = new PlayerStore('player-store-activity-expiration');
+    store.load();
+    const snapshot = store.getActivitySnapshot();
+    assert(snapshot.status === 'ended' && snapshot.points === 340, 'expired completed task should automatically grant its points');
+    assert(snapshot.tasks.find(task => task.id === 'make_matches')?.claimed, 'auto-settled task must be marked claimed');
+    assert(store.getItemCount('hammer') === 1, 'task points should unlock and automatically award the 300-point hammer');
+    const coins = store.getCoins();
+    store.getActivitySnapshot();
+    const reloaded = new PlayerStore('player-store-activity-expiration');
+    reloaded.load();
+    reloaded.getActivitySnapshot();
+    assert(reloaded.getCoins() === coins && reloaded.getItemCount('hammer') === 1, 'automatic activity rewards must remain one-time across reload');
+  });
+  withTime('2026-09-05T04:00:00Z', () => {
+    const key = 'player-store-activity-interactions';
+    const store = new PlayerStore(key);
+    store.load();
+    store.setLevel(21);
+    store.addReward({ stars: 120 });
+    for (const id of ['cat_house', 'cafe'] as const) {
+      for (let index = 0; index < 20; index += 1) assert(store.lightBuildingCell(id).ok, 'two cats should unlock for interaction coverage');
+    }
+    assert(store.interactWithCat('orange', 'pet').ok, 'first activity interaction should succeed');
+    assert(store.interactWithCat('orange', 'feed').ok, 'second activity interaction should succeed');
+    assert(store.interactWithCat('orange', 'play').ok, 'third activity interaction should succeed');
+    assert(store.interactWithCat('white', 'pet').ok, 'fourth interaction should remain usable for affection');
+    assert(store.getActivitySnapshot().points === 30, 'only first three daily cat interactions should grant points');
+    assert(store.getActivitySnapshot().tasks.find(task => task.id === 'interact_cats')?.progress === 4, 'interaction task should track actual interactions independently');
+    const reloaded = new PlayerStore(key);
+    reloaded.load();
+    assert(reloaded.interactWithCat('white', 'feed').ok, 'additional cat interaction should still succeed');
+    assert(reloaded.getActivitySnapshot().points === 30, 'interaction point cap should survive reload');
+    const legacy = reloaded.getState();
+    delete (legacy.activity as Partial<typeof legacy.activity>).dailyInteractionClaims;
+    sys.localStorage.setItem(key, JSON.stringify(legacy));
+    reloaded.load();
+    assert(reloaded.interactWithCat('white', 'play').ok, 'legacy save should remain usable');
+    assert(reloaded.getActivitySnapshot().points === 30, 'old saves should infer already-used interaction claims');
+  });
+  withTime('2026-09-06T04:00:00Z', () => {
+    const store = new PlayerStore('player-store-activity-interactions');
+    store.load();
+    assert(store.interactWithCat('orange', 'pet').ok, 'new Shanghai day should reset cat interaction');
+    assert(store.getActivitySnapshot().points === 40, 'new day should reset the activity interaction point quota');
+  });
+}
+
+function testCampaignDailyTasksAndGrowthPhotos() {
+  const store = new PlayerStore('player-store-campaign-daily');
+  store.load();
+  store.recordRun({ won: true, level: 160, remainingSlots: 3, mistakes: 0, elapsedMs: 10000,
+    decisionCount: 10, nearFailureCount: 0, collectedElements: 30, matchCount: 5 });
+  store.setLevel(161);
+  let task = store.getTasks().find(item => item.id === 'clear_3_levels');
+  assert(task?.target === 150 && task.progress === 50 && task.action === 'endless', 'campaign completion should preserve one prior win as 50 endless progress');
+  assert(task.title === '无尽消除 150 个元素', 'daily task title should describe the active endless objective');
+  store.recordEndlessRun({ eliminated: 100, durationMs: 10000, stage: 2, matchCount: 5 });
+  assert(store.getTasks().every(item => item.completed), 'endless should make every post-campaign daily task achievable');
+  assert(store.isDailyChestReady() && store.claimDailyChest(), 'post-campaign daily chest should remain achievable');
+  assert(store.claimTask('clear_3_levels'), 'post-campaign endless objective should grant its original coin reward');
+  const reloaded = new PlayerStore('player-store-campaign-daily');
+  reloaded.load();
+  task = reloaded.getTasks().find(item => item.id === 'clear_3_levels');
+  assert(task?.progress === 150 && task.claimed, 'endless progress and claimed state should survive reload');
+
+  const main = new PlayerStore('player-store-main-endless-task');
+  main.load();
+  main.setLevel(2);
+  main.recordEndlessRun({ eliminated: 150, durationMs: 10000, stage: 2, matchCount: 5 });
+  assert(main.getTasks().find(item => item.id === 'clear_3_levels')?.progress === 0, 'endless must not advance the mainline daily objective');
+  for (let level = 1; level <= 3; level += 1) main.recordRun({ won: true, level, remainingSlots: 3, mistakes: 0,
+    elapsedMs: 10000, decisionCount: 10, nearFailureCount: 0, collectedElements: 30, matchCount: 5 });
+  assert(main.claimTask('clear_3_levels'), 'main objective should be claimable before campaign completion');
+  main.setLevel(161);
+  assert(main.getTasks().find(item => item.id === 'clear_3_levels')?.claimed, 'same-day campaign migration must preserve claimed rewards');
+  assert(!main.claimTask('clear_3_levels'), 'campaign migration must not grant the task reward twice');
+
+  withTime('2026-10-14T04:00:00Z', () => {
+    const key = 'player-store-campaign-legacy-daily';
+    sys.localStorage.setItem(key, JSON.stringify({
+      version: 6,
+      level: 161,
+      daily: { dateKey: '2026-10-14', tasks: { clear_3_levels: { progress: 3, claimed: false } } },
+    }));
+    const legacy = new PlayerStore(key);
+    legacy.load();
+    assert(legacy.getTasks().find(item => item.id === 'clear_3_levels')?.completed, 'completed unclaimed legacy task must remain claimable after migration');
+    assert(legacy.claimTask('clear_3_levels'), 'legacy completed task should still grant its reward');
+  });
+  withTime('2026-10-15T04:00:00Z', () => {
+    const legacy = new PlayerStore('player-store-campaign-legacy-daily');
+    legacy.load();
+    const freshTask = legacy.getTasks().find(item => item.id === 'clear_3_levels');
+    assert(freshTask?.target === 150 && freshTask.progress === 0 && !freshTask.claimed, 'next post-campaign day should start a fresh achievable endless task');
+  });
+
+  const cats = new PlayerStore('player-store-growth-photo');
+  cats.load();
+  cats.setCoins(20000);
+  cats.addReward({ stars: 15 });
+  for (let index = 0; index < 5; index += 1) cats.lightBuildingCell('cat_house');
+  while (cats.getCat('orange').level < 17) assert(cats.upgradeCat('orange').ok, 'orange should reach level 17');
+  assert(!cats.getMoments().find(moment => moment.id === 'cat_growth_orange')?.unlocked, 'growth photo must stay locked before level 18');
+  assert(cats.upgradeCat('orange').ok, 'orange should reach level 18');
+  assert(cats.getMoments().find(moment => moment.id === 'cat_growth_orange')?.unlocked, 'level 18 should unlock the promised orange growth photo');
+  assert(!cats.getMoments().find(moment => moment.id === 'cat_growth_white')?.unlocked, 'one cat milestone must not unlock another cat photo');
 }
 
 function testDefaultsAndRewards() {
@@ -492,6 +672,10 @@ function testCheckpointAndBackup() {
 }
 
 testCheckpointAndBackup();
+testTrialReloadAndUpgradeCosts();
+testShanghaiDailyDate();
+testActivityExpirationAndInteractionCap();
+testCampaignDailyTasksAndGrowthPhotos();
 testDefaultsAndRewards();
 testBuildingAndCatUnlock();
 testBuildTargetsAndGuideFlag();
@@ -510,4 +694,4 @@ testEndlessProgress();
 testAdFunnelAndRunFields();
 testSaveNormalization();
 testLegacyBuildingSave();
-  process.stdout.write('PlayerStore validation passed: defaults, rewards, cells/targets/guide, board tutorial, collect hint, late themes, collect schedule, shop, daily tasks, cats, cat trial, challenge gate/marker, cat milestones, endless, ad funnel, town daily, share daily, normalization, legacy building save.\n');
+process.stdout.write('PlayerStore validation passed: defaults, rewards, building progress, tutorials, themes, shop, daily tasks, trial reload, square upgrade costs, Shanghai midnight, activity expiration and interaction quotas, post-campaign daily tasks, growth photos, cat milestones, endless, ad funnel, town daily, share daily, normalization, local backup and checkpoints.\n');

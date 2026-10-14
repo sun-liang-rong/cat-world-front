@@ -14,6 +14,7 @@ export interface ApiResponse<T> {
 export interface GeneratedProfile {
   name: string;
   user_id: string;
+  submit_token: string;
 }
 
 export interface RankEntry {
@@ -108,8 +109,10 @@ export class ApiClient {
     return this.request<GeneratedProfile>('POST', '/user/generate');
   }
 
-  submitRank(payload: SubmitRankPayload) {
-    return this.request<SubmitRankResult>('POST', '/rank/submit', payload);
+  submitRank(payload: SubmitRankPayload, submitToken: string) {
+    return this.request<SubmitRankResult>('POST', '/rank/submit', payload, {
+      Authorization: `Bearer ${submitToken}`,
+    });
   }
 
   listRank(type: RankBoardType, userId = '', date?: string) {
@@ -123,11 +126,16 @@ export class ApiClient {
     return this.request<TrackIngestResult>('POST', '/track', payload);
   }
 
-  private request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+  private request<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     // 幂等 GET 在超时/网络失败时最多重试 1 次；POST 不自动重试（由调用方按业务决定）。
     const attempts = method === 'GET' ? 2 : 1;
-    const run = (attempt: number): Promise<T> => this.send(method, url, body)
+    const run = (attempt: number): Promise<T> => this.send(method, url, body, headers)
       .then(payload => this.unwrap<T>(payload))
       .catch(error => {
         const retryable = attempt < attempts
@@ -139,14 +147,19 @@ export class ApiClient {
     return run(1);
   }
 
-  private send(method: 'GET' | 'POST', url: string, body?: unknown): Promise<unknown> {
+  private send(
+    method: 'GET' | 'POST',
+    url: string,
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<unknown> {
     const wxApi = this.getWechatApi();
     if (wxApi?.request) {
       return new Promise((resolve, reject) => {
         wxApi.request!({
           url,
           method,
-          header: { 'Content-Type': 'application/json' },
+          header: { 'Content-Type': 'application/json', ...headers },
           data: body,
           timeout: API_TIMEOUT_MS,
           success: result => {
@@ -180,7 +193,7 @@ export class ApiClient {
 
     return fetch(url, {
       method,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers: body === undefined ? headers : { 'Content-Type': 'application/json', ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller?.signal,
     }).then(async response => {

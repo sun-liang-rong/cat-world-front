@@ -162,6 +162,8 @@ export interface DailyTaskProgress {
 
 export interface DailyTaskState {
   dateKey: string;
+  /** 主线完成后，同一任务 ID 改为无尽消除目标，保留每日领奖记录。 */
+  clearTaskMode: 'main' | 'endless';
   tasks: Record<DailyTaskId, DailyTaskProgress>;
   chestClaimed: boolean;
   /** 超萌挑战的大额金币奖励每日限领一次，跨天随 DailyState 一起重置 */
@@ -195,6 +197,8 @@ export interface ActivityState {
   points: number;
   dailyPointDateKey: string;
   dailyDirectPoints: number;
+  /** 当日已获得积分的猫咪互动次数，最多 3 次。 */
+  dailyInteractionClaims: number;
   completedLevelIds: number[];
   tasks: Record<ActivityTaskId, ActivityTaskState>;
   claimedRewardIds: ActivityRewardId[];
@@ -340,6 +344,10 @@ export interface RewardBundle {
 
 export interface TaskSnapshot {
   id: DailyTaskId;
+  title: string;
+  description: string;
+  rewardText: string;
+  action: 'main' | 'endless';
   progress: number;
   target: number;
   claimed: boolean;

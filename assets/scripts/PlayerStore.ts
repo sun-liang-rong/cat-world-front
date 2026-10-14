@@ -9,6 +9,8 @@ import { buildMomentSnapshots, MomentSnapshot } from './MomentContent';
 import {
   DAILY_CHEST_REWARD,
   DAILY_TASK_DEFINITIONS,
+  DailyTaskDefinition,
+  ENDLESS_DAILY_TASK,
   CAT_MILESTONES,
   getCatDefinition,
   getCatSkillChargeRequired,
@@ -913,10 +915,15 @@ export class PlayerStore {
 
   getTasks(): TaskSnapshot[] {
     this.resetDailyState();
-    return DAILY_TASK_DEFINITIONS.map(definition => {
+    return DAILY_TASK_DEFINITIONS.map<TaskSnapshot>(base => {
+      const definition = this.getDailyTaskDefinition(base.id);
       const task = this.state.daily.tasks[definition.id];
       return {
         id: definition.id,
+        title: definition.title,
+        description: definition.description,
+        rewardText: definition.rewardText,
+        action: isCampaignComplete(this.state.level) ? 'endless' : 'main',
         progress: task.progress,
         target: definition.target,
         claimed: task.claimed,
@@ -989,6 +996,10 @@ export class PlayerStore {
       5,
       Math.max(this.state.daily.tasks.make_5_matches.progress, matchCount),
     );
+    if (this.state.daily.clearTaskMode === 'endless') {
+      const task = this.state.daily.tasks.clear_3_levels;
+      task.progress = Math.min(ENDLESS_DAILY_TASK.target, task.progress + eliminated);
+    }
     this.recordActivityMatches(matchCount);
 
     const today = this.todayKey();
@@ -1201,7 +1212,7 @@ export class PlayerStore {
 
   claimTask(id: DailyTaskId) {
     this.resetDailyState(false);
-    const definition = DAILY_TASK_DEFINITIONS.find(item => item.id === id);
+    const definition = this.getDailyTaskDefinition(id);
     const task = definition ? this.state.daily.tasks[id] : undefined;
     if (!definition || !task || task.claimed || task.progress < definition.target) return false;
     task.claimed = true;
@@ -1223,7 +1234,9 @@ export class PlayerStore {
     this.resetDailyState(false);
     const completedLevels = this.state.daily.tasks.clear_3_levels;
     const collectedElements = this.state.daily.tasks.collect_100_elements;
-    completedLevels.progress = Math.min(3, completedLevels.progress + (run.won ? 1 : 0));
+    if (this.state.daily.clearTaskMode === 'main') {
+      completedLevels.progress = Math.min(3, completedLevels.progress + (run.won ? 1 : 0));
+    }
     collectedElements.progress = Math.min(100, collectedElements.progress + this.positiveInteger(run.collectedElements));
     this.state.daily.tasks.make_5_matches.progress = Math.min(
       5,
@@ -1249,6 +1262,7 @@ export class PlayerStore {
 
   setLevel(level: number) {
     this.state.level = Math.max(1, Math.floor(Number.isFinite(level) ? level : this.state.level));
+    this.resetDailyState(false);
     // 闯到主题 1–5 会解锁对应建筑；主题 6+ 不再对应新建筑
     this.applyBuildingUnlocks();
     this.save();
@@ -1335,9 +1349,10 @@ export class PlayerStore {
     const today = this.todayKey();
     let changed = false;
     if (this.state.daily.dateKey !== today) {
-      this.state.daily = this.createDailyState(today);
+      this.state.daily = this.createDailyState(today, isCampaignComplete(this.state.level));
       changed = true;
     }
+    changed = this.syncCampaignDailyTask() || changed;
     if (!this.state.shop || this.state.shop.dateKey !== today) {
       this.state.shop = this.createShopDailyState(today);
       changed = true;
@@ -1638,12 +1653,34 @@ export class PlayerStore {
     }
   }
 
-  private createDailyState(dateKey: string): DailyState {
+  private getDailyTaskDefinition(id: DailyTaskId): DailyTaskDefinition | undefined {
+    if (id === 'clear_3_levels' && this.state.daily.clearTaskMode === 'endless') return ENDLESS_DAILY_TASK;
+    return DAILY_TASK_DEFINITIONS.find(definition => definition.id === id);
+  }
+
+  private syncCampaignDailyTask() {
+    if (!isCampaignComplete(this.state.level) || this.state.daily.clearTaskMode === 'endless') return false;
+    const task = this.state.daily.tasks.clear_3_levels;
+    // 当天每个已完成主线关卡折算 50 消除；完成或领取状态都保留。
+    task.progress = task.claimed || task.progress >= 3
+      ? ENDLESS_DAILY_TASK.target
+      : Math.min(ENDLESS_DAILY_TASK.target, task.progress * ENDLESS_DAILY_TASK.target / 3);
+    this.state.daily.clearTaskMode = 'endless';
+    return true;
+  }
+
+  private createDailyState(dateKey: string, campaignComplete = false): DailyState {
     const tasks = {} as DailyState['tasks'];
     DAILY_TASK_DEFINITIONS.forEach(definition => {
       tasks[definition.id] = { progress: 0, claimed: false };
     });
-    return { dateKey, tasks, chestClaimed: false, challengeRewardClaimed: false };
+    return {
+      dateKey,
+      clearTaskMode: campaignComplete ? 'endless' : 'main',
+      tasks,
+      chestClaimed: false,
+      challengeRewardClaimed: false,
+    };
   }
 
   private createShopDailyState(dateKey: string): ShopDailyState {
@@ -1752,7 +1789,7 @@ export class PlayerStore {
     const savedCatTrial = value.catTrial;
     if (savedCatTrial && typeof savedCatTrial === 'object') {
       const catId = savedCatTrial.catId === 'orange' ? 'orange' : 'orange';
-      const remainingGames = Math.min(3, Math.max(0, Math.floor(this.safeNumber(savedCatTrial.remainingGames, 0))));
+      const remainingGames = Math.min(5, Math.max(0, Math.floor(this.safeNumber(savedCatTrial.remainingGames, 0))));
       state.catTrial = {
         catId,
         remainingGames,
@@ -1828,12 +1865,15 @@ export class PlayerStore {
       };
     }
     if (value.daily?.dateKey && value.daily.dateKey === this.todayKey()) {
+      state.daily.clearTaskMode = value.daily.clearTaskMode === 'endless' ? 'endless' : 'main';
       (Object.keys(state.daily.tasks) as DailyTaskId[]).forEach(id => {
         const savedTask = value.daily?.tasks?.[id];
         if (!savedTask) return;
         state.daily.tasks[id] = {
           progress: Math.min(
-            DAILY_TASK_DEFINITIONS.find(definition => definition.id === id)!.target,
+            id === 'clear_3_levels' && state.daily.clearTaskMode === 'endless'
+              ? ENDLESS_DAILY_TASK.target
+              : DAILY_TASK_DEFINITIONS.find(definition => definition.id === id)!.target,
             Math.max(0, Math.floor(this.safeNumber(savedTask.progress, 0))),
           ),
           claimed: savedTask.claimed === true,
@@ -1857,6 +1897,13 @@ export class PlayerStore {
       activity.dailyDirectPoints = Math.min(
         activityDefinition.dailyDirectPointLimit,
         this.nonNegativeInteger(savedActivity.dailyDirectPoints, 0),
+      );
+      const legacyInteractionClaims = Object.values(state.cats)
+        .filter(cat => cat.interactionDate === this.todayKey())
+        .reduce((total, cat) => total + cat.interactionCounts.pet + cat.interactionCounts.feed + cat.interactionCounts.play, 0);
+      activity.dailyInteractionClaims = Math.min(
+        3,
+        this.nonNegativeInteger(savedActivity.dailyInteractionClaims, legacyInteractionClaims),
       );
       activity.completedLevelIds = Array.isArray(savedActivity.completedLevelIds)
         ? savedActivity.completedLevelIds
@@ -1963,7 +2010,10 @@ export class PlayerStore {
     const definition = getCurrentActivity();
     if (!this.canEarnActivity(definition)) return;
     this.incrementActivityTask('interact_cats', 1, definition);
-    this.addDirectActivityPoints(10, definition);
+    if (this.state.activity.dailyInteractionClaims < 3) {
+      this.state.activity.dailyInteractionClaims += 1;
+      this.addDirectActivityPoints(10, definition);
+    }
   }
 
   private incrementActivityTask(id: ActivityTaskId, amount: number, definition: ActivityDefinition) {
@@ -1997,6 +2047,7 @@ export class PlayerStore {
     if (this.state.activity.dailyPointDateKey !== today) {
       this.state.activity.dailyPointDateKey = today;
       this.state.activity.dailyDirectPoints = 0;
+      this.state.activity.dailyInteractionClaims = 0;
       changed = true;
     }
     if (this.activityWindowStatus(definition, Date.now()) === 'ended') {
@@ -2008,6 +2059,16 @@ export class PlayerStore {
 
   private settleExpiredActivity(definition: ActivityDefinition) {
     let changed = false;
+    definition.tasks.forEach(taskDefinition => {
+      const task = this.state.activity.tasks[taskDefinition.id];
+      if (!task || task.claimed || task.progress < taskDefinition.target) return;
+      task.claimed = true;
+      this.state.activity.points = Math.min(
+        definition.totalPoints,
+        this.state.activity.points + taskDefinition.pointReward,
+      );
+      changed = true;
+    });
     definition.rewards.forEach(reward => {
       if (
         this.state.activity.points < reward.threshold
@@ -2113,10 +2174,10 @@ export class PlayerStore {
   }
 
   private todayKey() {
-    const now = new Date();
-    const month = `0${now.getMonth() + 1}`.slice(-2);
-    const day = `0${now.getDate()}`.slice(-2);
-    return `${now.getFullYear()}-${month}-${day}`;
+    const now = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    const month = `0${now.getUTCMonth() + 1}`.slice(-2);
+    const day = `0${now.getUTCDate()}`.slice(-2);
+    return `${now.getUTCFullYear()}-${month}-${day}`;
   }
 
   private emptyInteractionCounts() {

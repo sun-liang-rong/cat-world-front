@@ -148,6 +148,22 @@ export const MOMENT_DEFINITIONS: MomentDefinition[] = [
     description: '猫咪把小爪放在你手心：今天也要一起玩呀。', unlockHint: '任意猫咪好感达到 20',
     imagePath: 'moment/moment_photo_bench', isUnlocked: source => Object.values(source.cats).some(cat => cat.affection >= 20),
   },
+  ...([
+    { id: 'orange', name: '大橘' },
+    { id: 'white', name: '白猫' },
+    { id: 'black', name: '黑猫' },
+    { id: 'ragdoll', name: '布偶猫' },
+    { id: 'aurora', name: '极光猫' },
+  ] as Array<{ id: CatId; name: string }>).map(cat => ({
+    id: `cat_growth_${cat.id}`,
+    category: 'cats' as const,
+    dateLabel: '成长纪念',
+    title: `${cat.name}的专属照片`,
+    description: `${cat.name}已经长大啦，这张照片记录了你们一起成长的日子。`,
+    unlockHint: `${cat.name}达到 Lv.18 后收录`,
+    imagePath: `cats/cat_${cat.id}`,
+    isUnlocked: (source: MomentSource) => !!source.cats[cat.id]?.unlocked && source.cats[cat.id].level >= 18,
+  })),
 
 ];
 

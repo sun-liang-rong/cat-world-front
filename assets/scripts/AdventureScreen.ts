@@ -431,6 +431,27 @@ export class AdventureScreen {
       body = this.image(node, 'adventure/adventure_node_done', 0, 0, 104, 85);
       numberY = 9;
       numberOutline = new Color(74, 124, 40);
+
+      // 已通关节点下方绘制 1~3 星小星标组，直观呈现星级成就
+      const stars = Math.min(3, Math.max(1, this.options.getLevelStar(level)));
+      const starRow = new Node('LevelStars');
+      node.addChild(starRow);
+      starRow.setPosition(0, -32);
+      const starGraphics = starRow.addComponent(Graphics);
+      starGraphics.fillColor = new Color(74, 124, 40, 210);
+      starGraphics.roundRect(-30, -8, 60, 16, 8);
+      starGraphics.fill();
+      [-18, 0, 18].forEach((sx, sIdx) => {
+        const lit = sIdx < stars;
+        starGraphics.fillColor = lit ? new Color(255, 220, 70) : new Color(180, 195, 170);
+        starGraphics.circle(sx, 0, 4.2);
+        starGraphics.fill();
+        if (lit) {
+          starGraphics.fillColor = Color.WHITE;
+          starGraphics.circle(sx - 1.2, 1.2, 1.4);
+          starGraphics.fill();
+        }
+      });
     } else if (state === 'current') {
       body = this.image(node, 'adventure/adventure_node_current', 0, 0, 112, 136);
       numberX = 0;
@@ -472,9 +493,12 @@ export class AdventureScreen {
         this.options.onStartGame();
       } else if (state === 'completed') {
         const current = Math.max(1, Math.floor(this.options.getLevel()));
-        this.toast(isCampaignComplete(current)
-          ? `第 ${level} 关已通关，主线冒险已全部完成`
-          : `第 ${level} 关已通关，当前挑战是第 ${current} 关`);
+        const stars = Math.min(3, Math.max(1, this.options.getLevelStar(level)));
+        if (stars === 3) {
+          this.toast(`第 ${level} 关 · ⭐⭐⭐ 完美通关！当前进度第 ${current} 关`);
+        } else {
+          this.toast(`第 ${level} 关 · 已获 ${stars} 星！重玩可冲击 3 星完美`);
+        }
       } else {
         this.toast(`完成第 ${level - 1} 关后解锁`);
         tween(node)
@@ -489,13 +513,32 @@ export class AdventureScreen {
     // Leave a small gap above the theme selector while keeping both controls
     // clear of the bottom safe area.
     const y = bottom + 280;
+
+    // 关卡卡片柔和微阴影底托
+    const cardShadow = new Node('AdventureLevelCardShadow');
+    this.adventureUI!.addChild(cardShadow);
+    cardShadow.setPosition(0, y - 92);
+    cardShadow.addComponent(UITransform).setContentSize(630, 24);
+    const csg = cardShadow.addComponent(Graphics);
+    csg.fillColor = new Color(92, 54, 22, 60);
+    csg.ellipse(0, 0, 315, 10);
+    csg.fill();
+
     const card = this.roundedShape(
       this.adventureUI!, 'AdventureLevelCard', 0, y, 668, 178, 30,
       COLORS.cream, COLORS.border, 4,
     );
     this.innerBorder(card, 646, 156, 24, new Color(255, 252, 239, 170), 2);
 
-    this.image(card, 'adventure/adventure_cat_roof', -238, -4, 170, 98);
+    // 屋顶守望猫咪：舒缓浮动微呼吸动效
+    const roofCat = this.image(card, 'adventure/adventure_cat_roof', -238, -4, 170, 98);
+    tween(roofCat)
+      .repeatForever(
+        tween()
+          .to(1.8, { scale: new Vec3(1.035, 1.035, 1), position: new Vec3(-238, -2, 0) }, { easing: 'sineInOut' })
+          .to(1.8, { scale: new Vec3(1, 1, 1), position: new Vec3(-238, -4, 0) }, { easing: 'sineInOut' }),
+      )
+      .start();
 
     const plate = this.roundedShape(
       card, 'AdventureCurrentTitlePlate', -30, 43, 210, 50, 18,

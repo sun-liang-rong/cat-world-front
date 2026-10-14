@@ -1,6 +1,6 @@
 import { SettlementButton } from './SettlementButton';
 import { ensureButtonControl } from './Theme';
-import { BlockInputEvents, Button, Color, Graphics, Label, Node, Sprite, Tween, tween, UIOpacity, UITransform, Vec2, Vec3, view } from 'cc';
+import { BlockInputEvents, Button, Color, Graphics, Label, Node, Sprite, sys, Tween, tween, UIOpacity, UITransform, Vec2, Vec3, view } from 'cc';
 import { TrackEventName, TrackProps } from './Analytics';
 import { ActivitySnapshot } from './ActivityContent';
 import { AssetStore, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
@@ -433,11 +433,20 @@ export class HomeScreen {
 
   private sideEntryLabel(parent: Node, name: string, x: number, y: number) {
     const width = name.length >= 4 ? 108 : name.length === 3 ? 88 : 68;
+    const shadow = new Node('LabelShadow');
+    parent.addChild(shadow);
+    shadow.setPosition(x, y - 18);
+    shadow.addComponent(UITransform).setContentSize(width - 12, 8);
+    const sg = shadow.addComponent(Graphics);
+    sg.fillColor = new Color(92, 54, 22, 60);
+    sg.ellipse(0, 0, (width - 12) / 2, 4);
+    sg.fill();
+
     const background = this.creamPanel(
-      parent, x, y, width, 34, 12,
-      new Color(255, 248, 226, 245), new Color(235, 205, 158),
+      parent, x, y, width, 34, 14,
+      new Color(255, 248, 226, 248), new Color(235, 205, 158),
     );
-    const text = this.label(background, name, 0, -2, 22, new Color(107, 74, 46));
+    const text = this.label(background, name, 0, -1, 21, new Color(107, 74, 46));
     text.isBold = true;
     return background;
   }
@@ -462,6 +471,7 @@ export class HomeScreen {
     this.buildChapterBanner(top);
     this.buildStartCluster(bottom);
     this.buildBottomNav(bottom);
+    this.buildWeChatFavoriteGuide(top);
   }
 
   // 立体厚牌棋盘：叠在标题和开始按钮之间，让首页一眼能看出是收集式三消。
@@ -526,7 +536,16 @@ export class HomeScreen {
     this.plazaCats = new Node('ResidentCats');
     holder.addChild(this.plazaCats);
     this.refreshResidentCats();
-    this.addTapFeedback(holder, () => this.showCompanionMessage(), 0.98);
+    this.addTapFeedback(holder, () => {
+      this.options.onPlaySound('click');
+      Tween.stopAllByTarget(holder);
+      tween(holder)
+        .to(0.08, { scale: new Vec3(1.06, 0.94, 1) })
+        .to(0.12, { scale: new Vec3(0.96, 1.08, 1), position: new Vec3(0, centerY + 14, 0) })
+        .to(0.12, { scale: new Vec3(1, 1, 1), position: new Vec3(0, centerY, 0) }, { easing: 'bounceOut' })
+        .start();
+      this.showCompanionMessage();
+    }, 0.98);
     // 对白锚定猫咪头顶，与底部两个模式入口分开；独立节点避免跟随猫咪摇摆。
     this.buildCompanionBubble(centerY + 164);
 
@@ -802,10 +821,24 @@ export class HomeScreen {
     this.companionTitle.enableWrapText = false;
     this.companionTitle.overflow = Label.Overflow.SHRINK;
 
-    this.companionAction = this.label(panel, '', 102, 36, 18, new Color(191, 125, 27));
-    this.companionAction.node.getComponent(UITransform)!.setContentSize(80, 28);
+    const actionPill = new Node('CompanionActionPill');
+    panel.addChild(actionPill);
+    actionPill.setPosition(106, 36);
+    actionPill.addComponent(UITransform).setContentSize(86, 28);
+    const actionGfx = actionPill.addComponent(Graphics);
+    actionGfx.fillColor = new Color(255, 238, 204);
+    actionGfx.strokeColor = new Color(245, 195, 125);
+    actionGfx.lineWidth = 1.5;
+    actionGfx.roundRect(-43, -14, 86, 28, 14);
+    actionGfx.fill();
+    actionGfx.stroke();
+
+    this.companionAction = this.label(actionPill, '', 0, 0, 16, new Color(184, 74, 10));
+    this.companionAction.node.getComponent(UITransform)!.setContentSize(80, 26);
     this.companionAction.isBold = true;
     this.companionAction.enableWrapText = false;
+    this.companionAction.horizontalAlign = Label.HorizontalAlign.CENTER;
+    this.companionAction.verticalAlign = Label.VerticalAlign.CENTER;
 
     this.companionText = this.label(panel, '', 0, -12, 24, new Color(112, 69, 40));
     this.companionText.node.getComponent(UITransform)!.setContentSize(280, 64);
@@ -1405,9 +1438,38 @@ export class HomeScreen {
     shadowGraphics.ellipse(0, 0, 160, 6);
     shadowGraphics.fill();
 
+    // 左右对称金色星标（矢量绘制），点缀关卡卷轴
+    const starLeft = new Node('BannerStarLeft');
+    banner.addChild(starLeft);
+    starLeft.setPosition(-154, 0);
+    const sgL = starLeft.addComponent(Graphics);
+    sgL.fillColor = new Color(255, 214, 76);
+    sgL.strokeColor = new Color(208, 142, 38);
+    sgL.lineWidth = 1.5;
+    sgL.circle(0, 0, 7.5);
+    sgL.fill();
+    sgL.stroke();
+    sgL.fillColor = Color.WHITE;
+    sgL.circle(-2, 2, 2.2);
+    sgL.fill();
+
+    const starRight = new Node('BannerStarRight');
+    banner.addChild(starRight);
+    starRight.setPosition(154, 0);
+    const sgR = starRight.addComponent(Graphics);
+    sgR.fillColor = new Color(255, 214, 76);
+    sgR.strokeColor = new Color(208, 142, 38);
+    sgR.lineWidth = 1.5;
+    sgR.circle(0, 0, 7.5);
+    sgR.fill();
+    sgR.stroke();
+    sgR.fillColor = Color.WHITE;
+    sgR.circle(-2, 2, 2.2);
+    sgR.fill();
+
     const title = this.label(banner, '', 0, 0, 22, new Color(111, 62, 28));
     title.isBold = true;
-    title.node.getComponent(UITransform)!.setContentSize(320, 32);
+    title.node.getComponent(UITransform)!.setContentSize(280, 32);
     this.homeChapterTitleLabel = title;
     this.refreshChapterBanner();
 
@@ -1440,6 +1502,24 @@ export class HomeScreen {
     shadowGraphics2.fillColor = new Color(92, 54, 22, 80);
     shadowGraphics2.ellipse(0, 0, 165, 14);
     shadowGraphics2.fill();
+
+    const glow = new Node('StartGlow');
+    start.addChild(glow);
+    glow.setPosition(0, 0);
+    glow.addComponent(UITransform).setContentSize(448, 138);
+    const glowGraphics = glow.addComponent(Graphics);
+    glowGraphics.fillColor = new Color(255, 215, 60, 36);
+    glowGraphics.roundRect(-224, -69, 448, 138, 38);
+    glowGraphics.fill();
+    const glowOpacity = glow.addComponent(UIOpacity);
+    glowOpacity.opacity = 180;
+    tween(glowOpacity)
+      .repeatForever(
+        tween()
+          .to(0.8, { opacity: 255 }, { easing: 'sineInOut' })
+          .to(0.8, { opacity: 80 }, { easing: 'sineInOut' }),
+      )
+      .start();
 
     const inner = new Node('StartInner');
     start.addChild(inner);
@@ -2195,5 +2275,120 @@ export class HomeScreen {
       // 弹窗自毁（点遮罩/关闭钮）时同步清引用，避免残留已销毁组件
       onClose: () => { this.settingsPopup = null; },
     });
+  }
+
+  /**
+   * 微信生态轻量收藏指引气泡：右上角胶囊下方提示「添加到我的小程序」
+   * 仅微信小游戏环境且当日未手动关闭过时展示，自动浮现并微浮动，6秒后优雅淡出。
+   */
+  private buildWeChatFavoriteGuide(top: number) {
+    const isWeChat = typeof (globalThis as any).wx !== 'undefined';
+    if (!isWeChat || !this.homeUI) return;
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const lastClosed = sys.localStorage.getItem('cat-world-wechat-fav-closed-date');
+      if (lastClosed === today) return;
+    } catch {
+      // 本地存储异常兜底
+    }
+
+    const hudY = belowWeChatCapsule(top, 18);
+    const bubble = new Node('WeChatFavoriteBubble');
+    this.homeUI.addChild(bubble);
+    bubble.setPosition(180, hudY - 38);
+    bubble.addComponent(UITransform).setContentSize(308, 64);
+    const opacity = bubble.addComponent(UIOpacity);
+    opacity.opacity = 0;
+    bubble.setScale(new Vec3(0.68, 0.68, 1));
+
+    // 绘制气泡主体与小尖角（尖角对齐右上角胶囊中心）
+    const g = bubble.addComponent(Graphics);
+    // 柔和微投影
+    g.fillColor = new Color(72, 45, 20, 42);
+    g.roundRect(-154, -34, 308, 64, 18);
+    g.fill();
+    // 奶油原木风底色
+    g.fillColor = new Color(255, 250, 236, 252);
+    g.strokeColor = new Color(236, 198, 142, 255);
+    g.lineWidth = 2.5;
+    g.roundRect(-154, -32, 308, 64, 18);
+    g.fill();
+    g.stroke();
+    // 顶部小尖角
+    g.fillColor = new Color(255, 250, 236, 252);
+    g.moveTo(96, 32);
+    g.lineTo(108, 44);
+    g.lineTo(120, 32);
+    g.close();
+    g.fill();
+    g.stroke();
+
+    // 左侧小肉垫图标
+    const icon = new Node('FavIcon');
+    bubble.addChild(icon);
+    icon.setPosition(-124, 0);
+    const ig = icon.addComponent(Graphics);
+    ig.fillColor = new Color(255, 175, 110, 255);
+    ig.roundRect(-8, -7, 16, 12, 4);
+    ig.circle(-6, 7, 3);
+    ig.circle(0, 9, 3.5);
+    ig.circle(6, 7, 3);
+    ig.fill();
+
+    // 文案层
+    const title = this.label(bubble, '添加到「我的小程序」', -10, 11, 16, new Color(111, 62, 28));
+    title.isBold = true;
+    title.horizontalAlign = Label.HorizontalAlign.LEFT;
+    const sub = this.label(bubble, '点击右上角 ··· 随时回家撸猫 🐾', -10, -11, 13, new Color(145, 102, 65));
+    sub.horizontalAlign = Label.HorizontalAlign.LEFT;
+
+    // 右侧优雅关闭按钮
+    const closeBtn = new Node('FavClose');
+    bubble.addChild(closeBtn);
+    closeBtn.setPosition(130, 0);
+    closeBtn.addComponent(UITransform).setContentSize(40, 40);
+    const cg = closeBtn.addComponent(Graphics);
+    cg.lineWidth = 2.2;
+    cg.strokeColor = new Color(175, 135, 100, 200);
+    cg.moveTo(-6, 6);
+    cg.lineTo(6, -6);
+    cg.moveTo(6, 6);
+    cg.lineTo(-6, -6);
+    cg.stroke();
+    const btnComp = closeBtn.addComponent(Button);
+    ensureButtonControl(btnComp);
+    btnComp.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        sys.localStorage.setItem('cat-world-wechat-fav-closed-date', today);
+      } catch {}
+      Tween.stopAllByTarget(bubble);
+      Tween.stopAllByTarget(opacity);
+      tween(opacity).to(0.18, { opacity: 0 }).call(() => {
+        if (bubble.isValid) bubble.destroy();
+      }).start();
+    });
+
+    // 优雅缓动入场与浮动
+    tween(bubble)
+      .delay(1.2)
+      .to(0.3, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .repeatForever(
+        tween()
+          .to(1.1, { position: new Vec3(180, hudY - 35, 0) }, { easing: 'sineInOut' })
+          .to(1.1, { position: new Vec3(180, hudY - 41, 0) }, { easing: 'sineInOut' }),
+      )
+      .start();
+
+    tween(opacity)
+      .delay(1.2)
+      .to(0.22, { opacity: 255 })
+      .delay(6.0)
+      .to(0.32, { opacity: 0 })
+      .call(() => {
+        if (bubble.isValid) bubble.destroy();
+      })
+      .start();
   }
 }

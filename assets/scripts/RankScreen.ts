@@ -1,6 +1,6 @@
 import { SettlementButton } from './SettlementButton';
 import { ensureButtonControl } from './Theme';
-import { Button, Color, Graphics, Label, Mask, Node, ScrollView, Sprite, UITransform, view } from 'cc';
+import { Button, Color, Graphics, Label, Mask, Node, ScrollView, Sprite, tween, UITransform, Vec3, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { LeaderboardData, LeaderboardEntry, LeaderboardTab } from './LeaderboardService';
@@ -222,6 +222,7 @@ export class RankScreen {
     if (!this.active || !this.listContent || !this.scrollView || !this.rankUI) return;
     const token = ++this.loadToken;
     const tab = this.currentTab;
+    let rendering = false;
     // 重进页面或切换页签时先回到顶部，避免拉取期间停留在上次的滚动位置
     this.scrollView.scrollToTop(0, false);
     if (this.retryButton) this.retryButton.active = false;
@@ -234,15 +235,16 @@ export class RankScreen {
     this.statusCaption!.node.active = true;
     this.options.fetchEntries(tab).then(data => {
       if (token !== this.loadToken || !this.rankUI || !this.active || data.tab !== this.currentTab) return;
+      rendering = true;
       this.renderList(data);
     }).catch(error => {
-      console.error('[CatWorld] Failed to load rank list', error);
+      console.error(rendering ? '[CatWorld] Failed to render rank list' : '[CatWorld] Failed to load rank list', error);
       if (token !== this.loadToken || !this.rankUI || !this.active) return;
       // 拉取失败只展示错误提示；不要走空列表渲染，否则「还没有人上榜」会和报错同屏矛盾
       this.listContent!.destroyAllChildren();
       this.emptyState!.active = false;
       this.listContent!.parent!.active = false;
-      this.statusCaption!.string = '排行榜加载失败，请点击重试';
+      this.statusCaption!.string = rendering ? '排行榜显示失败，请点击重试' : '排行榜加载失败，请点击重试';
       this.statusCaption!.node.active = true;
       this.selfRankLabel!.string = '--';
       this.selfCaptionLabel!.string = '名次暂未读取成功';
@@ -315,11 +317,20 @@ export class RankScreen {
     this.listContent!.addChild(row);
     row.setPosition(0, y);
     row.addComponent(UITransform).setContentSize(ROW_WIDTH, ROW_HEIGHT);
-    this.drawRowCard(row, entry.isSelf);
-
     const rank = entry.rank || index + 1;
+    this.drawRowCard(row, entry.isSelf, rank);
+
     if (rank <= 3) {
-      this.image(row, this.medalPathForRank(rank), RANK_MEDAL_X, 2, 96, 95);
+      const medal = this.image(row, this.medalPathForRank(rank), RANK_MEDAL_X, 2, 96, 95);
+      if (rank === 1) {
+        tween(medal)
+          .repeatForever(
+            tween()
+              .to(1.1, { scale: new Vec3(1.05, 1.05, 1) }, { easing: 'sineInOut' })
+              .to(1.1, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+          )
+          .start();
+      }
     } else {
       this.image(row, 'rank/badge_wood', RANK_MEDAL_X, 2, 78, 79);
       const rankText = this.label(row, `${rank}`, RANK_MEDAL_X, 2, 24, new Color(255, 248, 226));
@@ -344,17 +355,49 @@ export class RankScreen {
     score.node.getComponent(UITransform)!.setContentSize(SCORE_BAR_WIDTH - 16, 34);
   }
 
-  private drawRowCard(parent: Node, isSelf: boolean) {
+  private drawRowCard(parent: Node, isSelf: boolean, rank: number) {
     const card = new Node('RowCard');
     parent.addChild(card);
     card.addComponent(UITransform).setContentSize(ROW_WIDTH, ROW_HEIGHT);
     const graphics = card.addComponent(Graphics);
-    graphics.lineWidth = isSelf ? 4 : 3;
-    graphics.strokeColor = isSelf ? new Color(243, 177, 53) : new Color(235, 205, 158);
-    graphics.fillColor = isSelf ? new Color(255, 233, 148) : new Color(255, 248, 226);
+    if (isSelf) {
+      graphics.lineWidth = 4;
+      graphics.strokeColor = new Color(243, 177, 53);
+      graphics.fillColor = new Color(255, 233, 148);
+    } else if (rank === 1) {
+      graphics.lineWidth = 4;
+      graphics.strokeColor = new Color(245, 175, 40);
+      graphics.fillColor = new Color(255, 245, 212);
+    } else if (rank === 2) {
+      graphics.lineWidth = 3;
+      graphics.strokeColor = new Color(190, 202, 216);
+      graphics.fillColor = new Color(252, 250, 246);
+    } else if (rank === 3) {
+      graphics.lineWidth = 3;
+      graphics.strokeColor = new Color(220, 168, 126);
+      graphics.fillColor = new Color(255, 247, 236);
+    } else {
+      graphics.lineWidth = 3;
+      graphics.strokeColor = new Color(235, 205, 158);
+      graphics.fillColor = new Color(255, 248, 226);
+    }
     graphics.roundRect(-ROW_WIDTH / 2, -ROW_HEIGHT / 2, ROW_WIDTH, ROW_HEIGHT, 26);
     graphics.fill();
     graphics.stroke();
+
+    // 前三名与玩家自身：增加内圈微高光细线，营造精致金属浮雕感
+    if (rank <= 3 || isSelf) {
+      graphics.lineWidth = 1.2;
+      graphics.strokeColor = rank === 1
+        ? new Color(255, 255, 255, 160)
+        : rank === 2
+          ? new Color(255, 255, 255, 200)
+          : rank === 3
+            ? new Color(255, 255, 255, 140)
+            : new Color(255, 255, 255, 150);
+      graphics.roundRect(-ROW_WIDTH / 2 + 2.5, -ROW_HEIGHT / 2 + 2.5, ROW_WIDTH - 5, ROW_HEIGHT - 5, 23.5);
+      graphics.stroke();
+    }
   }
 
   private drawScoreBar(parent: Node, x: number) {

@@ -17,7 +17,7 @@ import {
 } from 'cc';
 import { GameMode, TrackEventName, TrackProps } from './Analytics';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
-import { AudioEffect } from './AudioManager';
+import { AudioEffect, VibrateIntensity } from './AudioManager';
 import { BoardTutorial } from './BoardTutorial';
 import { ComboTracker } from './ComboTracker';
 import { getCatDefinition, getCatSkillChargeRequired, getCatSkillConfig } from './GameContent';
@@ -50,6 +50,8 @@ type Tile = {
   item: Node;
   blockedOverlay: Node;
   targetOverlay: Node;
+  goalBadge?: Node;
+  matchReadyOverlay?: Node;
   // 遮挡判定用的几何体。牌创建后 width/height/boardPosition/boardAngle 不再变化，
   // 缓存下来可省掉每次点击上万个临时对象分配（overlapsGeometry 只读不写）。
   geometry: TileGeometry;
@@ -207,7 +209,7 @@ export interface GameScreenOptions {
   onCatSkillCharge: (id: CatId, charge: number) => void;
   onCatSkillItem: (id: ItemId) => void;
   onPlaySound: (effect: AudioEffect) => void;
-  onVibrate: () => void;
+  onVibrate: (intensity?: VibrateIntensity) => void;
   onPerformance: (run: PlayerRun) => void;
   onAdFunnel?: (event: {
     level: number;
@@ -273,10 +275,15 @@ export class GameScreen {
   private trayFlightLayer!: Node;
   private trayTiles: Tile[] = [];
   private trayCapacity: number;
+  private trayDangerNode: Node | null = null;
+  private trayDangerOpacity: UIOpacity | null = null;
+  private trayDangerTween: Tween<UIOpacity> | null = null;
+  private wasTrayDanger = false;
   private pendingTrayAnimations = 0;
   private trayLayoutVersion = 0;
   private extraTraySlot = false;
   private gameOver = false;
+  private pendingRevive = false;
   private destroyed = false;
   private coins: number;
   private targetLabel!: Label;
@@ -314,6 +321,10 @@ export class GameScreen {
   private comboBadgeSprite: Sprite | null = null;
   private comboFeedbackOpacity: UIOpacity | null = null;
   private comboFeedbackGlow: Graphics | null = null;
+  private comboTimerBarNode: Node | null = null;
+  private comboTimerFillGfx: Graphics | null = null;
+  private readonly comboTimerProgress = { value: 1 };
+  private comboTimerTween: Tween<object> | null = null;
   private readonly comboParticles = new Set<Node>();
   private readonly comboParticleMotions = new Set<object>();
   private performanceReported = false;
@@ -404,7 +415,8 @@ export class GameScreen {
 
   createCheckpoint(): GameRunCheckpoint | null | undefined {
     if (!this.playStarted || this.destroyed || this.boardIntroActive || !this.checkpointReady) return undefined;
-    if (this.gameOver) return null;
+    // 失败后的复活选择仍属于未结束对局；恢复满槽快照时会重新展示选择。
+    if (this.gameOver && !this.pendingRevive) return null;
     const geometry = (tile: Tile) => ({ ...tile.geometry, layer: tile.layer, kind: tile.kind });
     return {
       version: 1, mode: this.playMode(), level: this.options.level,
@@ -483,6 +495,13 @@ export class GameScreen {
     this.options.onSaveRun?.();
   }
 
+  private resumeRunClock() {
+    if (!this.pausedAt) return;
+    this.startedAt += Math.max(0, Date.now() - this.pausedAt);
+    this.endlessDirector?.markStarted(this.startedAt);
+    this.pausedAt = 0;
+  }
+
   showResumePrompt() {
     if (!this.pausedAt || this.destroyed || this.gameOver || this.resumeOverlay) return;
     const overlay = new Node('ResumeOverlay');
@@ -509,10 +528,7 @@ export class GameScreen {
     const button = buttonNode.addComponent(Button);
     ensureButtonControl(button);
     buttonNode.on(Button.EventType.CLICK, () => {
-      const elapsed = Date.now() - this.pausedAt;
-      this.startedAt += elapsed;
-      this.endlessDirector?.markStarted(this.startedAt);
-      this.pausedAt = 0;
+      this.resumeRunClock();
       overlay.destroy();
       this.resumeOverlay = null;
     });
@@ -590,7 +606,7 @@ export class GameScreen {
     this.boardIntroActive = false;
     this.hidePreparingHint();
     // 加载等待不计入通关用时，与第一次开打时棋盘已就绪对齐。
-    this.startedAt = Date.now();
+    this.startedAt = this.pausedAt || Date.now();
     this.beginBoardIntro();
   }
 
@@ -668,18 +684,26 @@ export class GameScreen {
       goalTitle.node.getComponent(UITransform)!.setContentSize(185, 43);
       const collectGoal = this.levelCollectGoal();
       if (collectGoal) {
-        // 底图左右各有爪印装饰：内容收在中间约 220px，避免和爪印重叠。
+        // 底图左右各有爪印装饰：内容收在中间约 236px，内嵌精致曲奇羊皮纸胶囊底板
         this.collectGoalHud = new Node('CollectGoalHud');
         goal.addChild(this.collectGoalHud);
         this.collectGoalHud.setPosition(0, -12);
-        this.collectGoalHud.addComponent(UITransform).setContentSize(220, 44);
-        this.image(this.collectGoalHud, this.itemTilePath(collectGoal.kind), -78, 0, 36, 36);
+        this.collectGoalHud.addComponent(UITransform).setContentSize(236, 44);
+        const goalPill = this.collectGoalHud.addComponent(Graphics);
+        goalPill.fillColor = new Color(255, 251, 240, 220);
+        goalPill.strokeColor = new Color(228, 192, 142, 230);
+        goalPill.lineWidth = 2;
+        goalPill.roundRect(-118, -20, 236, 40, 14);
+        goalPill.fill();
+        goalPill.stroke();
+
+        this.image(this.collectGoalHud, this.itemTilePath(collectGoal.kind), -82, 0, 34, 34);
         const nameText = this.label(
           this.collectGoalHud,
           this.itemNames[collectGoal.kind] || '指定元素',
-          -18,
+          -22,
           0,
-          22,
+          21,
           new Color(112, 69, 40),
         );
         nameText.isBold = true;
@@ -687,11 +711,11 @@ export class GameScreen {
         nameText.enableWrapText = false;
         nameText.verticalAlign = Label.VerticalAlign.CENTER;
         nameText.horizontalAlign = Label.HorizontalAlign.CENTER;
-        nameText.node.getComponent(UITransform)!.setContentSize(72, 36);
+        nameText.node.getComponent(UITransform)!.setContentSize(76, 36);
         this.collectGoalProgressLabel = this.label(
           this.collectGoalHud,
           `0/${collectGoal.count}`,
-          62,
+          58,
           0,
           24,
           new Color(111, 62, 28),
@@ -966,6 +990,37 @@ export class GameScreen {
   private buildTray() {
     const firstSlotX = this.traySlotX(0);
     const lastSlotX = this.traySlotX(this.baseTraySlots);
+
+    // 收集槽危险预警底框（濒临满槽时柔和红橘色呼吸脉冲）
+    const alertNode = new Node('TrayDangerAlert');
+    this.trayLayer.addChild(alertNode);
+    alertNode.setSiblingIndex(0);
+    const alertWidth = (this.baseTraySlots + 0.3) * this.traySlotSpacing;
+    const alertHeight = this.traySlotHeight + 20;
+    alertNode.addComponent(UITransform).setContentSize(alertWidth, alertHeight);
+    const alertCenterX = (firstSlotX + this.traySlotX(this.baseTraySlots - 1)) / 2;
+    alertNode.setPosition(alertCenterX, 0);
+
+    const alertGraphics = alertNode.addComponent(Graphics);
+    alertGraphics.strokeColor = new Color(244, 73, 105, 235);
+    alertGraphics.lineWidth = 4;
+    alertGraphics.fillColor = new Color(244, 73, 105, 32);
+    alertGraphics.roundRect(
+      -alertWidth / 2,
+      -alertHeight / 2,
+      alertWidth,
+      alertHeight,
+      20,
+    );
+    alertGraphics.fill();
+    alertGraphics.stroke();
+
+    const opacity = alertNode.addComponent(UIOpacity);
+    opacity.opacity = 0;
+    this.trayDangerNode = alertNode;
+    this.trayDangerOpacity = opacity;
+    this.trayDangerNode.active = false;
+
     this.image(this.trayLayer, this.toolPath(6), firstSlotX - 72, 0, 72, 126);
     this.image(this.trayLayer, this.toolPath(7), lastSlotX + 72, 0, 72, 126);
 
@@ -987,6 +1042,107 @@ export class GameScreen {
       this.traySlotWidth,
       this.traySlotHeight,
     );
+  }
+
+  private updateTrayDangerAlert() {
+    if (!this.trayDangerNode || !this.trayDangerOpacity || this.destroyed) return;
+    const isDanger = !this.gameOver && this.trayTiles.length >= this.trayCapacity - 1;
+    const wasDanger = this.wasTrayDanger;
+    this.wasTrayDanger = isDanger;
+
+    if (isDanger) {
+      if (!wasDanger) {
+        this.options.onVibrate?.('medium');
+        if (this.trayLayer?.isValid) {
+          const curY = this.trayLayer.position.y;
+          tween(this.trayLayer)
+            .to(0.04, { position: new Vec3(-3, curY, 0) })
+            .to(0.04, { position: new Vec3(3, curY, 0) })
+            .to(0.04, { position: new Vec3(-2, curY, 0) })
+            .to(0.04, { position: new Vec3(0, curY, 0) })
+            .start();
+        }
+      }
+      if (!this.trayDangerNode.active) {
+        this.trayDangerNode.active = true;
+        this.trayDangerOpacity.opacity = 80;
+        if (this.trayDangerTween) {
+          this.trayDangerTween.stop();
+          this.tweenTargets.delete(this.trayDangerOpacity);
+        }
+        this.trayDangerTween = tween(this.trayDangerOpacity)
+          .repeatForever(
+            tween()
+              .to(0.42, { opacity: 235 }, { easing: 'sineInOut' })
+              .to(0.42, { opacity: 50 }, { easing: 'sineInOut' }),
+          )
+          .start();
+        this.tweenTargets.add(this.trayDangerOpacity);
+      }
+    } else {
+      if (this.trayDangerTween) {
+        this.trayDangerTween.stop();
+        this.trayDangerTween = null;
+        this.tweenTargets.delete(this.trayDangerOpacity);
+      }
+      if (this.trayDangerNode.active) {
+        tween(this.trayDangerOpacity)
+          .to(0.18, { opacity: 0 })
+          .call(() => {
+            if (this.trayDangerNode?.isValid) {
+              this.trayDangerNode.active = false;
+            }
+          })
+          .start();
+      }
+      if (wasDanger && !this.gameOver && this.trayTiles.length < this.trayCapacity - 1) {
+        this.showDangerRelievedFeedback();
+      }
+    }
+  }
+
+  private showDangerRelievedFeedback() {
+    this.options.onVibrate?.('light');
+    if (this.destroyed || !this.trayLayer?.isValid) return;
+    const banner = new Node('DangerRelievedBanner');
+    this.trayLayer.addChild(banner);
+    banner.setPosition(0, 68);
+    banner.addComponent(UITransform).setContentSize(180, 36);
+
+    const bg = banner.addComponent(Graphics);
+    bg.fillColor = new Color(235, 252, 238, 245);
+    bg.strokeColor = new Color(112, 192, 126, 255);
+    bg.lineWidth = 2;
+    bg.roundRect(-80, -17, 160, 34, 14);
+    bg.fill();
+    bg.stroke();
+
+    const label = this.label(banner, '🌿 危机解除 🐾', 0, -1, 16, new Color(48, 122, 64));
+    label.isBold = true;
+
+    const opacity = banner.addComponent(UIOpacity);
+    opacity.opacity = 0;
+    banner.setScale(new Vec3(0.7, 0.7, 1));
+    this.tweenTargets.add(banner);
+    this.tweenTargets.add(opacity);
+
+    tween(banner)
+      .to(0.16, { scale: new Vec3(1.08, 1.08, 1) }, { easing: 'backOut' })
+      .to(0.1, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
+      .delay(0.45)
+      .to(0.24, { position: new Vec3(0, 88, 0) }, { easing: 'quadIn' })
+      .call(() => {
+        this.tweenTargets.delete(banner);
+        this.tweenTargets.delete(opacity);
+        if (banner.isValid) banner.destroy();
+      })
+      .start();
+
+    tween(opacity)
+      .to(0.12, { opacity: 255 })
+      .delay(0.5)
+      .to(0.22, { opacity: 0 }, { easing: 'quadIn' })
+      .start();
   }
 
   private showPreparingHint() {
@@ -1272,6 +1428,20 @@ export class GameScreen {
     node.angle = angle;
     node.setSiblingIndex(this.boardLayer.children.length - 1);
     node.addComponent(UITransform).setContentSize(placement.width, placement.height);
+    const shadowNode = new Node('CardShadow');
+    node.addChild(shadowNode);
+    shadowNode.setPosition(0, -4);
+    shadowNode.addComponent(UITransform).setContentSize(placement.width, placement.height);
+    const shadowGraphics = shadowNode.addComponent(Graphics);
+    shadowGraphics.fillColor = new Color(52, 28, 12, 45);
+    shadowGraphics.roundRect(
+      -placement.width / 2 + 2,
+      -placement.height / 2 + 2,
+      placement.width - 4,
+      placement.height - 4,
+      18,
+    );
+    shadowGraphics.fill();
     const card = this.image(node, this.gamePath(2), 0, 0, placement.width, placement.height);
     card.name = 'Card';
     const item = this.image(node, this.itemTilePath(kind), 0, 5, 71, 71);
@@ -1305,6 +1475,52 @@ export class GameScreen {
     );
     targetGraphics.stroke();
     targetOverlay.active = false;
+
+    // 目标收集牌角标：若属于本关收集目标牌，在暴露时点亮金色徽章
+    const goalBadge = new Node('GoalBadge');
+    node.addChild(goalBadge);
+    const badgeSize = 22;
+    goalBadge.setPosition(placement.width / 2 - 14, placement.height / 2 - 14);
+    goalBadge.addComponent(UITransform).setContentSize(badgeSize, badgeSize);
+    const badgeGraphics = goalBadge.addComponent(Graphics);
+    badgeGraphics.fillColor = new Color(255, 204, 51, 245);
+    badgeGraphics.strokeColor = new Color(255, 255, 255, 255);
+    badgeGraphics.lineWidth = 2;
+    badgeGraphics.circle(0, 0, badgeSize / 2);
+    badgeGraphics.fill();
+    badgeGraphics.stroke();
+    badgeGraphics.fillColor = new Color(255, 255, 255, 240);
+    badgeGraphics.circle(0, 0, 4);
+    badgeGraphics.fill();
+    goalBadge.active = false;
+
+    // 听牌消除提示高光：当槽内已有一对同种牌时，顶层暴露的第 3 张牌亮起柔和金色呼吸边框
+    const matchReadyOverlay = new Node('MatchReadyOverlay');
+    node.addChild(matchReadyOverlay);
+    matchReadyOverlay.addComponent(UITransform).setContentSize(placement.width, placement.height);
+    const readyGfx = matchReadyOverlay.addComponent(Graphics);
+    readyGfx.strokeColor = new Color(255, 214, 60, 225);
+    readyGfx.lineWidth = 3.5;
+    readyGfx.roundRect(
+      -placement.width / 2 + 3,
+      -placement.height / 2 + 3,
+      placement.width - 6,
+      placement.height - 6,
+      18,
+    );
+    readyGfx.stroke();
+    readyGfx.strokeColor = new Color(255, 255, 255, 160);
+    readyGfx.lineWidth = 1.5;
+    readyGfx.roundRect(
+      -placement.width / 2 + 5,
+      -placement.height / 2 + 5,
+      placement.width - 10,
+      placement.height - 10,
+      16,
+    );
+    readyGfx.stroke();
+    matchReadyOverlay.active = false;
+
     const boardPosition = node.position.clone();
     const tile: Tile = {
       node,
@@ -1322,6 +1538,8 @@ export class GameScreen {
       item,
       blockedOverlay,
       targetOverlay,
+      goalBadge,
+      matchReadyOverlay,
       geometry: {
         x: boardPosition.x,
         y: boardPosition.y,
@@ -1338,17 +1556,58 @@ export class GameScreen {
   }
 
   private refreshBoardTileStates() {
+    const collectGoal = this.levelCollectGoal();
+    const goalRemaining = collectGoal ? Math.max(0, collectGoal.count - this.collectProgress) : 0;
+    // 统计槽位内已有的同种牌数量，大于等于 2 视为“听牌”，棋盘暴露的第 3 张牌激活呼吸高光
+    const trayKindCounts = new Map<number, number>();
+    this.trayTiles.forEach(t => {
+      trayKindCounts.set(t.kind, (trayKindCounts.get(t.kind) || 0) + 1);
+    });
+
     this.boardTiles.forEach(tile => {
       if (!tile.node.isValid) return;
-      // 两个遮罩节点在 makeTile 里创建后就不再增删，直接引用即可，无需字符串查找。
+      // 遮罩与角标节点在 makeTile 里创建后直接引用，无需字符串查找。
       if (!tile.active || tile.inTray || this.boardIntroActive) {
         tile.blockedOverlay.active = false;
         tile.targetOverlay.active = false;
+        if (tile.goalBadge) tile.goalBadge.active = false;
+        if (tile.matchReadyOverlay) {
+          tile.matchReadyOverlay.active = false;
+          Tween.stopAllByTarget(tile.matchReadyOverlay);
+          tile.matchReadyOverlay.setScale(new Vec3(1, 1, 1));
+        }
         return;
       }
       const top = this.isTopTile(tile);
       tile.blockedOverlay.active = !top;
       tile.targetOverlay.active = (this.activeTool === 'hammer' || this.activeTool === 'cat_skill') && top;
+      if (tile.goalBadge) {
+        tile.goalBadge.active = top && collectGoal !== null && tile.kind === collectGoal.kind && goalRemaining > 0;
+      }
+      if (tile.matchReadyOverlay) {
+        const isPairInTray = (trayKindCounts.get(tile.kind) ?? 0) >= 2;
+        const shouldShowReady = top && isPairInTray && !tile.targetOverlay.active;
+        if (shouldShowReady) {
+          if (!tile.matchReadyOverlay.active) {
+            tile.matchReadyOverlay.active = true;
+            tile.matchReadyOverlay.setScale(new Vec3(1, 1, 1));
+            Tween.stopAllByTarget(tile.matchReadyOverlay);
+            tween(tile.matchReadyOverlay)
+              .repeatForever(
+                tween()
+                  .to(0.65, { scale: new Vec3(1.06, 1.06, 1) }, { easing: 'sineInOut' })
+                  .to(0.65, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+              )
+              .start();
+          }
+        } else {
+          if (tile.matchReadyOverlay.active) {
+            tile.matchReadyOverlay.active = false;
+            Tween.stopAllByTarget(tile.matchReadyOverlay);
+            tile.matchReadyOverlay.setScale(new Vec3(1, 1, 1));
+          }
+        }
+      }
     });
     // 教学高亮是「当前暴露牌」的纯函数，棋盘任何变化（收集/道具/放回/补波）都在这里汇聚重算
     this.boardTutorial?.refreshHighlight();
@@ -1357,6 +1616,11 @@ export class GameScreen {
   private onTileTap(tile: Tile) {
     if (this.gameOver || this.boardIntroActive || this.pausedAt) return;
     this.consumeTrialIfNeeded();
+    if (tile.matchReadyOverlay?.active) {
+      tile.matchReadyOverlay.active = false;
+      Tween.stopAllByTarget(tile.matchReadyOverlay);
+      tile.matchReadyOverlay.setScale(new Vec3(1, 1, 1));
+    }
     if (tile.inTray) {
       this.onTrayTileTap(tile);
       return;
@@ -1432,7 +1696,6 @@ export class GameScreen {
     Tween.stopAllByTarget(tile.node);
     tile.node.removeFromParent();
     this.trayFlightLayer.addChild(tile.node);
-    this.refreshBoardTileStates();
     // Preserve the clicked card's screen position when moving it into the tray layer.
     tile.node.setWorldPosition(startWorldPosition);
     const startPosition = tile.node.position.clone();
@@ -1440,7 +1703,15 @@ export class GameScreen {
     const targetPosition = new Vec3(this.traySlotX(slotIndex), 0, 0);
     const startAngle = tile.node.angle;
     tile.node.setScale(new Vec3(1, 1, 1));
+    if (tile.goalBadge) tile.goalBadge.active = false;
+    if (tile.matchReadyOverlay) {
+      tile.matchReadyOverlay.active = false;
+      Tween.stopAllByTarget(tile.matchReadyOverlay);
+      tile.matchReadyOverlay.setScale(new Vec3(1, 1, 1));
+    }
     this.trayTiles.push(tile);
+    this.refreshBoardTileStates();
+    this.updateTrayDangerAlert();
     this.pendingTrayAnimations += 1;
     this.collectedTotal++;
     this.updateTargetLabel();
@@ -1598,12 +1869,13 @@ export class GameScreen {
     if (this.trayTiles.length >= this.trayCapacity - 1) this.nearFailureCount += 1;
     if (group) {
       this.options.onPlaySound('match');
-      this.options.onVibrate();
       const removed = group.slice(0, 3);
       this.trayTiles = this.trayTiles.filter(tile => removed.indexOf(tile) === -1);
+      this.refreshBoardTileStates();
       this.matchCount += 1;
       this.boardTutorial?.notifyMatch();
       const combo = this.comboTracker.registerMatch();
+      this.options.onVibrate(combo >= 2 ? 'heavy' : 'medium');
       if (combo >= 2) this.showComboFeedback(combo);
 
       let pendingMatchAnimations = removed.length + 1;
@@ -1611,11 +1883,22 @@ export class GameScreen {
       const goalDone = this.registerCollectProgress(removed[0]?.kind, removed.length);
       this.addCoins(6);
       this.registerCatProgress('match');
+
+      const avgX = (removed[0].node.position.x + removed[1].node.position.x + removed[2].node.position.x) / 3;
+      const avgY = removed[0].node.position.y;
+      this.createMatchSparks(avgX, avgY);
+
       if (goalDone) {
         removed.forEach(tile => {
           Tween.stopAllByTarget(tile.node);
+          const startX = tile.node.position.x;
+          const startY = tile.node.position.y;
           tween(tile.node)
-            .to(0.14, { scale: new Vec3(0.1, 0.1, 1) }, { easing: 'quadIn' })
+            .to(0.06, { scale: new Vec3(1.12, 1.12, 1) }, { easing: 'sineOut' })
+            .to(0.12, {
+              scale: new Vec3(0.08, 0.08, 1),
+              position: new Vec3(startX * 0.35 + avgX * 0.65, startY + 6, 0),
+            }, { easing: 'quadIn' })
             .call(() => {
               if (tile.node.isValid) tile.node.destroy();
             })
@@ -1636,8 +1919,14 @@ export class GameScreen {
       };
       removed.forEach(tile => {
         Tween.stopAllByTarget(tile.node);
+        const startX = tile.node.position.x;
+        const startY = tile.node.position.y;
         tween(tile.node)
-          .to(0.14, { scale: new Vec3(0.1, 0.1, 1) }, { easing: 'quadIn' })
+          .to(0.06, { scale: new Vec3(1.12, 1.12, 1) }, { easing: 'sineOut' })
+          .to(0.12, {
+            scale: new Vec3(0.08, 0.08, 1),
+            position: new Vec3(startX * 0.35 + avgX * 0.65, startY + 6, 0),
+          }, { easing: 'quadIn' })
           .call(() => {
             if (tile.node.isValid) tile.node.destroy();
             continueAfterMatch();
@@ -1656,6 +1945,44 @@ export class GameScreen {
       if (this.options.endless) this.refillEndlessBoard(true);
       else this.finish(this.hasWonLevel());
     } else if (this.trayTiles.length >= this.trayCapacity) this.finish(false);
+  }
+
+  private createMatchSparks(centerX: number, centerY: number) {
+    if (this.destroyed || !this.trayLayer?.isValid) return;
+    const sparkCount = 8;
+    const colors = [
+      new Color(255, 230, 95),
+      new Color(255, 180, 110),
+      new Color(255, 255, 255),
+      new Color(255, 160, 195),
+    ];
+    for (let i = 0; i < sparkCount; i++) {
+      const spark = new Node(`MatchSpark_${i}`);
+      this.trayLayer.addChild(spark);
+      spark.setPosition(centerX, centerY);
+      spark.addComponent(UITransform).setContentSize(12, 12);
+      const sg = spark.addComponent(Graphics);
+      sg.fillColor = colors[i % colors.length];
+      sg.circle(0, 0, i % 2 === 0 ? 4 : 3);
+      sg.fill();
+
+      const angle = (Math.PI * 2 * i) / sparkCount + (Math.random() - 0.5) * 0.4;
+      const dist = 32 + (i % 3) * 12;
+      const targetPos = new Vec3(
+        centerX + Math.cos(angle) * dist,
+        centerY + Math.sin(angle) * dist + 4,
+        0,
+      );
+
+      this.tweenTargets.add(spark);
+      tween(spark)
+        .to(0.24, { position: targetPos, scale: new Vec3(0.2, 0.2, 1) }, { easing: 'quadOut' })
+        .call(() => {
+          this.tweenTargets.delete(spark);
+          if (spark.isValid) spark.destroy();
+        })
+        .start();
+    }
   }
 
   private buildComboFeedback() {
@@ -1693,6 +2020,36 @@ export class GameScreen {
     this.comboFeedbackLabel = label;
     this.comboFeedbackOpacity = opacity;
     this.comboFeedbackGlow = glow;
+
+    // 连消 2 秒倒计时进度条：居中位于徽章下方，提醒连击时效
+    const timerBarNode = new Node('ComboTimerBar');
+    node.addChild(timerBarNode);
+    timerBarNode.setPosition(0, -96);
+    timerBarNode.addComponent(UITransform).setContentSize(240, 10);
+    const timerBg = timerBarNode.addComponent(Graphics);
+    timerBg.fillColor = new Color(52, 34, 18, 140);
+    timerBg.strokeColor = new Color(255, 230, 160, 160);
+    timerBg.lineWidth = 1.5;
+    timerBg.roundRect(-120, -5, 240, 10, 5);
+    timerBg.fill();
+    timerBg.stroke();
+
+    const timerFillNode = new Node('ComboTimerFill');
+    timerBarNode.addChild(timerFillNode);
+    timerFillNode.addComponent(UITransform).setContentSize(236, 6);
+    const timerFillGfx = timerFillNode.addComponent(Graphics);
+    this.comboTimerFillGfx = timerFillGfx;
+    this.comboTimerBarNode = timerBarNode;
+  }
+
+  private renderComboTimerFill(progress: number, color: Color) {
+    if (!this.comboTimerFillGfx?.node.isValid) return;
+    this.comboTimerFillGfx.clear();
+    const w = Math.max(0, 236 * Math.max(0, Math.min(1, progress)));
+    if (w <= 0) return;
+    this.comboTimerFillGfx.fillColor = new Color(color.r, color.g, color.b, 240);
+    this.comboTimerFillGfx.roundRect(-118, -3, w, 6, 3);
+    this.comboTimerFillGfx.fill();
   }
 
   private showComboFeedback(streak: number) {
@@ -1701,6 +2058,11 @@ export class GameScreen {
     this.clearComboParticles();
     Tween.stopAllByTarget(this.comboFeedbackNode);
     Tween.stopAllByTarget(this.comboFeedbackOpacity);
+    if (this.comboTimerTween) {
+      this.comboTimerTween.stop();
+      this.comboTimerTween = null;
+      this.tweenTargets.delete(this.comboTimerProgress);
+    }
 
     const strongestTier = streak >= 4;
     const color = strongestTier
@@ -1731,6 +2093,17 @@ export class GameScreen {
       this.comboFeedbackGlow.fill();
     }
 
+    this.comboTimerProgress.value = 1;
+    this.renderComboTimerFill(1, color);
+    this.comboTimerTween = tween(this.comboTimerProgress)
+      .to(ComboTracker.WINDOW_MS / 1000, { value: 0 }, {
+        onUpdate: () => {
+          this.renderComboTimerFill(this.comboTimerProgress.value, color);
+        },
+      })
+      .start();
+    this.tweenTargets.add(this.comboTimerProgress);
+
     const particleCount = strongestTier ? 14 : streak === 3 ? 10 : 6;
     for (let index = 0; index < particleCount; index += 1) {
       this.createComboParticle(index, particleCount, color);
@@ -1742,13 +2115,13 @@ export class GameScreen {
     tween(this.comboFeedbackNode)
       .to(0.2, { scale: new Vec3(1.12, 1.12, 1), angle: 3 }, { easing: 'backOut' })
       .to(0.14, { scale: new Vec3(1, 1, 1), angle: 0 }, { easing: 'sineOut' })
-      .delay(0.62)
-      .to(0.2, { scale: new Vec3(0.94, 0.94, 1), angle: -2 }, { easing: 'quadIn' })
+      .delay(1.4)
+      .to(0.24, { scale: new Vec3(0.92, 0.92, 1), angle: -2 }, { easing: 'quadIn' })
       .start();
     tween(this.comboFeedbackOpacity)
       .to(0.1, { opacity: 255 })
-      .delay(0.72)
-      .to(0.24, { opacity: 0 }, { easing: 'quadIn' })
+      .delay(1.5)
+      .to(0.3, { opacity: 0 }, { easing: 'quadIn' })
       .start();
   }
 
@@ -1806,6 +2179,7 @@ export class GameScreen {
   }
 
   private reflowTray(onComplete?: () => void) {
+    this.updateTrayDangerAlert();
     const layoutVersion = ++this.trayLayoutVersion;
     const tiles = this.trayTiles.slice();
     if (tiles.length === 0) {
@@ -1839,6 +2213,8 @@ export class GameScreen {
   private resizeTrayTile(tile: Tile) {
     const node = tile.node;
     node.getComponent(UITransform)!.setContentSize(this.traySlotWidth, this.traySlotHeight);
+    const shadow = node.getChildByName('CardShadow');
+    if (shadow) shadow.active = false;
     tile.card.active = true;
     tile.card.getComponent(UITransform)?.setContentSize(this.traySlotWidth, this.traySlotHeight);
     const cardSprite = tile.card.getComponent(Sprite);
@@ -1851,6 +2227,8 @@ export class GameScreen {
 
   private resizeBoardTile(tile: Tile) {
     tile.node.getComponent(UITransform)!.setContentSize(tile.width, tile.height);
+    const shadow = tile.node.getChildByName('CardShadow');
+    if (shadow) shadow.active = true;
     tile.card.active = true;
     tile.card.getComponent(UITransform)?.setContentSize(tile.width, tile.height);
     const cardSprite = tile.card.getComponent(Sprite);
@@ -1946,7 +2324,7 @@ export class GameScreen {
 
   private refreshEndlessHud() {
     if (!this.endlessHudLabel || !this.endlessDirector) return;
-    const elapsed = this.endlessDirector.elapsedMs();
+    const elapsed = Math.max(0, (this.pausedAt || Date.now()) - this.startedAt);
     this.endlessStage = this.endlessDirector.currentStage().stage;
     this.endlessHudLabel.string = `已消除 ${this.eliminatedCount} · 坚持 ${this.formatEndlessDuration(elapsed)}`;
   }
@@ -2079,7 +2457,7 @@ export class GameScreen {
       new Color(241, 139, 47),
       () => {
         this.closeLeaveConfirm();
-        if (this.options.endless) this.finish(false);
+        if (this.options.endless) this.finish(false, false);
         else {
           this.trackEvent('level_home', { ...this.levelTrackProps(), mid_run: true });
           this.options.onReturnHome();
@@ -2124,9 +2502,16 @@ export class GameScreen {
     this.leaveConfirmNode = null;
   }
 
-  private finish(win: boolean) {
+  private finish(win: boolean, allowRevive = true) {
     if (this.gameOver) return;
+    const freeRevive = !this.options.challenge && !this.options.endless
+      && (this.options.level <= 5 || this.options.levelDefinition?.freeRevive === true);
+    this.pendingRevive = !win && allowRevive && !this.reviveUsed && this.trayTiles.length > 0
+      && (!!this.options.onReviveAd || freeRevive);
+    // 失败弹窗、分享/广告和最终结算都不属于有效操作时间。
+    if (!this.pausedAt) this.pausedAt = Date.now();
     this.gameOver = true;
+    this.updateTrayDangerAlert();
     this.clearToolMode();
     // 把本局累计的技能充能写回存档，换猫/重开都不会丢进度
     if (this.equippedCatId && this.catSkill) {
@@ -2167,7 +2552,7 @@ export class GameScreen {
       }
     }
     this.closeLeaveConfirm();
-    this.trackEvent('level_end', {
+    if (!this.options.endless) this.trackEvent('level_end', {
       ...this.levelTrackProps(),
       result: this.options.endless ? 'endless' : (win ? 'win' : 'fail'),
       duration_ms: (this.pausedAt || Date.now()) - this.startedAt,
@@ -2198,9 +2583,10 @@ export class GameScreen {
       }
     }
     this.options.onPlaySound(this.options.endless || win ? 'win' : 'fail');
-    this.options.onVibrate();
+    this.options.onVibrate(win ? 'heavy' : 'light');
     if (this.options.endless) {
-      this.openEndlessSettlement();
+      if (this.pendingRevive) this.openEndlessReviveChoice();
+      else this.openEndlessSettlement();
       return;
     }
     // 过关固定奖励 3 星：主题 1–5 每章 20 关 × 3 星 = 60 星，正好点亮对应建筑；
@@ -2247,12 +2633,14 @@ export class GameScreen {
       onDoubleRewardAd: this.options.onDoubleRewardAd,
       rewardMode: this.options.rewardMode,
       onTrack: this.options.onTrack,
+      onPlaySound: this.options.onPlaySound,
+      onVibrate: this.options.onVibrate,
       // 复活每局只开放一次；复活后再次失败时不再展示无效按钮。
-      onRevive: win || this.reviveUsed ? undefined : () => this.reviveFromAd(),
+      onRevive: this.pendingRevive ? () => this.reviveFromAd() : undefined,
       onReviveAd: this.options.onReviveAd,
       // 连败中打难关（spike）失败送一次免费复活（不看广告不分享，走同一套清对子逻辑）：
       // 连败 1 次不再取消难关后，需要这个兜底避免难关变成纯劝退点。
-      freeRevive: !win && !this.reviveUsed && !challenge && (this.options.level <= 5 || this.options.levelDefinition?.freeRevive === true),
+      freeRevive: this.pendingRevive && freeRevive,
       hadTrayPair: !win ? failHadPair : undefined,
       onDoubleReward: win ? () => this.doubleRewardFromAd() : undefined,
       share: win
@@ -2302,10 +2690,49 @@ export class GameScreen {
       matchCount: this.matchCount,
     });
     this.coins = this.options.getCoins();
+    this.trackEvent('level_end', {
+      ...this.levelTrackProps(), result: 'endless', duration_ms: durationMs,
+      collected: this.collectedTotal, match_count: this.matchCount,
+      remaining_slots: Math.max(0, this.trayCapacity - this.trayTiles.length),
+      fail_had_pair: this.trayHasPair(), fail_progress: this.failProgressPercent(),
+      revive_used: this.reviveUsed, used_items: Array.from(this.usedTools),
+    });
     return { durationMs, result };
   }
 
+  private openEndlessReviveChoice() {
+    const endless = this.options.endless;
+    if (!endless || !this.pendingRevive) return;
+    this.settlementPopup?.close();
+    const settle = () => {
+      if (!this.gameOver || !this.pendingRevive) return;
+      this.options.onPlaySound('click');
+      this.openEndlessSettlement();
+    };
+    this.settlementPopup = SettlementPopup.open(this.gameUI, this.assets, {
+      win: false,
+      endlessRevive: true,
+      endless: {
+        eliminated: this.eliminatedCount,
+        durationMs: (this.pausedAt || Date.now()) - this.startedAt,
+        stage: this.endlessStage,
+        bestEliminated: endless.bestEliminated,
+        isNewRecord: false,
+      },
+      level: this.options.level, stars: 0, starReward: 0, coinReward: 0, rating: '无尽挑战',
+      onNextLevel: settle, onReplay: settle, onReturnHome: settle,
+      onRevive: () => this.reviveFromAd(), onReviveAd: this.options.onReviveAd,
+      hadTrayPair: this.trayHasPair(), rewardMode: this.options.rewardMode,
+      onTrack: this.options.onTrack, onPlaySound: this.options.onPlaySound,
+      onVibrate: this.options.onVibrate,
+    });
+    this.options.onSaveRun?.();
+    this.trackEvent('page_view', { page_id: 'settlement', ...this.levelTrackProps(), result: 'fail' });
+  }
+
   private openEndlessSettlement() {
+    if (!this.options.endless || this.endlessRecorded) return;
+    this.pendingRevive = false;
     const recorded = this.recordEndlessIfNeeded();
     const endless = this.options.endless;
     if (!endless) return;
@@ -2352,6 +2779,8 @@ export class GameScreen {
       onDoubleRewardAd: result.coins > 0 ? this.options.onDoubleRewardAd : undefined,
       rewardMode: this.options.rewardMode,
       onTrack: this.options.onTrack,
+      onPlaySound: this.options.onPlaySound,
+      onVibrate: this.options.onVibrate,
       onDoubleReward: result.coins > 0 ? () => this.doubleRewardFromAd() : undefined,
       share: result.isNewRecord
         ? (() => {
@@ -2370,7 +2799,7 @@ export class GameScreen {
   }
 
   private reviveFromAd() {
-    if (!this.gameOver || this.reviveUsed || this.trayTiles.length === 0) return;
+    if (this.destroyed || !this.gameOver || !this.pendingRevive || this.reviveUsed || this.trayTiles.length === 0) return;
     const pairKind = this.pickRevivePairKind();
     const pair = pairKind === null
       ? []
@@ -2380,12 +2809,16 @@ export class GameScreen {
       : this.trayTiles.slice(-1);
     if (removed.length === 0) return;
 
-    const freeRevive = !this.options.challenge && (this.options.level <= 5 || this.options.levelDefinition?.freeRevive === true);
+    const freeRevive = !this.options.challenge && !this.options.endless
+      && (this.options.level <= 5 || this.options.levelDefinition?.freeRevive === true);
     this.reviveUsed = true;
+    this.pendingRevive = false;
     this.gameOver = false;
+    this.resumeRunClock();
     this.settlementPopup?.close();
     this.settlementPopup = null;
     this.trayTiles = this.trayTiles.filter(tile => removed.indexOf(tile) === -1);
+    this.updateTrayDangerAlert();
 
     const goal = this.levelCollectGoal();
     const protectGoal = !!goal && removed[0].kind === goal.kind
@@ -2413,7 +2846,7 @@ export class GameScreen {
     this.refreshToolButtons();
     this.options.onSaveRun?.();
     this.options.onPlaySound('match');
-    this.options.onVibrate();
+    this.options.onVibrate('heavy');
     if (!this.options.endless && !this.options.challenge) {
       this.options.onAdFunnel?.({
         level: this.options.level,
@@ -2509,14 +2942,39 @@ export class GameScreen {
     this.gameUI.addChild(buttonNode);
     buttonNode.setPosition(x, y);
     buttonNode.addComponent(UITransform).setContentSize(128, 128);
+
+    // 托盘底座（原木曲奇实体质感，承托道具图标，增强桌面玩具感）
+    const pedestal = new Node('ToolPedestal');
+    buttonNode.addChild(pedestal);
+    pedestal.addComponent(UITransform).setContentSize(96, 96);
+    const pg = pedestal.addComponent(Graphics);
+    // 底部柔和投影
+    pg.fillColor = new Color(92, 54, 22, 55);
+    pg.ellipse(0, -44, 40, 8);
+    pg.fill();
+    // 双层曲奇托盘底板：外层温润奶油原木
+    pg.fillColor = new Color(255, 248, 230);
+    pg.strokeColor = new Color(230, 202, 162);
+    pg.lineWidth = 3;
+    pg.roundRect(-45, -45, 90, 90, 20);
+    pg.fill();
+    pg.stroke();
+    // 内层微凹槽托盘
+    pg.fillColor = new Color(245, 233, 214);
+    pg.strokeColor = new Color(255, 255, 255, 140);
+    pg.lineWidth = 1.5;
+    pg.roundRect(-37, -37, 74, 74, 15);
+    pg.fill();
+    pg.stroke();
+
     const activeFrame = new Node('ActiveFrame');
     buttonNode.addChild(activeFrame);
     activeFrame.addComponent(UITransform).setContentSize(116, 116);
     const activeGraphics = activeFrame.addComponent(Graphics);
-    activeGraphics.fillColor = new Color(255, 224, 108, 72);
+    activeGraphics.fillColor = new Color(255, 224, 108, 68);
     activeGraphics.strokeColor = new Color(255, 224, 108, 245);
     activeGraphics.lineWidth = 5;
-    activeGraphics.roundRect(-58, -58, 116, 116, 20);
+    activeGraphics.roundRect(-58, -58, 116, 116, 22);
     activeGraphics.fill();
     activeGraphics.stroke();
     activeFrame.active = false;
@@ -2581,23 +3039,48 @@ export class GameScreen {
       viewData.button.interactable = (count > 0 || (supplyEnabled && !used))
         && !this.gameOver
         && !this.boardIntroActive;
-      viewData.activeFrame.active = itemId === 'hammer' && this.activeTool === 'hammer';
+      const isActive = itemId === 'hammer' && this.activeTool === 'hammer';
+      const wasActive = viewData.activeFrame.active;
+      viewData.activeFrame.active = isActive;
+      if (isActive && !wasActive) {
+        Tween.stopAllByTarget(viewData.activeFrame);
+        viewData.activeFrame.setScale(new Vec3(1, 1, 1));
+        tween(viewData.activeFrame)
+          .repeatForever(
+            tween()
+              .to(0.48, { scale: new Vec3(1.06, 1.06, 1) }, { easing: 'sineInOut' })
+              .to(0.48, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+          )
+          .start();
+      } else if (!isActive && wasActive) {
+        Tween.stopAllByTarget(viewData.activeFrame);
+        viewData.activeFrame.setScale(new Vec3(1, 1, 1));
+      }
       const sprite = viewData.icon.getComponent(Sprite);
       if (sprite) {
         // 图标永远保持全彩（除非本局已用），避免「置灰 = 不能点」的误解
         sprite.color = used ? new Color(178, 169, 150, 220) : Color.WHITE;
       }
-      // 角标状态：红底数字（有货）/ 金底加号（空了可免费补给）/ 灰底对勾（本局已用）
+      // 角标状态：红底数字（有货）/ 金底加号（空了可免费补给）/ 灰底对勾（本局已用），增加糖果高光
       const badgeGraphics = viewData.badgeGraphics;
       badgeGraphics.clear();
+      // 角标微阴影
+      badgeGraphics.fillColor = new Color(92, 54, 22, 60);
+      badgeGraphics.ellipse(0, -3, 18, 5);
+      badgeGraphics.fill();
+      // 角标圆底
       badgeGraphics.fillColor = used
         ? new Color(205, 197, 180, 235)
         : claimable ? new Color(255, 187, 47) : new Color(190, 59, 51);
       badgeGraphics.strokeColor = Color.WHITE;
-      badgeGraphics.lineWidth = 3;
+      badgeGraphics.lineWidth = 2.5;
       badgeGraphics.circle(0, 0, 20);
       badgeGraphics.fill();
       badgeGraphics.stroke();
+      // 角标微高光
+      badgeGraphics.fillColor = new Color(255, 255, 255, 150);
+      badgeGraphics.circle(-5, 6, 3.2);
+      badgeGraphics.fill();
       // 可补领的「+」角标轻微呼吸，把「还能拿到」的信号顶出来
       Tween.stopAllByTarget(viewData.badgeNode);
       viewData.badgeNode.setScale(new Vec3(1, 1, 1));
@@ -2620,19 +3103,25 @@ export class GameScreen {
   }
 
   private toolNameBadge(parent: Node, name: string, iconHeight: number) {
-    const fontSize = 20;
-    const padding = 8;
-    const badgeWidth = name.length * fontSize + padding * 2;
-    const badgeHeight = fontSize + 8 + padding * 2;
+    const fontSize = 19;
+    const paddingX = 12;
+    const paddingY = 6;
+    const badgeWidth = name.length * fontSize + paddingX * 2;
+    const badgeHeight = fontSize + 6 + paddingY * 2;
     const badge = new Node('ToolNameBadge');
     parent.addChild(badge);
-    badge.setPosition(0, -(iconHeight / 2 + 15 + badgeHeight / 2));
+    badge.setPosition(0, -(iconHeight / 2 + 16 + badgeHeight / 2));
     badge.addComponent(UITransform).setContentSize(badgeWidth, badgeHeight);
     const background = badge.addComponent(Graphics);
-    background.fillColor = new Color(255, 248, 226, 255);
-    background.strokeColor = new Color(235, 205, 158, 255);
-    background.lineWidth = 3;
-    background.roundRect(-badgeWidth / 2, -badgeHeight / 2, badgeWidth, badgeHeight, 8);
+    // 柔和微投影
+    background.fillColor = new Color(92, 54, 22, 50);
+    background.ellipse(0, -badgeHeight / 2, badgeWidth * 0.42, 4);
+    background.fill();
+    // 奶油原木胶囊
+    background.fillColor = new Color(255, 248, 226, 250);
+    background.strokeColor = new Color(230, 200, 155, 255);
+    background.lineWidth = 2.5;
+    background.roundRect(-badgeWidth / 2, -badgeHeight / 2, badgeWidth, badgeHeight, 13);
     background.fill();
     background.stroke();
 
@@ -2642,8 +3131,8 @@ export class GameScreen {
     text.outlineColor = new Color(255, 248, 226, 255);
     text.verticalAlign = Label.VerticalAlign.CENTER;
     text.node.getComponent(UITransform)!.setContentSize(
-      badgeWidth - padding * 2,
-      badgeHeight - padding * 2,
+      badgeWidth - 8,
+      badgeHeight - 6,
     );
   }
 
@@ -3201,7 +3690,8 @@ export class GameScreen {
   }
 
   private addCoins(amount: number) {
-    this.coins += amount;
+    // 猫咪谢礼等入口直接更新 PlayerStore，后续加奖必须从最新余额计算。
+    this.coins = this.options.getCoins() + amount;
     this.options.onCoinsChanged(this.coins);
   }
 

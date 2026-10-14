@@ -86,13 +86,17 @@ export class LeaderboardService {
     return Promise.resolve({ source: 'mock', tab: 'level', entries });
   }
 
-  async ensureProfile(userId: string, name: string) {
-    if (this.isRemoteProfile(userId) && name.trim()) return { userId, name };
+  isSubmitToken(submitToken: string): boolean {
+    return typeof submitToken === 'string' && /^[a-f0-9]{64}$/.test(submitToken);
+  }
+
+  async ensureProfile(userId: string, name: string, submitToken = '') {
+    if (this.isRemoteProfile(userId) && name.trim() && this.isSubmitToken(submitToken)) return { userId, name, submitToken };
     const profile = await this.api.generateProfile();
-    if (!this.isRemoteProfile(profile?.user_id) || !profile.name?.trim()) {
+    if (!this.isRemoteProfile(profile?.user_id) || !profile.name?.trim() || !this.isSubmitToken(profile.submit_token)) {
       throw new Error('排行榜昵称生成失败，请重试');
     }
-    return { userId: profile.user_id, name: profile.name };
+    return { userId: profile.user_id, name: profile.name, submitToken: profile.submit_token };
   }
 
   async fetchBoard(tab: LeaderboardTab, userId: string): Promise<LeaderboardData> {
@@ -105,21 +109,21 @@ export class LeaderboardService {
     };
   }
 
-  submitScore(userId: string, score: Omit<SubmitRankPayload, 'user_id'>) {
-    return this.api.submitRank({ ...score, user_id: userId });
+  submitScore(userId: string, score: Omit<SubmitRankPayload, 'user_id'>, submitToken: string) {
+    return this.api.submitRank({ ...score, user_id: userId }, submitToken);
   }
 
-  submitLevel(userId: string, levelCount: number, stars: number) {
+  submitLevel(userId: string, levelCount: number, stars: number, submitToken: string) {
     this.reportStars(stars);
-    return this.submitScore(userId, { type: 1, level_count: Math.max(0, Math.floor(levelCount)), star_count: Math.max(0, Math.floor(stars)) });
+    return this.submitScore(userId, { type: 1, level_count: Math.max(0, Math.floor(levelCount)), star_count: Math.max(0, Math.floor(stars)) }, submitToken);
   }
 
-  submitEndless(userId: string, clearCount: number, durationMs: number) {
-    return this.submitScore(userId, { type: 2, clear_count: Math.max(0, Math.floor(clearCount)), duration_ms: Math.max(1, Math.floor(durationMs)) });
+  submitEndless(userId: string, clearCount: number, durationMs: number, submitToken: string) {
+    return this.submitScore(userId, { type: 2, clear_count: Math.max(0, Math.floor(clearCount)), duration_ms: Math.max(1, Math.floor(durationMs)) }, submitToken);
   }
 
-  submitChallenge(userId: string, durationMs: number, date = this.getChallengeDate()) {
-    return this.submitScore(userId, { type: 3, date, duration_ms: Math.max(1, Math.floor(durationMs)) });
+  submitChallenge(userId: string, durationMs: number, submitToken: string, date = this.getChallengeDate()) {
+    return this.submitScore(userId, { type: 3, date, duration_ms: Math.max(1, Math.floor(durationMs)) }, submitToken);
   }
 
   private toEntry(row: RankEntry, tab: LeaderboardTab, userId: string): LeaderboardEntry {

@@ -35,11 +35,15 @@ export interface DailyTaskScreenOptions {
   getShareOffer?: () => ShareOffer | null;
   onShare?: (type: ShareCardType) => void;
   onStartGame: () => void;
+  onStartEndless: () => void;
   onReturnHome: () => void;
 }
 
 type TaskCardView = {
   id: DailyTaskId;
+  titleLabel: Label;
+  descriptionLabel: Label;
+  rewardLabel: Label;
   progressLabel: Label;
   button: Button;
   buttonLabel: Label;
@@ -257,13 +261,17 @@ export class DailyTaskScreen {
         const success = this.options.onClaimTask(id);
         this.toast(success ? '任务奖励已领取' : '完成任务后可以领取奖励');
       } else if (!task.completed) {
-        this.options.onStartGame();
+        if (task.action === 'endless') this.options.onStartEndless();
+        else this.options.onStartGame();
       }
       this.refresh();
     });
 
     this.cardViews.push({
       id,
+      titleLabel: title,
+      descriptionLabel: description,
+      rewardLabel,
       progressLabel,
       button: buttonView.button,
       buttonLabel: buttonView.label,
@@ -315,6 +323,9 @@ export class DailyTaskScreen {
     this.cardViews.forEach(viewData => {
       const task = tasks.find(item => item.id === viewData.id);
       if (!task) return;
+      viewData.titleLabel.string = task.title;
+      viewData.descriptionLabel.string = task.description;
+      viewData.rewardLabel.string = task.rewardText;
       const ratio = Math.min(1, task.progress / task.target);
       viewData.progressLabel.string = `${Math.min(task.progress, task.target)} / ${task.target}`;
       viewData.buttonLabel.string = this.taskButtonText(viewData.id, task);
@@ -576,13 +587,15 @@ export class DailyTaskScreen {
         checkGraphics.lineTo(7, 6);
         checkGraphics.stroke();
       }
-      // 第 7 天终章大奖：金色粗边 + 星光角标，和普通格子拉开层级
+      // 第 7 天终章大奖：金色粗边 + 星光角标 + 大奖标签
       if (day === rewardShort.length) {
         cellGraphics.strokeColor = new Color(214, 151, 38);
         cellGraphics.lineWidth = 4;
         cellGraphics.roundRect(-64, -50, 128, 100, 20);
         cellGraphics.stroke();
         this.image(cell, 'tasks/daily_sparkle_large', -49, 33, 26, 30);
+        const grandTag = this.label(cell, '✨终章大奖', 0, 12, 13, new Color(184, 74, 10));
+        grandTag.isBold = true;
       }
       // 今日可领取的格子轻微呼吸，把视线引到「今天该点的那一格」
       if (current) {
@@ -603,6 +616,15 @@ export class DailyTaskScreen {
     const claimView = this.actionButton(panel, -116, buttonsY, 208, 88, journey.canClaim ? '领取今日奖励' : journey.completed ? '旅程已完成' : '明天再来');
     claimView.button.interactable = journey.canClaim;
     this.setButtonVisual(claimView.background, journey.canClaim);
+    if (journey.canClaim) {
+      tween(claimView.button.node)
+        .repeatForever(
+          tween()
+            .to(0.7, { scale: new Vec3(1.05, 1.05, 1) }, { easing: 'sineInOut' })
+            .to(0.7, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+        )
+        .start();
+    }
     claimView.button.node.on(Button.EventType.CLICK, () => {
       const result = this.options.onClaimCatJourney();
       this.toast(result.ok ? `${result.message}：${result.rewardText ?? ''}` : result.message);

@@ -383,11 +383,61 @@ export class CatDetailScreen {
     button.node.on(Button.EventType.CLICK, () => {
       this.options.onPlaySound('click');
       const result = this.options.onInteract(this.catId, id);
+      if (result.ok) {
+        this.spawnHeartBurst();
+        if (this.portrait?.isValid) {
+          Tween.stopAllByTarget(this.portrait);
+          tween(this.portrait)
+            .to(0.08, { scale: new Vec3(1.08, 0.92, 1) })
+            .to(0.12, { scale: new Vec3(0.95, 1.06, 1) })
+            .to(0.14, { scale: new Vec3(1, 1, 1) }, { easing: 'bounceOut' })
+            .start();
+        }
+      }
       this.toast(result.message);
       this.refresh();
     });
     const opacity = node.addComponent(UIOpacity);
     this.interactionViews.push({ id, node, button, opacity, status });
+  }
+
+  private spawnHeartBurst() {
+    if (!this.portrait?.isValid || !this.detailUI?.isValid) return;
+    const parent = this.portrait.parent || this.detailUI;
+    const basePos = this.portrait.position;
+    for (let i = 0; i < 3; i++) {
+      const heartNode = new Node(`HeartSpark_${i}`);
+      parent.addChild(heartNode);
+      const offsetX = (i - 1) * 36 + (Math.random() - 0.5) * 16;
+      heartNode.setPosition(basePos.x + offsetX, basePos.y + 20);
+      heartNode.addComponent(UITransform).setContentSize(24, 24);
+      const gfx = heartNode.addComponent(Graphics);
+      gfx.fillColor = new Color(255, 105, 140, 240);
+      const r = 6;
+      gfx.circle(-r * 0.7, r * 0.3, r);
+      gfx.circle(r * 0.7, r * 0.3, r);
+      gfx.moveTo(-r * 1.35, 0);
+      gfx.lineTo(0, -r * 1.5);
+      gfx.lineTo(r * 1.35, 0);
+      gfx.close();
+      gfx.fill();
+
+      const opacity = heartNode.addComponent(UIOpacity);
+      opacity.opacity = 240;
+      heartNode.setScale(new Vec3(0.6, 0.6, 1));
+      const targetY = basePos.y + 70 + i * 22;
+      tween(heartNode)
+        .to(0.2, { scale: new Vec3(1.15, 1.15, 1) }, { easing: 'backOut' })
+        .to(0.4, { position: new Vec3(basePos.x + offsetX * 1.4, targetY, 0) }, { easing: 'quadOut' })
+        .start();
+      tween(opacity)
+        .delay(0.25)
+        .to(0.35, { opacity: 0 })
+        .call(() => {
+          if (heartNode.isValid) heartNode.destroy();
+        })
+        .start();
+    }
   }
 
   private refresh() {

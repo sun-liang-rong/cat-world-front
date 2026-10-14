@@ -324,8 +324,20 @@ export class CatCollectionScreen {
       this.options.onPlaySound('click');
       const progress = this.options.getCats()[definition.id];
       const trial = this.trialCatId() === definition.id;
-      if (progress?.unlocked || trial) this.options.onOpenCat(definition.id);
-      else this.toast(definition.unlockHint);
+      if (progress?.unlocked || trial) {
+        this.options.onOpenCat(definition.id);
+      } else {
+        this.toast(definition.unlockHint);
+        // 未解锁防呆反馈：立绘轻微左右摇头晃动（Shake）
+        Tween.stopAllByTarget(portrait);
+        portrait.angle = 0;
+        tween(portrait)
+          .to(0.04, { angle: -3.5 })
+          .to(0.06, { angle: 3.5 })
+          .to(0.05, { angle: -2 })
+          .to(0.04, { angle: 0 })
+          .start();
+      }
     });
 
     this.slotViews.push({
@@ -441,14 +453,21 @@ export class CatCollectionScreen {
 
   private drawPlaque(graphics: Graphics, width: number, height: number, fill: Color, stroke: Color) {
     graphics.clear();
-    graphics.fillColor = new Color(92, 54, 22, 46);
+    // 柔和微投影
+    graphics.fillColor = new Color(92, 54, 22, 50);
     graphics.roundRect(-width / 2 + 3, -height / 2 - 3, width, height, 14);
     graphics.fill();
+    // 主面板
     graphics.fillColor = fill;
     graphics.strokeColor = stroke;
     graphics.lineWidth = 3;
     graphics.roundRect(-width / 2, -height / 2, width, height, 14);
     graphics.fill();
+    graphics.stroke();
+    // 精细内高光描边，营造金属/木质微浮雕
+    graphics.strokeColor = new Color(255, 255, 255, 120);
+    graphics.lineWidth = 1.2;
+    graphics.roundRect(-width / 2 + 2.5, -height / 2 + 2.5, width - 5, height - 5, 11.5);
     graphics.stroke();
   }
 

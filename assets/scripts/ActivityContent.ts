@@ -181,6 +181,7 @@ export function createActivityState(definition: ActivityDefinition, dateKey: str
     points: 0,
     dailyPointDateKey: dateKey,
     dailyDirectPoints: 0,
+    dailyInteractionClaims: 0,
     completedLevelIds: [],
     tasks,
     claimedRewardIds: [],

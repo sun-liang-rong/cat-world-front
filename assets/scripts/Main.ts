@@ -13,9 +13,10 @@ import { ShopScreen } from './ShopScreen';
 import { TownScreen } from './TownScreen';
 import { CatId, BuildingId, TownDailyTaskId } from './PlayerTypes';
 import { LevelSystem } from './level/LevelSystem';
+import { LevelGenerationCancellation } from './level/LevelGenerator';
 import { LevelDefinition } from './level/LevelTypes';
 import { LoadingScreen } from './LoadingScreen';
-import { AudioManager } from './AudioManager';
+import { AudioManager, VibrateIntensity } from './AudioManager';
 import { LeaderboardService } from './LeaderboardService';
 import { ProfileCoordinator } from './ProfileCoordinator';
 import { RankScreen } from './RankScreen';
@@ -82,16 +83,20 @@ export class Main extends Component {
   private nextLevelDefinition: LevelDefinition | null = null;
   private nextLevelPrepareToken = 0;
   private nextLevelPreparing = false;
+  private nextLevelCancellation: LevelGenerationCancellation | null = null;
   private readonly nextLevelReadyWaiters: Array<(definition: LevelDefinition) => void> = [];
   private challengeLevelDefinition: LevelDefinition | null = null;
   private challengePrepareToken = 0;
   private challengePreparing = false;
+  private challengeCancellation: LevelGenerationCancellation | null = null;
   // 备用挑战关卡：当前关卡交付后立刻在后台预生成一份，
   // 让「再玩一次」/ 回到首页再进挑战都能直接换牌，不必等一次完整生成。
   private challengeSpareDefinition: LevelDefinition | null = null;
   private challengeSpareToken = 0;
   private challengeSparePreparing = false;
+  private challengeSpareCancellation: LevelGenerationCancellation | null = null;
   private startingGame = false;
+  private appBackgrounded = false;
   /** 首页本地资源是否存在加载失败（用于进首页后的可见提示）。 */
   private homeLoadFailed = false;
   private readonly loadedScreens = new Set<object>();
@@ -137,13 +142,36 @@ export class Main extends Component {
       is_new_user: this.analytics.isFirstLaunch(),
       has_profile: this.playerStore.hasProfile(),
     });
-    const runtime = globalThis as typeof globalThis & { wx?: { getLaunchOptionsSync?: () => { query?: Record<string, string> } } };
+    const runtime = globalThis as typeof globalThis & {
+      wx?: {
+        getLaunchOptionsSync?: () => { query?: Record<string, string> };
+        showShareMenu?: (options: { withShareTicket?: boolean; menus?: string[] }) => void;
+        onShareAppMessage?: (callback: () => { title: string; query?: string }) => void;
+        onShareTimeline?: (callback: () => { title: string; query?: string }) => void;
+      };
+    };
     if (getAnalyticsPlatform() === 'wechat') {
       const cardType = runtime.wx?.getLaunchOptionsSync?.().query?.share_card;
       if (['level_win', 'town_stage', 'cat_unlock', 'challenge_record', 'endless_record', 'journey_complete', 'campaign_complete'].includes(cardType)) {
         this.analytics.track('share_card_open', { card_type: cardType });
       }
       this.leaderboard.reportStars(this.playerStore.getTotalStarsEarned());
+      try {
+        runtime.wx?.showShareMenu?.({
+          withShareTicket: true,
+          menus: ['shareAppMessage', 'shareTimeline'],
+        });
+        runtime.wx?.onShareAppMessage?.(() => ({
+          title: '快来猫爪星球，一起消除解压建造猫咪小镇！🐱✨',
+          query: 'from=menu_share',
+        }));
+        runtime.wx?.onShareTimeline?.(() => ({
+          title: '猫爪星球奇遇记：治愈三消，陪伴你的猫咪小镇！🐱🏡',
+          query: 'from=timeline_share',
+        }));
+      } catch {
+        // 环境不支持时静默跳过
+      }
     }
     this.levelSystem.seedRuns(this.playerStore.getRecentRuns());
     this.root = new Node('CatTownRoot');
@@ -303,6 +331,7 @@ export class Main extends Component {
     if (this.townScreen) return;
     this.townScreen = new TownScreen(this.root, this.assets, {
       onPlaySound: effect => this.audio.playEffect(effect),
+      onVibrate: intensity => this.audio.vibrate(intensity),
       getStars: () => this.playerStore.getStars(),
       getCoins: () => this.playerStore.getCoins(),
       getBuildings: () => this.playerStore.getBuildingViews(),
@@ -373,6 +402,7 @@ export class Main extends Component {
       getCatJourney: () => this.playerStore.getCatJourneySnapshot(),
       onClaimCatJourney: () => this.playerStore.claimCatJourney(),
       onJourneyOpened: () => this.analytics.track('journey_open'),
+      onStartEndless: () => this.startEndless(),
       getShareOffer: () => this.sharePromoter.buildShareOffer('journey_complete', '分享旅程完成'),
       onShare: type => this.sharePromoter.shareCard(type),
       onStartGame: () => {
@@ -408,6 +438,7 @@ export class Main extends Component {
       getActivity: () => this.playerStore.getActivitySnapshot(),
       onClaimTask: id => this.playerStore.claimActivityTask(id),
       onClaimReward: id => this.playerStore.claimActivityReward(id),
+      onInteractCats: () => this.openCatCollection(),
       onStartGame: () => {
         const run = this.playerStore.getRunCheckpoint();
         if (run?.mode === 'endless') this.startEndless();
@@ -743,6 +774,7 @@ export class Main extends Component {
       if (this.gameScreen?.matchesPreparedLevel(level)) {
         this.homeScreen.setActive(false);
         this.gameScreen.startPlay();
+        this.pauseGameIfBackgrounded();
         this.startingGame = false;
         return;
       }
@@ -814,7 +846,7 @@ export class Main extends Component {
       onCatSkillCharge: (id, charge) => this.playerStore.setCatSkillCharge(id, charge),
       onCatSkillItem: id => this.playerStore.addReward({ items: { [id]: 1 } }),
       onPlaySound: effect => this.audio.playEffect(effect),
-      onVibrate: () => this.audio.vibrate(),
+      onVibrate: intensity => this.audio.vibrate(intensity),
       getMusicEnabled: () => this.audio.getMusicEnabled(),
       getSoundEnabled: () => this.audio.getSoundEnabled(),
       getVibrationEnabled: () => this.audio.getVibrationEnabled(),
@@ -858,6 +890,7 @@ export class Main extends Component {
       deferStart,
     });
     this.gameScreen.loadAndCreate(() => {
+      this.pauseGameIfBackgrounded();
       // 新对局资源以自己为 owner 就绪后，再释放旧对局的独占图片；
       // 同关卡共享的图片由引用计数保护不会销毁，重玩不产生整包重载。
       if (previous) this.assets.releaseOwner(previous);
@@ -966,20 +999,24 @@ export class Main extends Component {
   private prepareChallengeLevel(seed = this.nextChallengeSeed()) {
     if (!this.playerStore.isChallengeUnlocked()) return;
     const token = ++this.challengePrepareToken;
+    const cancellation = { cancelled: false };
+    this.challengeCancellation = cancellation;
     this.challengePreparing = true;
-    this.levelSystem.generator.generateAsync(this.challengeGenerationOptions(seed)).then(definition => {
+    this.levelSystem.generator.generateAsync(this.challengeGenerationOptions(seed), cancellation).then(definition => {
       if (!this.node.isValid || token !== this.challengePrepareToken) return;
       this.challengePreparing = false;
+      this.challengeCancellation = null;
       this.challengeLevelDefinition = definition;
       this.gameScreen?.applyLevelDefinition(definition);
       // 顺手预生成一份备用关卡，供「再玩一次」直接换牌，
       // 避免每次重玩都要等一次完整的 48 次候选搜索（实测 108ms，低端机 0.5~1.8s）。
       this.prepareChallengeSpare();
     }).catch(error => {
-      if (error?.name === 'AsyncGenerationCancelledError') return;
-      console.error('[CatWorld] Failed to prepare challenge level', error);
       if (!this.node.isValid || token !== this.challengePrepareToken) return;
       this.challengePreparing = false;
+      this.challengeCancellation = null;
+      if (error?.name === 'AsyncGenerationCancelledError') return;
+      console.error('[CatWorld] Failed to prepare challenge level', error);
       if (this.gameScreen && !this.challengeLevelDefinition) {
         this.returnHomeFromGame();
         Toast.show(this.root, '超萌挑战准备失败，请稍后再试');
@@ -992,18 +1029,22 @@ export class Main extends Component {
   private prepareChallengeSpare() {
     if (!this.node.isValid || this.challengeSpareDefinition || this.challengeSparePreparing) return;
     const token = ++this.challengeSpareToken;
+    const cancellation = { cancelled: false };
+    this.challengeSpareCancellation = cancellation;
     this.challengeSparePreparing = true;
-    this.levelSystem.generator.generateAsync(this.challengeGenerationOptions(this.nextChallengeSeed()))
+    this.levelSystem.generator.generateAsync(this.challengeGenerationOptions(this.nextChallengeSeed()), cancellation)
       .then(definition => {
         if (!this.node.isValid || token !== this.challengeSpareToken) return;
         this.challengeSparePreparing = false;
+        this.challengeSpareCancellation = null;
         this.challengeSpareDefinition = definition;
       })
       .catch(error => {
-        if (error?.name === 'AsyncGenerationCancelledError') return;
-        console.error('[CatWorld] Failed to prepare challenge spare', error);
         if (!this.node.isValid || token !== this.challengeSpareToken) return;
         this.challengeSparePreparing = false;
+        this.challengeSpareCancellation = null;
+        if (error?.name === 'AsyncGenerationCancelledError') return;
+        console.error('[CatWorld] Failed to prepare challenge spare', error);
       });
   }
 
@@ -1042,7 +1083,7 @@ export class Main extends Component {
       onCatSkillCharge: (id, charge) => this.playerStore.setCatSkillCharge(id, charge),
       onCatSkillItem: id => this.playerStore.addReward({ items: { [id]: 1 } }),
       onPlaySound: effect => this.audio.playEffect(effect),
-      onVibrate: () => this.audio.vibrate(),
+      onVibrate: intensity => this.audio.vibrate(intensity),
       getMusicEnabled: () => this.audio.getMusicEnabled(),
       getSoundEnabled: () => this.audio.getSoundEnabled(),
       getVibrationEnabled: () => this.audio.getVibrationEnabled(),
@@ -1061,6 +1102,7 @@ export class Main extends Component {
       onShare: type => this.sharePromoter.shareCard(type),
     });
     this.gameScreen.loadAndCreate(() => {
+      this.pauseGameIfBackgrounded();
       if (previous) this.assets.releaseOwner(previous);
       onReady?.();
     });
@@ -1118,7 +1160,7 @@ export class Main extends Component {
       onCatSkillCharge: (id, charge) => this.playerStore.setCatSkillCharge(id, charge),
       onCatSkillItem: id => this.playerStore.addReward({ items: { [id]: 1 } }),
       onPlaySound: effect => this.audio.playEffect(effect),
-      onVibrate: () => this.audio.vibrate(),
+      onVibrate: intensity => this.audio.vibrate(intensity),
       getMusicEnabled: () => this.audio.getMusicEnabled(),
       getSoundEnabled: () => this.audio.getSoundEnabled(),
       getVibrationEnabled: () => this.audio.getVibrationEnabled(),
@@ -1130,6 +1172,7 @@ export class Main extends Component {
       onReturnHome: () => this.returnHomeFromGame(),
       onReplay: () => this.replayEndless(),
       rewardMode: this.rewardedAd.mode,
+      onReviveAd: this.rewardedAd.isAvailable() ? () => this.watchReward('revive') : undefined,
       onDoubleRewardAd: this.rewardedAd.isAvailable() ? () => this.watchReward('double_coins') : undefined,
       onTrack: (name, props) => this.analytics.track(name, props),
       getShareOffer: context => context?.isNewRecord
@@ -1138,6 +1181,7 @@ export class Main extends Component {
       onShare: type => this.sharePromoter.shareCard(type),
     });
     this.gameScreen.loadAndCreate(() => {
+      this.pauseGameIfBackgrounded();
       if (previous) this.assets.releaseOwner(previous);
       onReady?.();
     });
@@ -1534,17 +1578,25 @@ export class Main extends Component {
   }
 
   private onAppHide() {
+    this.appBackgrounded = true;
     this.gameScreen?.pauseForBackground();
     this.audio?.setBackground(true);
     this.playerStore.save();
   }
 
   private onAppShow() {
+    this.appBackgrounded = false;
     this.audio?.setBackground(false);
     this.gameScreen?.showResumePrompt();
   }
 
+  private pauseGameIfBackgrounded() {
+    if (this.appBackgrounded) this.gameScreen?.pauseForBackground();
+  }
+
   onDestroy() {
+    this.pauseNextLevelPreparation();
+    this.pauseChallengePreparation();
     this.playerStore.save();
     game.off(Game.EVENT_HIDE, this.onAppHide, this);
     game.off(Game.EVENT_SHOW, this.onAppShow, this);
@@ -1672,7 +1724,7 @@ export class Main extends Component {
     }
     this.nextLevelDefinition = null;
 
-    this.prepareNextMainLevel(level, definition => playPrepared(definition), true);
+    this.prepareNextMainLevel(level, definition => playPrepared(definition));
   }
 
   private advanceMainLevelAfterWin() {
@@ -1690,7 +1742,6 @@ export class Main extends Component {
   private prepareNextMainLevel(
     level: number,
     onReady?: (definition: LevelDefinition) => void,
-    showFailureToast = false,
   ) {
     if (isCampaignComplete(level)) {
       this.nextLevelDefinition = null;
@@ -1701,25 +1752,29 @@ export class Main extends Component {
       return;
     }
     const token = ++this.nextLevelPrepareToken;
+    const cancellation = { cancelled: false };
+    this.nextLevelCancellation = cancellation;
     this.nextLevelPreparing = true;
-    this.levelSystem.nextLevelAsync(level, this.seedForLevel(level)).then(definition => {
+    this.levelSystem.nextLevelAsync(level, this.seedForLevel(level), cancellation).then(definition => {
       if (!this.node.isValid || token !== this.nextLevelPrepareToken) return;
       this.nextLevelPreparing = false;
+      this.nextLevelCancellation = null;
       this.nextLevelDefinition = definition;
       const waiters = this.nextLevelReadyWaiters.splice(0);
       onReady?.(definition);
       waiters.forEach(waiter => waiter(definition));
     }).catch(error => {
-      if (error?.name === 'AsyncGenerationCancelledError') return;
-      console.error('[CatWorld] Failed to prepare next level', error);
       if (!this.node.isValid || token !== this.nextLevelPrepareToken) return;
       this.nextLevelPreparing = false;
+      this.nextLevelCancellation = null;
       this.nextLevelDefinition = null;
+      const waitingForLevel = !!onReady || this.nextLevelReadyWaiters.length > 0;
       this.nextLevelReadyWaiters.length = 0;
-      if (onReady) {
+      if (waitingForLevel) {
         this.startingGame = false;
-        if (showFailureToast) Toast.show(this.root, '下一关准备失败，请稍后再试');
+        Toast.show(this.root, '下一关准备失败，请稍后再试');
       }
+      if (error?.name !== 'AsyncGenerationCancelledError') console.error('[CatWorld] Failed to prepare next level', error);
     });
   }
 
@@ -1731,7 +1786,9 @@ export class Main extends Component {
     if (!this.nextLevelPreparing) return;
     this.nextLevelPrepareToken += 1;
     this.nextLevelPreparing = false;
-    this.levelSystem.generator.cancelAsync();
+    this.nextLevelReadyWaiters.length = 0;
+    if (this.nextLevelCancellation) this.levelSystem.generator.cancelAsync(this.nextLevelCancellation);
+    this.nextLevelCancellation = null;
   }
 
   private pauseChallengePreparation() {
@@ -1740,7 +1797,10 @@ export class Main extends Component {
     this.challengeSpareToken += 1;
     this.challengePreparing = false;
     this.challengeSparePreparing = false;
-    this.levelSystem.generator.cancelAsync();
+    if (this.challengeCancellation) this.levelSystem.generator.cancelAsync(this.challengeCancellation);
+    if (this.challengeSpareCancellation) this.levelSystem.generator.cancelAsync(this.challengeSpareCancellation);
+    this.challengeCancellation = null;
+    this.challengeSpareCancellation = null;
   }
 
   private resumeChallengePreparation() {

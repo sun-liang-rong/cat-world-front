@@ -17,7 +17,7 @@ import {
   view,
 } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
-import { AudioEffect } from './AudioManager';
+import { AudioEffect, VibrateIntensity } from './AudioManager';
 import { getCatDefinition } from './GameContent';
 import { BuildCellResult, BuildingView, CELL_STAR_COST } from './TownContent';
 import { ShareCardType, ShareOffer, TownDailyClaimResult, TownDailySnapshot, TownDailyTaskId } from './PlayerTypes';
@@ -25,6 +25,7 @@ import { Toast } from './Toast';
 
 export interface TownScreenOptions {
   onPlaySound: (effect: AudioEffect) => void;
+  onVibrate?: (intensity?: VibrateIntensity) => void;
   getStars: () => number;
   getCoins: () => number;
   getBuildings: () => BuildingView[];
@@ -949,6 +950,7 @@ export class TownScreen {
       this.cellsKey = key;
     }
     const nextIndex = building.completed ? -1 : building.subProgress;
+    const canAfford = this.options.getStars() >= building.cellCost;
     this.cellNodes.forEach((cell, index) => {
       const lit = index < building.subProgress || building.completed;
       const isNext = index === nextIndex;
@@ -960,11 +962,13 @@ export class TownScreen {
       graphics.fillColor = lit
         ? new Color(255, 224, 108)
         : isNext
-          ? new Color(255, 239, 178)
+          ? (canAfford ? new Color(255, 235, 120) : new Color(255, 239, 178))
           : new Color(255, 248, 226);
-      graphics.strokeColor = lit || isNext
+      graphics.strokeColor = lit
         ? new Color(184, 119, 36)
-        : new Color(235, 205, 158);
+        : isNext
+          ? (canAfford ? new Color(245, 160, 20) : new Color(184, 119, 36))
+          : new Color(235, 205, 158);
       graphics.roundRect(-22, -22, 44, 44, 12);
       graphics.fill();
       graphics.stroke();
@@ -976,19 +980,20 @@ export class TownScreen {
         graphics.lineTo(10, 8);
         graphics.stroke();
       } else if (isNext) {
-        graphics.strokeColor = new Color(150, 96, 40);
+        graphics.strokeColor = canAfford ? new Color(184, 74, 10) : new Color(150, 96, 40);
         graphics.lineWidth = 4;
         graphics.moveTo(-7, 0);
         graphics.lineTo(7, 0);
         graphics.moveTo(0, -7);
         graphics.lineTo(0, 7);
         graphics.stroke();
-        // 下一格待点亮：轻微呼吸提醒可点（点亮推进后由上面的 stopAllByTarget 挪到新格子）
+        // 下一格待点亮：若星星足够，带有更清晰的金色跳动光感引导点击
+        const targetScale = canAfford ? 1.14 : 1.06;
         tween(cell)
           .repeatForever(
             tween()
-              .to(0.75, { scale: new Vec3(1.1, 1.1, 1) }, { easing: 'sineInOut' })
-              .to(0.75, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+              .to(0.65, { scale: new Vec3(targetScale, targetScale, 1) }, { easing: 'sineInOut' })
+              .to(0.65, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
           )
           .start();
       }
@@ -1039,6 +1044,32 @@ export class TownScreen {
     tween(cell)
       .to(0.25, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
       .start();
+
+    // 飞星扩散微动效：点亮格子时向四周喷洒 4 颗小星光
+    if (this.cellRow?.isValid) {
+      for (let i = 0; i < 4; i++) {
+        const spark = new Node(`CellSpark_${index}_${i}`);
+        this.cellRow.addChild(spark);
+        spark.setPosition(cell.position);
+        spark.addComponent(UITransform).setContentSize(12, 12);
+        const gfx = spark.addComponent(Graphics);
+        gfx.fillColor = new Color(255, 215, 60, 245);
+        gfx.circle(0, 0, 4);
+        gfx.fill();
+        const angle = (Math.PI / 2) * i + Math.PI / 4;
+        const targetPos = new Vec3(
+          cell.position.x + Math.cos(angle) * 32,
+          cell.position.y + Math.sin(angle) * 32,
+          0,
+        );
+        tween(spark)
+          .to(0.32, { position: targetPos, scale: new Vec3(0.2, 0.2, 1) }, { easing: 'quadOut' })
+          .call(() => {
+            if (spark.isValid) spark.destroy();
+          })
+          .start();
+      }
+    }
   }
 
   private focusBuildableStage(building = this.selected) {
@@ -1054,11 +1085,25 @@ export class TownScreen {
     if (!this.actionLabel || !this.actionButton) return;
     this.actionLabel.string = this.actionText(building);
     const canAct = building.unlocked && !building.completed;
+    const canAfford = canAct && this.options.getStars() >= building.cellCost;
     this.actionButton.interactable = canAct;
     this.actionLabel.color = canAct
       ? Theme.title
       : Theme.mutedSoft;
-    if (this.actionNode) SettlementButton.apply(this.actionNode, canAct ? 'primary' : 'disabled', 450, 96);
+    if (this.actionNode) {
+      SettlementButton.apply(this.actionNode, canAct ? 'primary' : 'disabled', 450, 96);
+      Tween.stopAllByTarget(this.actionNode);
+      this.actionNode.setScale(new Vec3(1, 1, 1));
+      if (canAfford) {
+        tween(this.actionNode)
+          .repeatForever(
+            tween()
+              .to(0.7, { scale: new Vec3(1.035, 1.035, 1) }, { easing: 'sineInOut' })
+              .to(0.7, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+          )
+          .start();
+      }
+    }
     if (this.actionGuideRing) {
       // 首次建设引导：只对小屋、当前大节点一格未亮时出现
       this.actionGuideRing.active = canAct
@@ -1071,6 +1116,12 @@ export class TownScreen {
     if (!building.unlocked) return '未解锁';
     if (building.completed) return '已建成';
     const stageName = building.stageNames[building.stage] ?? '';
+    const affordable = Math.floor(this.options.getStars() / building.cellCost);
+    const leftInStage = building.cellCount - building.subProgress;
+    const canDo = Math.min(affordable, leftInStage);
+    if (canDo >= 2) {
+      return `连续点亮「${stageName}」（可连点${canDo}格）`;
+    }
     return `点亮「${stageName}」一格`;
   }
 
@@ -1125,12 +1176,15 @@ export class TownScreen {
     }
     this.refresh();
     if (result.buildingCompleted) {
+      this.options.onVibrate?.('heavy');
       this.playConstructionFx();
       this.showCatUnlockCelebration();
     } else if (result.stageJustCompleted) {
+      this.options.onVibrate?.('medium');
       this.playConstructionFx();
       this.toast(result.message);
     } else {
+      this.options.onVibrate?.('light');
       this.popCell(litIndex);
     }
   }
@@ -1266,7 +1320,47 @@ export class TownScreen {
         .to(0.42, { position: new Vec3(node.position.x, finalY + 22, 0) }, { easing: 'sineInOut' })
         .start();
     });
-    tween(fx).delay(0.78).to(0.12, { scale: new Vec3(0.7, 0.7, 1) }).call(() => {
+
+    // 庆祝五彩纸屑喷散粒子
+    const confettiColors = [
+      new Color(255, 95, 120),
+      new Color(255, 224, 108),
+      new Color(112, 214, 130),
+      new Color(130, 185, 255),
+      new Color(255, 170, 75),
+    ];
+    for (let c = 0; c < 10; c++) {
+      const conf = new Node(`Confetti_${c}`);
+      fx.addChild(conf);
+      conf.setPosition(0, -40);
+      conf.addComponent(UITransform).setContentSize(12, 8);
+      const cg = conf.addComponent(Graphics);
+      cg.fillColor = confettiColors[c % confettiColors.length];
+      cg.roundRect(-4, -2.5, 8, 5, 2);
+      cg.fill();
+
+      const confAngle = (Math.PI * 0.75 * c) / 10 + Math.PI * 0.125;
+      const confDist = 90 + (c % 4) * 28;
+      const targetX = (c % 2 === 0 ? 1 : -1) * Math.cos(confAngle) * confDist;
+      const targetY = Math.sin(confAngle) * confDist + 40;
+
+      const confOpacity = conf.addComponent(UIOpacity);
+      confOpacity.opacity = 0;
+      tween(confOpacity)
+        .delay(0.03 * c)
+        .to(0.12, { opacity: 255 })
+        .delay(0.35)
+        .to(0.22, { opacity: 0 })
+        .start();
+
+      tween(conf)
+        .delay(0.03 * c)
+        .to(0.32, { position: new Vec3(targetX, targetY, 0), angle: 180 + c * 30 }, { easing: 'quadOut' })
+        .to(0.35, { position: new Vec3(targetX, targetY - 45, 0), angle: 360 + c * 45 }, { easing: 'quadIn' })
+        .start();
+    }
+
+    tween(fx).delay(0.85).to(0.12, { scale: new Vec3(0.7, 0.7, 1) }).call(() => {
       if (fx.isValid) fx.destroy();
       if (this.constructionFx === fx) this.constructionFx = null;
     }).start();

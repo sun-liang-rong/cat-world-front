@@ -1,6 +1,7 @@
 import { AudioClip, AudioSource, Node, resources, sys } from 'cc';
 
 export type AudioEffect = 'click' | 'collect' | 'match' | 'win' | 'fail';
+export type VibrateIntensity = 'light' | 'medium' | 'heavy';
 
 type AudioSettings = {
   musicEnabled: boolean;
@@ -87,13 +88,17 @@ export class AudioManager {
     if (enabled) this.vibrate();
   }
 
-  // 震动反馈入口：微信小游戏走 wx.vibrateShort，编辑器/网页预览没有 wx 时静默跳过。
-  vibrate() {
+  // 震动反馈入口：微信小游戏走 wx.vibrateShort / wx.vibrateLong，编辑器/网页预览没有 wx 时静默跳过。
+  vibrate(intensity: VibrateIntensity = 'light') {
     if (!this.vibrationEnabled) return;
     const wxApi = (globalThis as { wx?: WxVibrateApi }).wx;
-    if (!wxApi?.vibrateShort) return;
+    if (!wxApi) return;
     try {
-      wxApi.vibrateShort({ type: 'light', fail: () => wxApi.vibrateLong?.() });
+      if (intensity === 'heavy' && wxApi.vibrateLong) {
+        wxApi.vibrateLong();
+      } else if (wxApi.vibrateShort) {
+        wxApi.vibrateShort({ type: intensity, fail: () => wxApi.vibrateLong?.() });
+      }
     } catch (error) {
       console.error('[CatWorld] Failed to vibrate', error);
     }

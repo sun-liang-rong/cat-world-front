@@ -1,6 +1,6 @@
 import { SettlementButton } from './SettlementButton';
 import { ensureButtonControl } from './Theme';
-import { Button, Color, Graphics, Label, Node, Sprite, UITransform, view } from 'cc';
+import { Button, Color, Graphics, Label, Node, Sprite, tween, Tween, UITransform, Vec3, view } from 'cc';
 import { AssetStore, BACK_BUTTON_SIZE, COMMON_UI_ASSETS, belowWeChatCapsule } from './AssetStore';
 import { AudioEffect } from './AudioManager';
 import { Toast } from './Toast';
@@ -125,8 +125,38 @@ export class ShopScreen {
     const sign = this.image(this.shopUI!, 'shop/sign_board', -15, top - 125, 368, 239);
     const title = this.label(sign, '道具商店', 0, -36, 36, new Color(111, 62, 28));
     title.isBold = true;
-    // Added after the sign; sits low so only the ears tickle the ribbon's bottom edge.
-    this.image(this.shopUI!, 'shop/cat_shopkeeper', -10, top - 262, 190, 165);
+
+    // 店长猫咪：舒缓呼吸动效 + 点击萌系治愈互动
+    const shopkeeper = this.image(this.shopUI!, 'shop/cat_shopkeeper', -10, top - 262, 190, 165);
+    shopkeeper.addComponent(UITransform).setContentSize(190, 165);
+    tween(shopkeeper)
+      .repeatForever(
+        tween()
+          .to(1.6, { scale: new Vec3(1.035, 1.035, 1) }, { easing: 'sineInOut' })
+          .to(1.6, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
+    const shopkeeperBtn = shopkeeper.addComponent(Button);
+    ensureButtonControl(shopkeeperBtn);
+    const shopkeeperLines = [
+      '喵呜～工欲善其事，必先利其器！',
+      '今天店里的道具都很管用哦～',
+      '遇到难关别慌，带上小锤子去敲碎它！',
+      '欢迎光临猫爪杂货铺，喵～',
+    ];
+    let lineIdx = 0;
+    shopkeeperBtn.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      Tween.stopAllByTarget(shopkeeper);
+      shopkeeper.setScale(new Vec3(1, 1, 1));
+      tween(shopkeeper)
+        .to(0.08, { scale: new Vec3(1.14, 1.14, 1) }, { easing: 'backOut' })
+        .to(0.14, { scale: new Vec3(1, 1, 1) }, { easing: 'bounceOut' })
+        .start();
+      const line = shopkeeperLines[lineIdx % shopkeeperLines.length];
+      lineIdx += 1;
+      Toast.show(this.shopUI!, `🐱 店长：${line}`);
+    });
   }
 
   private buildBackButton(x: number, y: number) {
@@ -145,6 +175,17 @@ export class ShopScreen {
 
   private buildItemCard(definition: ItemDefinition, x: number, y: number) {
     const id = definition.id;
+
+    // 货架柔和微投影：将商品卡从背景中自然托起
+    const cardShadow = new Node('ItemCardShadow');
+    this.shopUI!.addChild(cardShadow);
+    cardShadow.setPosition(x, y - 216);
+    cardShadow.addComponent(UITransform).setContentSize(260, 20);
+    const csg = cardShadow.addComponent(Graphics);
+    csg.fillColor = new Color(92, 54, 22, 65);
+    csg.ellipse(0, 0, 130, 9);
+    csg.fill();
+
     const card = this.image(
       this.shopUI!,
       'shop/card_frame',
@@ -160,9 +201,9 @@ export class ShopScreen {
     const [iconWidth, iconHeight] = this.iconSizes[id];
     this.image(badge, 'shop/icon_' + id, 0, 0, iconWidth, iconHeight);
 
-    // Chunky brown name bar with cream text, matching the reference card style.
-    const bar = this.pill(card, 0, -16, 156, 42, 21, new Color(107, 74, 48));
-    const title = this.label(bar, definition.name, 0, -1, 26, new Color(255, 248, 226));
+    // 双层原木曲奇名牌：深棕木纹底板 + 焦糖金微描边
+    const bar = this.pill(card, 0, -16, 164, 44, 22, new Color(107, 74, 48), new Color(214, 168, 108));
+    const title = this.label(bar, definition.name, 0, -1, 25, new Color(255, 248, 226));
     title.isBold = true;
 
     const description = this.label(card, this.descriptions[id], 0, -72, 20, new Color(136, 94, 63));
@@ -180,9 +221,10 @@ export class ShopScreen {
       void this.handleItemAction(id, definition.name);
     });
 
+    // 右上角糖果质感“已有X”标签
     const countTag = this.pill(
       card, 84, 158, 68, 30, 15,
-      new Color(255, 248, 226, 235), new Color(235, 205, 158),
+      new Color(255, 248, 226, 240), new Color(235, 205, 158),
     );
     const countLabel = this.label(countTag, '', 0, -1, 17, new Color(136, 94, 63));
     countLabel.isBold = true;

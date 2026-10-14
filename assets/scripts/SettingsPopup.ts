@@ -19,6 +19,7 @@ import {
 } from 'cc';
 import { AssetStore } from './AssetStore';
 import { AudioEffect } from './AudioManager';
+import { Toast } from './Toast';
 
 const { ccclass } = _decorator;
 
@@ -159,12 +160,31 @@ export class SettingsPopup extends Component {
   }
 
   private buildHeader(panel: Node) {
-    const title = this.label(panel, '设置', 0, 218, 30, new Color(100, 69, 43));
+    // 标题原木双层挂牌底板：与小镇招牌同一视觉家族
+    const titlePlate = new Node('SettingsTitlePlate');
+    panel.addChild(titlePlate);
+    titlePlate.setPosition(0, 218);
+    titlePlate.addComponent(UITransform).setContentSize(160, 48);
+    const tpg = titlePlate.addComponent(Graphics);
+    // 微投影
+    tpg.fillColor = new Color(92, 54, 22, 55);
+    tpg.ellipse(0, -20, 72, 6);
+    tpg.fill();
+    // 奶油原木底板
+    tpg.fillColor = new Color(255, 248, 226, 250);
+    tpg.strokeColor = new Color(230, 198, 155, 255);
+    tpg.lineWidth = 2.5;
+    tpg.roundRect(-75, -21, 150, 42, 16);
+    tpg.fill();
+    tpg.stroke();
+
+    const title = this.label(titlePlate, '设置', 0, -1, 28, new Color(111, 62, 28));
     title.isBold = true;
-    // 副标题做成暖黄小徽章，替代原先游离的绿色文字，与全局奶油色板保持一致
+
+    // 副标题做成暖黄小徽章，与全局奶油色板保持一致
     const badge = new Node('SettingsSubtitleBadge');
     panel.addChild(badge);
-    badge.setPosition(0, 176);
+    badge.setPosition(0, 172);
     badge.addComponent(UITransform).setContentSize(104, 30);
     const badgeGraphics = badge.addComponent(Graphics);
     badgeGraphics.fillColor = new Color(255, 224, 108, 235);
@@ -282,16 +302,62 @@ export class SettingsPopup extends Component {
   }
 
   private buildFooter(panel: Node) {
+    // 微信生态客服与反馈入口胶囊
+    const feedbackBtn = new Node('SettingsFeedbackBtn');
+    panel.addChild(feedbackBtn);
+    feedbackBtn.setPosition(0, -182);
+    feedbackBtn.addComponent(UITransform).setContentSize(220, 38);
+    const fbg = feedbackBtn.addComponent(Graphics);
+    fbg.fillColor = new Color(255, 243, 218, 240);
+    fbg.strokeColor = new Color(235, 202, 150, 255);
+    fbg.lineWidth = 2;
+    fbg.roundRect(-110, -19, 220, 38, 14);
+    fbg.fill();
+    fbg.stroke();
+
+    const fbText = this.label(feedbackBtn, '💬 联系客服与反馈', 0, -1, 16, new Color(112, 69, 40));
+    fbText.isBold = true;
+
+    const btn = feedbackBtn.addComponent(Button);
+    ensureButtonControl(btn);
+    btn.node.on(Button.EventType.CLICK, () => {
+      this.options.onPlaySound('click');
+      const wxObj = (globalThis as any).wx;
+      if (typeof wxObj !== 'undefined' && typeof wxObj.openCustomerServiceConversation === 'function') {
+        wxObj.openCustomerServiceConversation({
+          sessionFrom: 'settings_popup',
+          showMessageCard: false,
+        });
+      } else {
+        Toast.show(this.node, '客服功能在微信小游戏端可用哦~ 🐾');
+      }
+    });
+
     const rule = new Node('SettingsFooterRule');
     panel.addChild(rule);
-    rule.setPosition(0, -226);
+    rule.setPosition(0, -222);
     const graphics = rule.addComponent(Graphics);
     graphics.lineWidth = 2;
     graphics.strokeColor = new Color(235, 215, 180, 190);
-    graphics.moveTo(-170, 0);
-    graphics.lineTo(170, 0);
+    graphics.moveTo(-160, 0);
+    graphics.lineTo(160, 0);
     graphics.stroke();
-    const footer = this.label(panel, '猫爪星球奇遇记', 0, -240, 18, new Color(181, 147, 96));
+
+    // 左右点缀粉萌小猫爪印章
+    [-84, 84].forEach(pawX => {
+      const paw = new Node('FooterPaw');
+      panel.addChild(paw);
+      paw.setPosition(pawX, -238);
+      const pg = paw.addComponent(Graphics);
+      pg.fillColor = new Color(255, 185, 160, 210);
+      pg.roundRect(-4.5, -4, 9, 6.5, 3);
+      pg.circle(-3.8, 3.2, 1.8);
+      pg.circle(0, 4.4, 2);
+      pg.circle(3.8, 3.2, 1.8);
+      pg.fill();
+    });
+
+    const footer = this.label(panel, '猫爪星球奇遇记', 0, -238, 17, new Color(175, 138, 92));
     footer.isBold = true;
   }
 

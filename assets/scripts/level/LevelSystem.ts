@@ -1,5 +1,5 @@
 import { DifficultyController } from './DifficultyController';
-import { LevelGenerator } from './LevelGenerator';
+import { LevelGenerationCancellation, LevelGenerator } from './LevelGenerator';
 import { LevelArchetype, LevelDefinition, PlayerRun } from './LevelTypes';
 
 export interface LevelSystemSnapshot {
@@ -47,7 +47,7 @@ export class LevelSystem {
     return baseSeed + perturbation;
   }
 
-  nextLevelAsync(level: number, seed: number): Promise<LevelDefinition> {
+  nextLevelAsync(level: number, seed: number, cancellation?: LevelGenerationCancellation): Promise<LevelDefinition> {
     const plan = this.difficulty.planNext(LevelGenerator.baseDifficulty(level), level);
 
     // 应用运气扰动到种子
@@ -61,7 +61,7 @@ export class LevelSystem {
       role: plan.role,
       recentFingerprints: this.recentLevels.map(item => item.fingerprint),
       recentArchetypes: this.recentLevels.map(item => item.archetype),
-    }).then(generated => {
+    }, cancellation).then(generated => {
       // 难关免费复活是难度自适应层的决策（连败中才成立），随定义透传给 GameScreen。
       if (plan.freeRevive) generated.freeRevive = true;
       this.rememberLevel(generated);

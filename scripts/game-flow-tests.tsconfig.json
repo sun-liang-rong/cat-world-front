@@ -10,5 +10,5 @@
     "typeRoots": [],
     "skipLibCheck": true
   },
-  "include": ["../assets/scripts/GameScreen.ts"]
+  "include": ["../assets/scripts/GameScreen.ts", "../assets/scripts/Main.ts"]
 }

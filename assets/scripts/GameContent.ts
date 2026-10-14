@@ -11,7 +11,7 @@ export function getCatUpgradeCost(level: number) {
   const currentLevel = Math.min(MAX_CAT_LEVEL - 1, Math.max(1, Math.floor(level)));
   const progress = (currentLevel - 1) / (MAX_CAT_LEVEL - 2);
   return Math.round(
-    FIRST_CAT_UPGRADE_COST + (LAST_CAT_UPGRADE_COST - FIRST_CAT_UPGRADE_COST) * progress,
+    FIRST_CAT_UPGRADE_COST + (LAST_CAT_UPGRADE_COST - FIRST_CAT_UPGRADE_COST) * progress * progress,
   );
 }
 
@@ -215,6 +215,13 @@ export const DAILY_TASK_DEFINITIONS: DailyTaskDefinition[] = [
     reward: { stars: 1 },
   },
 ];
+
+export const ENDLESS_DAILY_TASK: DailyTaskDefinition = {
+  ...DAILY_TASK_DEFINITIONS[0],
+  title: '无尽消除 150 个元素',
+  description: '挑战无尽模式，累计消除元素！',
+  target: 150,
+};
 
 export const DAILY_CHEST_REWARD = {
   coins: 50,

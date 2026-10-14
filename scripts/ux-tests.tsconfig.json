@@ -15,6 +15,7 @@
     "validate-level-system.ts",
     "validate-endless-director.ts",
     "../assets/scripts/LeaderboardService.ts",
+    "../assets/scripts/ProfileCoordinator.ts",
     "../assets/scripts/RewardedAdService.ts"
   ]
 }

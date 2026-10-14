@@ -103,6 +103,11 @@ export class AsyncGenerationCancelledError extends Error {
   }
 }
 
+/** 单次生成请求的取消状态；排队中的请求也可独立取消。 */
+export interface LevelGenerationCancellation {
+  cancelled: boolean;
+}
+
 export class LevelGenerator {
   private readonly solver = new LevelSolver();
   // 候选的布局、目标和见证路径确定后不再修改；弱引用随候选一起释放。
@@ -111,7 +116,7 @@ export class LevelGenerator {
     risk?: PlayerRiskEstimate;
   }>();
   private asyncQueue: Promise<void> = Promise.resolve();
-  private activeAbort: { cancelled: boolean } | null = null;
+  private activeAbort: LevelGenerationCancellation | null = null;
 
   generate(options: LevelGenerationOptions): LevelDefinition {
     const context = this.createGenerationContext(options);
@@ -133,13 +138,18 @@ export class LevelGenerator {
     throw new Error(`[LevelGenerator] Unable to create a solvable level for seed ${options.seed}`);
   }
 
-  cancelAsync() {
-    if (this.activeAbort) this.activeAbort.cancelled = true;
+  cancelAsync(cancellation?: LevelGenerationCancellation) {
+    const abort = cancellation || this.activeAbort;
+    if (abort) abort.cancelled = true;
   }
 
-  generateAsync(options: LevelGenerationOptions): Promise<LevelDefinition> {
-    const abort = { cancelled: false };
+  generateAsync(
+    options: LevelGenerationOptions,
+    cancellation?: LevelGenerationCancellation,
+  ): Promise<LevelDefinition> {
+    const abort = cancellation || { cancelled: false };
     const run = () => {
+      if (abort.cancelled) return Promise.reject(new AsyncGenerationCancelledError());
       this.activeAbort = abort;
       return this.runGenerateAsync(options, abort).finally(() => {
         if (this.activeAbort === abort) this.activeAbort = null;
@@ -152,7 +162,7 @@ export class LevelGenerator {
 
   private runGenerateAsync(
     options: LevelGenerationOptions,
-    abort: { cancelled: boolean },
+    abort: LevelGenerationCancellation,
   ): Promise<LevelDefinition> {
     const context = this.createGenerationContext(options);
     // 微信小游戏 JS 比桌面慢一个数量级：墙钟预算兜底，有 best 就提前交付，

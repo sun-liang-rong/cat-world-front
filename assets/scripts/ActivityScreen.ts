@@ -22,6 +22,7 @@ export interface ActivityScreenOptions {
   onClaimTask: (id: ActivityTaskId) => boolean;
   onClaimReward: (id: ActivityRewardId) => boolean;
   onStartGame: () => void;
+  onInteractCats: () => void;
   onPlaySound: (effect: AudioEffect) => void;
   onReturnHome: () => void;
 }
@@ -373,7 +374,8 @@ export class ActivityScreen {
           const success = this.options.onClaimTask(task.id);
           this.toast(success ? `获得活动积分 ×${task.pointReward}` : '完成任务后可以领取');
         } else if (!current.claimed) {
-          this.options.onStartGame();
+          if (task.id === 'interact_cats') this.options.onInteractCats();
+          else this.options.onStartGame();
         }
         this.refresh();
       });

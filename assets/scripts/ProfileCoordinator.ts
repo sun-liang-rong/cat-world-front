@@ -14,15 +14,29 @@ export interface ProfileCoordinatorOptions {
 
 type PendingScore = Omit<SubmitRankPayload, 'user_id'>;
 const PENDING_KEY = 'cat-world-rank-pending-v1';
+const CREDENTIAL_KEY = 'cat-world-rank-credential-v1';
+
+interface RankCredential {
+  userId: string;
+  submitToken: string;
+}
 
 /** 排行榜匿名身份和成绩队列；玩法存档仍由 PlayerStore 在本机维护。 */
 export class ProfileCoordinator {
   private request: Promise<void> | null = null;
   private syncing: Promise<void> | null = null;
   private pending: PendingScore[] = [];
+  private credential: RankCredential | null = null;
   private readonly acknowledged = new Map<string, PendingScore>();
 
   constructor(private readonly options: ProfileCoordinatorOptions) {
+    try {
+      const saved = JSON.parse(sys.localStorage.getItem(CREDENTIAL_KEY) || 'null') as RankCredential | null;
+      if (saved && this.options.leaderboard.isRemoteProfile(saved.userId)
+        && this.options.leaderboard.isSubmitToken(saved.submitToken)) this.credential = saved;
+    } catch (error) {
+      console.error('[CatWorld] Failed to restore rank credential', error);
+    }
     try {
       const saved: unknown = JSON.parse(sys.localStorage.getItem(PENDING_KEY) || '[]');
       if (Array.isArray(saved)) {
@@ -44,16 +58,23 @@ export class ProfileCoordinator {
 
   hasProfile(): boolean {
     return this.options.playerStore.hasProfile()
-      && this.options.leaderboard.isRemoteProfile(this.options.playerStore.getUserId());
+      && this.options.leaderboard.isRemoteProfile(this.options.playerStore.getUserId())
+      && this.credential?.userId === this.options.playerStore.getUserId()
+      && this.options.leaderboard.isSubmitToken(this.credential.submitToken);
   }
 
   ensure(): Promise<void> {
     if (this.hasProfile()) return Promise.resolve();
     if (this.request) return this.request;
     const store = this.options.playerStore;
-    this.request = this.options.leaderboard.ensureProfile(store.getUserId(), store.getUserName())
+    const submitToken = this.credential?.userId === store.getUserId() ? this.credential.submitToken : '';
+    this.request = this.options.leaderboard.ensureProfile(store.getUserId(), store.getUserName(), submitToken)
       .then(profile => {
-        if (this.options.isAlive()) store.setProfile(profile.userId, profile.name);
+        if (!this.options.isAlive()) return;
+        this.credential = { userId: profile.userId, submitToken: profile.submitToken };
+        try { sys.localStorage.setItem(CREDENTIAL_KEY, JSON.stringify(this.credential)); }
+        catch (error) { console.error('[CatWorld] Failed to persist rank credential', error); }
+        store.setProfile(profile.userId, profile.name);
       })
       .finally(() => { this.request = null; });
     return this.request;
@@ -90,7 +111,9 @@ export class ProfileCoordinator {
       if (!this.hasProfile()) return;
       while (this.pending.length > 0 && this.options.isAlive()) {
         const score = this.pending[0];
-        await this.options.leaderboard.submitScore(this.options.playerStore.getUserId(), score);
+        await this.options.leaderboard.submitScore(this.options.playerStore.getUserId(), score, this.credential!.submitToken);
+        // 页面销毁后不要用旧队列覆盖新会话保存的离线成绩；重复补报由服务端幂等处理。
+        if (!this.options.isAlive()) return;
         this.acknowledged.set(this.scoreKey(score), score);
         // 请求期间可能已被更好的成绩替换，新的记录仍需继续发送。
         const index = this.pending.indexOf(score);

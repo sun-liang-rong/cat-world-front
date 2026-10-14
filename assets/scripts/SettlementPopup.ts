@@ -21,6 +21,7 @@ import {
 import { AdScene, TrackEventName, TrackProps } from './Analytics';
 import { AssetStore, COMMON_UI_ASSETS } from './AssetStore';
 import { SettlementButton, SettlementButtonTone } from './SettlementButton';
+import { AudioEffect, VibrateIntensity } from './AudioManager';
 import type { ShareCardType } from './PlayerTypes';
 import type { RewardActionMode } from './RewardedAdService';
 
@@ -40,6 +41,8 @@ export interface SettlementPopupOptions {
   challenge?: boolean;
   /** 无尽模式结算：不展示星星和通关评价，主数字是消除数 */
   endless?: EndlessSettlementInfo;
+  /** 无尽首次满槽：只选择复活或结束，尚未发奖和提交成绩。 */
+  endlessRevive?: boolean;
   level: number;
   stars: number;
   starReward: number;
@@ -86,6 +89,8 @@ export interface SettlementPopupOptions {
   buildTarget?: { text: string; canBuild: boolean };
   /** 点击建设目标行（canBuild 时才可点）：关闭对局并跳转小镇 */
   onGoBuild?: () => void;
+  onPlaySound?: (effect: AudioEffect) => void;
+  onVibrate?: (intensity?: VibrateIntensity) => void;
 }
 
 // —— 结算弹窗套件（assets/resources/popup2/，对齐用户设计稿）——
@@ -229,6 +234,7 @@ export class SettlementPopup extends Component {
   }
 
   private resolveMode(): PopupMode {
+    if (this.options.endlessRevive) return 'fail';
     if (this.options.endless) return 'endless';
     if (this.options.win) return this.options.challenge ? 'challenge' : 'win';
     return 'fail';
@@ -302,7 +308,9 @@ export class SettlementPopup extends Component {
       const onCompleted = mode === 'fail'
         ? () => this.options.onRevive!()
         : () => this.options.onDoubleReward!();
-      this.createAdButton(group, adText, 'orange', -(AD_WIDTH + SECONDARY_GAP) / 2, secondaryY, onCompleted, freeRevive);
+      if (!this.options.endlessRevive) {
+        this.createAdButton(group, adText, 'orange', -(AD_WIDTH + SECONDARY_GAP) / 2, secondaryY, onCompleted, freeRevive);
+      }
       if (!freeRevive) {
         if (this.options.rewardMode === 'share') {
           this.options.onTrack?.('share_entrance_show', { card_type: `reward_${this.adScene()}` });
@@ -322,6 +330,14 @@ export class SettlementPopup extends Component {
   }
 
   private collectSections(mode: PopupMode): PopupSection[] {
+    if (this.options.endlessRevive) {
+      const info = this.options.endless!;
+      return [
+        { height: 88, build: (parent, y) => this.buildEndlessStat(parent, y, info) },
+        { height: 60, build: (parent, y) => this.buildEndlessDurationRow(parent, y, info) },
+        { height: 44, build: (parent, y) => this.buildReviveBenefitPill(parent, y) },
+      ];
+    }
     if (mode === 'endless') {
       const info = this.options.endless!;
       return [
@@ -332,9 +348,16 @@ export class SettlementPopup extends Component {
       ];
     }
     if (mode === 'fail') {
-      return [
+      const sections: PopupSection[] = [
         { height: 112, build: (parent, y) => this.buildFailCard(parent, y) },
       ];
+      if (this.hasAdRow('fail')) {
+        sections.push({
+          height: 44,
+          build: (parent, y) => this.buildReviveBenefitPill(parent, y),
+        });
+      }
+      return sections;
     }
     const sections: PopupSection[] = [];
     const earnedStars = Math.max(0, Math.min(3, this.options.starReward));
@@ -355,7 +378,27 @@ export class SettlementPopup extends Component {
     if (!frame) return;
     const size = this.fitSize(frame, CAT_WIDTH, CAT_HEIGHT);
     const y = panelHeight / 2 - CAT_PAW_REACH + size.height / 2;
-    this.image(parent, 'Mascot', frame, 0, y, size.width, size.height);
+    const mascot = this.image(parent, 'Mascot', frame, 0, y, size.width, size.height);
+    this.tweenTargets.add(mascot);
+    if (mode === 'fail') {
+      // 失败安慰微动效：猫咪轻微侧倚呼吸摇摆
+      tween(mascot)
+        .repeatForever(
+          tween()
+            .to(1.1, { angle: -2.5, position: new Vec3(0, y - 2, 0) }, { easing: 'sineInOut' })
+            .to(1.1, { angle: 1.5, position: new Vec3(0, y + 1, 0) }, { easing: 'sineInOut' }),
+        )
+        .start();
+    } else {
+      // 胜利开心招手动效：欢快微浮动
+      tween(mascot)
+        .repeatForever(
+          tween()
+            .to(0.85, { position: new Vec3(0, y + 4, 0), angle: 1.5 }, { easing: 'sineInOut' })
+            .to(0.85, { position: new Vec3(0, y, 0), angle: -1.5 }, { easing: 'sineInOut' }),
+        )
+        .start();
+    }
   }
 
   private buildPanel(parent: Node, panelHeight: number, mode: PopupMode) {
@@ -435,12 +478,46 @@ export class SettlementPopup extends Component {
     const spacing = 100;
     const startX = -((stars - 1) * spacing) / 2;
     for (let index = 0; index < stars; index++) {
-      const star = this.image(parent, 'Star', this.starFrame, startX + index * spacing, y, 88, 84);
+      const posX = startX + index * spacing;
+      const star = this.image(parent, 'Star', this.starFrame, posX, y, 88, 84);
       star.setScale(new Vec3(0, 0, 1));
       this.tweenTargets.add(star);
       tween(star)
         .delay(0.18 + index * 0.12)
-        .to(0.22, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+        .to(0.20, { scale: new Vec3(1.18, 1.18, 1) }, { easing: 'backOut' })
+        .call(() => {
+          this.createStarSparks(parent, posX, y);
+          this.options.onPlaySound?.('match');
+          this.options.onVibrate?.('light');
+        })
+        .to(0.08, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
+        .start();
+    }
+  }
+
+  private createStarSparks(parent: Node, x: number, y: number) {
+    const sparkCount = 6;
+    for (let i = 0; i < sparkCount; i++) {
+      const spark = new Node(`StarSpark_${i}`);
+      parent.addChild(spark);
+      spark.setPosition(x, y);
+      spark.addComponent(UITransform).setContentSize(10, 10);
+      const g = spark.addComponent(Graphics);
+      g.fillColor = i % 2 === 0 ? new Color(255, 224, 108) : new Color(255, 255, 255);
+      g.circle(0, 0, i % 2 === 0 ? 3.5 : 2.5);
+      g.fill();
+
+      const angle = (Math.PI * 2 * i) / sparkCount + Math.PI / 6;
+      const dist = 32 + (i % 2) * 8;
+      const targetPos = new Vec3(x + Math.cos(angle) * dist, y + Math.sin(angle) * dist, 0);
+
+      this.tweenTargets.add(spark);
+      tween(spark)
+        .to(0.26, { position: targetPos, scale: new Vec3(0.2, 0.2, 1) }, { easing: 'quadOut' })
+        .call(() => {
+          this.tweenTargets.delete(spark);
+          if (spark.isValid) spark.destroy();
+        })
         .start();
     }
   }
@@ -497,10 +574,82 @@ export class SettlementPopup extends Component {
       label.isBold = true;
     });
     place(coinTextWidth, x => {
-      const label = this.label(row, coinText, x, 0, fontSize, color);
+      const label = this.label(row, this.options.coinReward > 0 ? '×0' : coinText, x, 0, fontSize, color);
       label.isBold = true;
+      if (this.options.coinReward > 0) {
+        const targetCoins = this.options.coinReward;
+        const animState = { value: 0 };
+        this.tweenTargets.add(animState);
+        tween(animState)
+          .delay(0.25)
+          .to(0.48, { value: targetCoins }, {
+            easing: 'quadOut',
+            onUpdate: () => {
+              if (label.node.isValid) label.string = `×${Math.floor(animState.value)}`;
+            },
+          })
+          .call(() => {
+            if (label.node.isValid) {
+              label.string = `×${targetCoins}`;
+              this.options.onPlaySound?.('collect');
+              this.options.onVibrate?.('light');
+              tween(label.node)
+                .to(0.08, { scale: new Vec3(1.22, 1.22, 1) })
+                .to(0.1, { scale: new Vec3(1, 1, 1) })
+                .start();
+            }
+          })
+          .start();
+      }
     });
-    place(iconSlotWidth, x => this.image(row, 'CoinIcon', this.frames.coinIcon, x, 0, 30, 30));
+    place(iconSlotWidth, x => {
+      const icon = this.image(row, 'CoinIcon', this.frames.coinIcon, x, 0, 30, 30);
+      if (this.options.coinReward > 0) {
+        icon.setScale(new Vec3(0.6, 0.6, 1));
+        tween(icon)
+          .delay(0.2)
+          .to(0.22, { scale: new Vec3(1.2, 1.2, 1) }, { easing: 'backOut' })
+          .to(0.1, { scale: new Vec3(1, 1, 1) })
+          .start();
+      }
+    });
+  }
+
+  /** 失败救援说明胶囊：突出展示一键移出卡牌救局价值 */
+  private buildReviveBenefitPill(parent: Node, y: number) {
+    const node = new Node('ReviveBenefitPill');
+    parent.addChild(node);
+    node.setPosition(0, y);
+    const pillWidth = 460;
+    const pillHeight = 38;
+    node.addComponent(UITransform).setContentSize(pillWidth, pillHeight);
+
+    const graphics = node.addComponent(Graphics);
+    graphics.fillColor = new Color(255, 246, 222, 235);
+    graphics.strokeColor = new Color(245, 205, 140);
+    graphics.lineWidth = 2;
+    graphics.roundRect(-pillWidth / 2, -pillHeight / 2, pillWidth, pillHeight, pillHeight / 2);
+    graphics.fill();
+    graphics.stroke();
+
+    const tipText = this.options.hadTrayPair
+      ? '✨ 移出槽内配对卡牌，为通关冲刺！'
+      : '✨ 一键移出 3 张卡牌，立即继续挑战！';
+    const label = this.label(node, tipText, 0, 0, 19, new Color(184, 74, 10));
+    label.isBold = true;
+    label.verticalAlign = Label.VerticalAlign.CENTER;
+    label.horizontalAlign = Label.HorizontalAlign.CENTER;
+    label.node.getComponent(UITransform)!.setContentSize(pillWidth - 20, pillHeight);
+
+    node.setScale(new Vec3(0.96, 0.96, 1));
+    tween(node)
+      .to(0.2, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+      .repeatForever(
+        tween()
+          .to(0.8, { scale: new Vec3(1.02, 1.02, 1) }, { easing: 'sineInOut' })
+          .to(0.8, { scale: new Vec3(1, 1, 1) }, { easing: 'sineInOut' }),
+      )
+      .start();
   }
 
   /** 评价/奖励行的浅粉胶囊底 */
@@ -582,6 +731,17 @@ export class SettlementPopup extends Component {
 
   /** 主操作在上，返回小镇在下 */
   private buildActionButtons(parent: Node, primaryY: number, secondaryY: number, mode: PopupMode, hasAd: boolean) {
+    if (this.options.endlessRevive) {
+      this.createAdButton(parent, this.rewardLabel('revive'), 'orange', 0, primaryY,
+        () => this.options.onRevive?.(), false, ACTION_WIDTH, PRIMARY_HEIGHT);
+      const end = SettlementButton.create(parent, this.assets, {
+        text: '结束并结算', tone: 'orange', appearance: 'secondary',
+        width: ACTION_WIDTH, height: SECONDARY_HEIGHT, scale: 1, fontSize: 32,
+        onClick: this.options.onReplay,
+      });
+      end.setPosition(0, secondaryY);
+      return;
+    }
     const leftText = mode === 'fail'
       ? '再玩一次'
       : mode === 'endless' ? '再玩一局' : mode === 'challenge' ? '再挑战一次' : this.options.nextButtonLabel ?? '下一关';
@@ -672,15 +832,17 @@ export class SettlementPopup extends Component {
     y: number,
     onCompleted: () => void,
     skipAd = false,
+    width = AD_WIDTH,
+    height = AD_HEIGHT,
   ) {
     const node = SettlementButton.create(parent, this.assets, {
       text,
       tone,
-      appearance: 'secondary',
-      width: AD_WIDTH,
-      height: AD_HEIGHT,
+      appearance: this.options.endlessRevive ? 'primary' : 'secondary',
+      width,
+      height,
       scale: 1,
-      fontSize: 28,
+      fontSize: this.options.endlessRevive ? 48 : 28,
       onClick: skipAd
         ? () => this.completeWithoutAd(onCompleted)
         : this.options.onRevive
@@ -727,7 +889,7 @@ export class SettlementPopup extends Component {
 
     this.adBusy = false;
     this.adButton.interactable = true;
-    SettlementButton.setAppearance(this.adButton.node, 'secondary');
+    SettlementButton.setAppearance(this.adButton.node, this.options.endlessRevive ? 'primary' : 'secondary');
     if (this.adButtonLabel) this.adButtonLabel.string = this.rewardLabel('revive');
   }
 
